@@ -79,12 +79,7 @@ function runtimePath(value: string) {
 
 function validateFile(path: string) {
   const stat = lstatSync(path);
-  if (
-    !stat.isFile() ||
-    stat.isSymbolicLink() ||
-    stat.nlink !== 1 ||
-    !isOwnerOnly(stat)
-  ) {
+  if (!stat.isFile() || stat.nlink !== 1 || !isOwnerOnly(stat)) {
     throw new Error("Private file required");
   }
 }

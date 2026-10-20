@@ -443,11 +443,18 @@ export function createBetterAuth(
     ],
   });
 
-  /** Better Auth 1.7.10 adds this issuer's UserInfo audience to OpenID grants. */
+  /**
+   * Better Auth 1.7.10 adds this issuer's UserInfo audience to OpenID grants.
+   * The verifier already requires the resource; this check does not rely on it.
+   */
   function hasUnexpectedAudience(audience: string | string[] | undefined) {
     if (Array.isArray(audience)) {
-      return audience.some(
-        (entry) => entry !== resource && entry !== `${issuer}/oauth2/userinfo`,
+      return (
+        !audience.includes(resource) ||
+        audience.some(
+          (entry) =>
+            entry !== resource && entry !== `${issuer}/oauth2/userinfo`,
+        )
       );
     }
     return audience !== resource;

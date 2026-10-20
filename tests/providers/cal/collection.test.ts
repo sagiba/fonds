@@ -600,6 +600,38 @@ describe("CAL synthetic direct collection", () => {
     }
   });
 
+  it.each([
+    ["NUL-containing", "SYNTHETIC\0ACCOUNT"],
+    ["blank", "  "],
+    ["secret-reflecting", token],
+  ])(
+    "rejects a %s billing account key before financial requests",
+    async (_label, invalidAccount) => {
+      const fetcher = syntheticFetch(
+        undefined,
+        [accountId, invalidAccount],
+        [
+          { cardUniqueId: cardId, bankAccountUniqueId: accountId },
+          {
+            cardUniqueId: "SYNTHETIC-CARD-B",
+            bankAccountUniqueId: invalidAccount,
+          },
+        ],
+      );
+      expect(await collect({ fetch: fetcher })).toEqual([
+        expect.objectContaining({
+          type: "failure",
+          failure: expect.objectContaining({
+            code: "invalid_response",
+            endpoint: CAL_ENDPOINTS.init,
+          }),
+          fatal: true,
+        }),
+      ]);
+      expect(fetcher).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("leaves invalid, missing, numeric and wallet-token digits unknown and excludes ambiguous owners", async () => {
     const invalidDigits = [
       undefined,

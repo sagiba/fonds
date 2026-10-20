@@ -16,6 +16,22 @@ import {
   startGoogleLogin,
 } from "../../../deploy/neon/neon-login.js";
 
+// Passes through to the real signature check unless a step stands in for an
+// authorization request the issuer signed but this test cannot.
+const queryVerification = vi.hoisted(() => ({ assumeSigned: false }));
+vi.mock("@better-auth/oauth-provider", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("@better-auth/oauth-provider")>();
+  return {
+    ...original,
+    verifyOAuthQueryParams: async (
+      ...args: Parameters<typeof original.verifyOAuthQueryParams>
+    ) =>
+      queryVerification.assumeSigned ||
+      original.verifyOAuthQueryParams(...args),
+  };
+});
+
 const config: GoogleConfig = {
   baseURL: "https://mcp.example.com",
   upstreamURL: "https://auth.example.com/neondb/auth",
@@ -675,6 +691,40 @@ it("authenticates through managed Neon Google and resumes local OAuth with a pin
           globalThis.fetch = savedFetch;
           warn.mockRestore();
           error.mockRestore();
+        }
+      },
+    );
+    await step(
+      "a malformed client callback is an invalid authorization redirect",
+      async () => {
+        const { cookies, row } = await start();
+        const query = new URLSearchParams(row.oauth_query);
+        query.set("redirect_uri", "synthetic malformed callback");
+        row.oauth_query = query.toString();
+        queryVerification.assumeSigned = true;
+        try {
+          const response = await finishGoogleLogin(
+            callback(cookies),
+            store.pool,
+            config,
+            async () =>
+              Response.json(
+                { url: "https://client.example.com/callback" },
+                {
+                  headers: {
+                    "Set-Cookie":
+                      "__Secure-better-auth.session_token=synthetic",
+                  },
+                },
+              ),
+          );
+          assert.equal(response.status, 502);
+          assert.equal(
+            await response.text(),
+            "Invalid authorization redirect.",
+          );
+        } finally {
+          queryVerification.assumeSigned = false;
         }
       },
     );
