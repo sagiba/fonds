@@ -32,23 +32,109 @@ const permittedLicenses = new Set([
 ]);
 const licenseFile = /^(?:licen[cs]e|copying)(?:[.-].*)?$/i;
 const noticeFile = /^notice(?:[.-].*)?$/i;
+const registry = "https://registry.npmjs.org";
 /**
- * Upstream texts for bundled packages whose npm archive omits them, copied
- * into deploy/npm/licenses/<name>@<version>. A new version needs its text
- * reviewed and added again.
+ * Reviewed upstream license texts, kept in deploy/npm/licenses/<name>@<version>,
+ * for code whose npm archive does not carry them: packages that omit their
+ * license file, and libraries another package compiled into its own files.
+ * A new version needs its text reviewed and added again.
  */
-const supplementalLicenses = {
-  "drizzle-orm@0.45.4":
-    "https://github.com/drizzle-team/drizzle-orm/blob/0.45.4/LICENSE",
+const reviewedLicenses = {
+  "drizzle-orm@0.45.4": {
+    license: "Apache-2.0",
+    source: "https://github.com/drizzle-team/drizzle-orm/blob/0.45.4/LICENSE",
+  },
   // The repository root is the spec's Apache-2.0; the libraries are MIT.
-  "standardwebhooks@1.1.1":
-    "https://github.com/standard-webhooks/standard-webhooks/blob/a7d19b4574ae62221042e76240648d0688a8c420/libraries/LICENSE",
+  "standardwebhooks@1.1.1": {
+    license: "MIT",
+    source:
+      "https://github.com/standard-webhooks/standard-webhooks/blob/a7d19b4574ae62221042e76240648d0688a8c420/libraries/LICENSE",
+  },
+  "ajv@8.18.0": { license: "MIT", source: `${registry}/ajv/-/ajv-8.18.0.tgz` },
+  "ajv-formats@3.0.1": {
+    license: "MIT",
+    source: `${registry}/ajv-formats/-/ajv-formats-3.0.1.tgz`,
+  },
+  "content-type@1.0.5": {
+    license: "MIT",
+    source: `${registry}/content-type/-/content-type-1.0.5.tgz`,
+  },
+  "fast-deep-equal@3.1.3": {
+    license: "MIT",
+    source: `${registry}/fast-deep-equal/-/fast-deep-equal-3.1.3.tgz`,
+  },
+  "fast-uri@3.1.0": {
+    license: "BSD-3-Clause",
+    source: `${registry}/fast-uri/-/fast-uri-3.1.0.tgz`,
+  },
+  "json-schema-traverse@1.0.0": {
+    license: "MIT",
+    source: `${registry}/json-schema-traverse/-/json-schema-traverse-1.0.0.tgz`,
+  },
 };
+/**
+ * Libraries a package compiled into its published files without their
+ * license texts, as its source maps reveal; versions come from that release's
+ * lockfile (for the MCP server, pnpm-lock.yaml at its 2.3.1 tag).
+ */
+const embeddedLibraries = {
+  "@modelcontextprotocol/server@2.3.1": [
+    "ajv@8.18.0",
+    "ajv-formats@3.0.1",
+    "content-type@1.0.5",
+    "fast-deep-equal@3.1.3",
+    "fast-uri@3.1.0",
+    "json-schema-traverse@1.0.0",
+  ],
+};
+
+/** The npm package names a path or source map entry lies in, outermost last. */
+function packageNameIn(path) {
+  const segments = path.split("node_modules/").at(-1).split("/");
+  return segments[0].startsWith("@")
+    ? `${segments[0]}/${segments[1]}`
+    : segments[0];
+}
+
+async function reviewedText(id) {
+  const reviewed = reviewedLicenses[id];
+  const text = reviewed
+    ? (await readFile(resolve(root, "deploy/npm/licenses", id), "utf8")).trim()
+    : "";
+  return text && { license: reviewed.license, source: reviewed.source, text };
+}
+
+/**
+ * Libraries compiled into a bundled package's files, found through the
+ * source maps it publishes beside them. Files without maps cannot be
+ * inspected; a package that embeds code that way needs a manual review.
+ */
+async function embeddedIn(base, files, ownName) {
+  const names = new Set();
+  for (const file of files) {
+    let map;
+    try {
+      map = JSON.parse(await readFile(resolve(base, `${file}.map`), "utf8"));
+    } catch {
+      continue;
+    }
+    for (const source of map.sources ?? []) {
+      if (
+        source.includes("node_modules/") &&
+        packageNameIn(source) !== ownName
+      ) {
+        names.add(packageNameIn(source));
+      }
+    }
+  }
+  return names;
+}
 
 /**
  * The license and notice texts of every dependency esbuild copied into the
- * bundle. Native modules stay installed packages and carry their own. Paths
- * in the metafile are relative to `base`, the build's working directory.
+ * bundle, and of libraries those packages embed. Native modules stay
+ * installed packages and carry their own. Paths in the metafile are relative
+ * to `base`, the build's working directory.
  */
 export async function thirdPartyNotices(metafile, base = root) {
   const packages = new Map();
@@ -56,12 +142,15 @@ export async function thirdPartyNotices(metafile, base = root) {
     for (const [path, contribution] of Object.entries(output.inputs)) {
       const match = path.match(/^(.*node_modules\/(?:@[^/]+\/)?[^/]+)\//);
       if (match && contribution.bytesInOutput > 0) {
-        packages.set(resolve(base, match[1]), true);
+        const directory = resolve(base, match[1]);
+        packages.set(directory, [...(packages.get(directory) ?? []), path]);
       }
     }
   }
   const sections = [];
-  for (const directory of [...packages.keys()].sort()) {
+  for (const [directory, files] of [...packages].sort(([a], [b]) =>
+    a.localeCompare(b),
+  )) {
     const manifest = JSON.parse(
       await readFile(join(directory, "package.json"), "utf8"),
     );
@@ -84,13 +173,10 @@ export async function thirdPartyNotices(metafile, base = root) {
         kind.push(text.trim());
       }
     }
-    if (!licenses.length && supplementalLicenses[id]) {
-      const text = await readFile(
-        resolve(root, "deploy/npm/licenses", id),
-        "utf8",
-      );
-      if (text.trim()) {
-        licenses.push(`Source: ${supplementalLicenses[id]}`, text.trim());
+    if (!licenses.length) {
+      const reviewed = await reviewedText(id);
+      if (reviewed) {
+        licenses.push(`Source: ${reviewed.source}`, reviewed.text);
       }
     }
     // A notice never stands in for the license text itself.
@@ -102,6 +188,32 @@ export async function thirdPartyNotices(metafile, base = root) {
     sections.push(
       [`${id} (${manifest.license})`, ...licenses, ...notices].join("\n\n"),
     );
+    const recorded = embeddedLibraries[id] ?? [];
+    const unrecorded = [
+      ...(await embeddedIn(base, files, manifest.name)),
+    ].filter(
+      (name) => !recorded.some((library) => library.startsWith(`${name}@`)),
+    );
+    if (unrecorded.length) {
+      throw new Error(
+        `${id} embeds ${unrecorded.join(", ")}; review their licenses and record them in embeddedLibraries`,
+      );
+    }
+    for (const library of recorded) {
+      const reviewed = await reviewedText(library);
+      if (!reviewed || !permittedLicenses.has(reviewed.license)) {
+        throw new Error(
+          `${library}, embedded in ${id}, has no reviewed license text`,
+        );
+      }
+      sections.push(
+        [
+          `${library} (${reviewed.license}), embedded in ${id}`,
+          `Source: ${reviewed.source}`,
+          reviewed.text,
+        ].join("\n\n"),
+      );
+    }
   }
   return {
     count: sections.length,
@@ -134,8 +246,7 @@ async function assertRecipeMatchesRoot() {
     Object.entries(
       JSON.parse(await readFile(resolve(root, path), "utf8")).packages,
     ).filter(([path]) => path);
-  const packageName = (path) =>
-    path.slice(path.lastIndexOf("node_modules/") + 13);
+  const packageName = (path) => packageNameIn(path);
   const rootVersions = new Map();
   for (const [path, entry] of await lockPackages("package-lock.json")) {
     if (!entry.dev) {
@@ -143,9 +254,32 @@ async function assertRecipeMatchesRoot() {
       rootVersions.set(packageName(path), versions.add(entry.version));
     }
   }
-  const drifted = (await lockPackages("deploy/npm/package-lock.json"))
+  const recipe = await lockPackages("deploy/npm/package-lock.json");
+  const drifted = recipe
     .map(([path, entry]) => [packageName(path), entry.version])
     .filter(([name, version]) => !rootVersions.get(name)?.has(version));
+  // The tests run what is installed, which a stale node_modules can make
+  // differ from the root lockfile.
+  const recipeNames = new Set(recipe.map(([path]) => packageName(path)));
+  const stale = [];
+  for (const [path, entry] of await lockPackages("package-lock.json")) {
+    if (!entry.dev && recipeNames.has(packageName(path))) {
+      const installed = await readFile(
+        resolve(root, path, "package.json"),
+        "utf8",
+      )
+        .then((text) => JSON.parse(text).version)
+        .catch(() => undefined);
+      if (installed !== undefined && installed !== entry.version) {
+        stale.push(`  ${path}: ${installed} (lockfile ${entry.version})`);
+      }
+    }
+  }
+  if (stale.length) {
+    throw new Error(
+      `node_modules differs from package-lock.json; run npm ci:\n${stale.join("\n")}`,
+    );
+  }
   if (drifted.length) {
     throw new Error(
       "deploy/npm/package-lock.json installs versions the root lockfile does not:\n" +

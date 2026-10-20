@@ -113,6 +113,48 @@ describe("third-party notices for bundled packages", () => {
     ).rejects.toThrow(/standardwebhooks@1\.1\.2 ships no license text/);
   });
 
+  it("refuses a package whose source maps reveal unrecorded embedded code", async () => {
+    const base = installed({
+      "synthetic-lib": {
+        files: {
+          LICENSE: "Synthetic license text",
+          "index.js.map": JSON.stringify({
+            sources: [
+              "../../node_modules/synthetic-embedded/lib.js",
+              "../src/own.ts",
+            ],
+          }),
+        },
+      },
+    });
+    await expect(
+      thirdPartyNotices(bundled({ "synthetic-lib": 10 }), base),
+    ).rejects.toThrow(/synthetic-lib@1\.0\.0 embeds synthetic-embedded/);
+  });
+
+  it("adds the reviewed texts of recorded embedded libraries", async () => {
+    const base = installed({
+      "@modelcontextprotocol/server": {
+        version: "2.3.1",
+        license: "Apache-2.0",
+        files: {
+          LICENSE: "Synthetic license text",
+          "index.js.map": JSON.stringify({
+            sources: ["../../node_modules/ajv/dist/core.js"],
+          }),
+        },
+      },
+    });
+    const { count, text } = await thirdPartyNotices(
+      bundled({ "@modelcontextprotocol/server": 10 }),
+      base,
+    );
+    expect(count).toBe(7);
+    expect(text).toMatch(
+      /ajv@8\.18\.0 \(MIT\), embedded in @modelcontextprotocol\/server@2\.3\.1\n\nSource: https:\/\/registry\.npmjs\.org\/ajv\/-\/ajv-8\.18\.0\.tgz\n\nThe MIT License/,
+    );
+  });
+
   it("ignores packages that contributed no bytes", async () => {
     const base = installed({
       "synthetic-lib": { files: { LICENSE: "Synthetic license text" } },
