@@ -36,7 +36,7 @@ import {
 
 export type { IsracardCredentials } from "./credentials.js";
 
-export const ISRACARD_COLLECTOR_VERSION = "isracard-web-v2";
+export const ISRACARD_COLLECTOR_VERSION = "isracard-web-v3";
 
 /**
  * One logged-in session shared by consecutive collections: its transport keeps
@@ -58,7 +58,6 @@ const MAX_MONTH_SOURCE_BYTES = 16 * 1024 * 1024;
 const FINANCIAL_ENDPOINTS: readonly string[] = [
   ISRACARD_ENDPOINTS.transactions,
   ISRACARD_ENDPOINTS.legacy,
-  ISRACARD_ENDPOINTS.details,
 ];
 
 /** Legacy statement partitions with vouchers, and each one's voucher field. */
@@ -77,7 +76,7 @@ export interface CollectIsracardOptions extends IsracardTransportOptions {
   maxHistoryMonths?: number;
   /** Minimum time between the starts of consecutive requests. */
   minIntervalMs?: number;
-  /** Optional enrichment, disabled by default and limited across the entire run. */
+  /** Optional enrichment, disabled by default; attempt cap for this collection window. */
   maxDetails?: number;
   /** Test clock/pacing injection. Production callers should use the default abortable wait. */
   sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
@@ -323,12 +322,12 @@ function isDetailVoucher(voucher: unknown): voucher is string {
 
 /** The detail-addressable vouchers of one legacy card group, in statement order. */
 function legacyDetailVouchers(group: unknown): Set<string> {
-  const vouchers = new Set<string>();
+  const vouchers = new Map<string, number>();
   if (
     !isIsracardObject(group) ||
     !Array.isArray(group.CurrentCardTransactions)
   ) {
-    return vouchers;
+    return new Set();
   }
   for (const transactions of group.CurrentCardTransactions) {
     if (!isIsracardObject(transactions)) {
@@ -340,16 +339,25 @@ function legacyDetailVouchers(group: unknown): Set<string> {
         continue;
       }
       for (const row of rows) {
-        const voucher: unknown = isIsracardObject(row)
-          ? row[voucherField]
-          : null;
+        if (!isIsracardObject(row)) {
+          continue;
+        }
+        const type = String(row.dealSumType);
+        if (type === "1" || (field === "txnIsrael" && type === "T")) {
+          continue;
+        }
+        const voucher: unknown = row[voucherField];
         if (isDetailVoucher(voucher)) {
-          vouchers.add(voucher);
+          vouchers.set(voucher, (vouchers.get(voucher) ?? 0) + 1);
         }
       }
     }
   }
-  return vouchers;
+  return new Set(
+    [...vouchers]
+      .filter(([, count]) => count === 1)
+      .map(([voucher]) => voucher),
+  );
 }
 
 /** The DigitalV3 request addresses cards by suffix rather than GUID. */
@@ -648,6 +656,7 @@ export async function* collectIsracard(
             endpoint: string;
             accountKey: string | null;
             scope: CollectionScope | undefined;
+            affectsCoverage?: false;
           }
         | undefined;
       const mode = options.range ? "history" : "recent";
@@ -731,7 +740,7 @@ export async function* collectIsracard(
             throw new IsracardTransportError("invalid_response");
           }
           const bean = legacy.payload.CardsTransactionsListBean;
-          for (const { card } of legacyCards) {
+          detailCards: for (const { card } of legacyCards) {
             const capture = captureFor(card);
             const index = bindings.get(isracardCardKey(card));
             // Optional details address only proven legacy card indices and numeric vouchers.
@@ -747,25 +756,57 @@ export async function* collectIsracard(
             )) {
               if (
                 detailsFetched >= maximumDetails ||
-                calls + remainingFinancialCalls >= budget
+                // A reused session can still need failed request + login +
+                // discovery + retry: three calls beyond the planned request.
+                calls + remainingFinancialCalls + (reusable ? 3 : 0) >= budget
               ) {
                 break;
               }
               accountKey = isracardCardKey(card);
               scope = { kind: mode, month, cardKey: accountKey };
               detailsFetched++;
-              const detail = await call(ISRACARD_ENDPOINTS.details, undefined, {
-                CardIndex: index,
-                shovarRatz: voucherNumber,
-                moedChiuv: `${month.slice(5)}${month.slice(0, 4)}`,
-              });
-              (capture.responses.details ??= []).push({
-                voucherNumber,
-                responseText: detail.responseText,
-              });
-              totalBytes += byteLength(detail.responseText);
-              if (totalBytes > MAX_MONTH_SOURCE_BYTES) {
-                throw new IsracardTransportError("invalid_response");
+              try {
+                const detail = await call(
+                  ISRACARD_ENDPOINTS.details,
+                  undefined,
+                  {
+                    CardIndex: index,
+                    shovarRatz: voucherNumber,
+                    moedChiuv: `${month.slice(5)}${month.slice(0, 4)}`,
+                  },
+                );
+                (capture.responses.details ??= []).push({
+                  voucherNumber,
+                  responseText: detail.responseText,
+                });
+                totalBytes += byteLength(detail.responseText);
+                if (totalBytes > MAX_MONTH_SOURCE_BYTES) {
+                  throw new IsracardTransportError("invalid_response");
+                }
+              } catch (error) {
+                const safe = safeError(error);
+                forgetRejectedSession(safe);
+                if (safe.fatal) {
+                  fatal = {
+                    error: safe,
+                    endpoint,
+                    accountKey,
+                    scope,
+                    affectsCoverage: false,
+                  };
+                  break detailCards;
+                }
+                failures.push({
+                  type: "failure",
+                  failure: {
+                    code: safe.code,
+                    endpoint,
+                    accountKey,
+                    scope,
+                    affectsCoverage: false,
+                  },
+                  fatal: false,
+                });
               }
             }
           }
@@ -799,8 +840,7 @@ export async function* collectIsracard(
       }
       if (fatal) {
         const enrichmentOnlyStop =
-          fatal.endpoint === ISRACARD_ENDPOINTS.details &&
-          remainingFinancialCalls === 0;
+          fatal.affectsCoverage === false && remainingFinancialCalls === 0;
         yield {
           type: "failure",
           failure: {
@@ -808,6 +848,9 @@ export async function* collectIsracard(
             endpoint: fatal.endpoint,
             accountKey: fatal.accountKey,
             scope: fatal.scope,
+            ...(fatal.affectsCoverage === false && {
+              affectsCoverage: false as const,
+            }),
           },
           // A terminal enrichment failure does not imply unfinished financial work.
           // Returning below ends collection without the application's history-gap marker.

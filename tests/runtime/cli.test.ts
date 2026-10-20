@@ -900,7 +900,7 @@ describe("offline CLI", () => {
     }
   });
 
-  it("validates the Isracard call budget and passes it to the collector", async () => {
+  it("validates Isracard operator budgets and passes detail opt-in to the collector", async () => {
     await success(
       "init",
       "--provider",
@@ -919,10 +919,24 @@ describe("offline CLI", () => {
       "--provider",
       "isracard",
     );
-    for (const [connection, budget, message] of [
-      ["isracard-cli", "101", "at most 100"],
-      ["isracard-cli", "0", "at least 1"],
-      ["synthetic-cli", "50", "is not supported by this provider"],
+    for (const [connection, flag, value, message] of [
+      ["isracard-cli", "--call-budget", "101", "at most 100"],
+      ["isracard-cli", "--call-budget", "0", "at least 1"],
+      [
+        "synthetic-cli",
+        "--call-budget",
+        "50",
+        "is not supported by this provider",
+      ],
+      ["isracard-cli", "--max-details", "21", "at most 20"],
+      ["isracard-cli", "--max-details", "-1", "Invalid arguments"],
+      ["isracard-cli", "--max-details", "1.5", "at least 0"],
+      [
+        "synthetic-cli",
+        "--max-details",
+        "0",
+        "is not supported by this provider",
+      ],
     ] as const) {
       const result = await run(
         "collect",
@@ -930,8 +944,8 @@ describe("offline CLI", () => {
         dbPath,
         "--connection",
         connection,
-        "--call-budget",
-        budget,
+        flag,
+        value,
       );
       expect(result.status).toBe(1);
       expect(result.stderr).toContain(message);
@@ -947,19 +961,25 @@ describe("offline CLI", () => {
       }),
       { mode: 0o600 },
     );
-    const fd = openSync(credentialPath, "r");
-    await run(
-      "collect",
-      "--db",
-      dbPath,
-      "--connection",
-      "isracard-cli",
-      "--credentials-fd",
-      String(fd),
-      "--call-budget",
-      "74",
-    ).finally(() => closeSync(fd));
-    expect(collectorState.isracardCalls).toMatchObject([{ callBudget: 74 }]);
+    for (const maxDetails of ["0", "7", "20"]) {
+      const fd = openSync(credentialPath, "r");
+      await run(
+        "collect",
+        "--db",
+        dbPath,
+        "--connection",
+        "isracard-cli",
+        "--credentials-fd",
+        String(fd),
+        "--call-budget",
+        "74",
+        "--max-details",
+        maxDetails,
+      ).finally(() => closeSync(fd));
+    }
+    expect(collectorState.isracardCalls).toMatchObject(
+      [0, 7, 20].map((maxDetails) => ({ callBudget: 74, maxDetails })),
+    );
   });
 
   it("requires an Isracard suffix through the private credential channel before collection", async () => {

@@ -7,7 +7,7 @@
   "SECURITY.md": 199,
   "SUPPORT.md": 119,
   "docs/README.md": 391,
-  "docs/api.md": 6303,
+  "docs/api.md": 6324,
   "docs/database.md": 2531,
   "docs/design.md": 1613,
   "docs/guides/chatgpt-connect.md": 569,
@@ -23,11 +23,11 @@
   "docs/internals/repository-layout.md": 1316,
   "docs/internals/storage-testing.md": 1361,
   "docs/providers/cal.md": 867,
-  "docs/providers/isracard.md": 1196,
+  "docs/providers/isracard.md": 1245,
   "docs/reference-models.md": 723,
   "docs/security-model.md": 969,
   "src/providers/cal/source-notes.md": 2208,
-  "src/providers/isracard/source-notes.md": 3283,
+  "src/providers/isracard/source-notes.md": 3370,
   "tests/providers/cal/fixtures/README.md": 469,
   "tests/providers/isracard/fixtures/README.md": 476
 }

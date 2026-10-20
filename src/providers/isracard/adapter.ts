@@ -7,7 +7,7 @@ import { ISRACARD_ENDPOINTS } from "./transport.js";
 
 export const isracardAdapter: SourceAdapter = {
   provider: "isracard",
-  parserVersion: "isracard-v11",
+  parserVersion: "isracard-v12",
   extract: extractIsracard,
   validateScope: validateIsracardScope,
   normalizeScope: normalizeIsracardScope,

@@ -75,9 +75,13 @@ database never receives it. No CLI command applies it.
 - **Payment context.** Online and 3-D Secure use, a named wallet, standing orders
   and a transfer's counterparty become typed fields only from explicit evidence.
   Merchant city and a valid country code are kept; there is no MCC, and card
-  presence stays unknown. The CLI requests no optional transaction details, so
-  wallet, merchant address and phone, and counterparty come only from captures
-  that already hold one.
+  presence stays unknown. Wallet, merchant address and phone, and counterparty
+  require a voucher-bound optional legacy detail. The CLI defaults to
+  `--max-details 0`; opt in with, for example, `--max-details 5` on `collect`
+  (range 0–20 attempts per collection window; a history backfill applies the cap
+  to each month). Details share the request budget with statements and have no
+  cache, so repeats can fetch them again. Co-branded cards have no supported
+  detail route. Optional failures are [reported separately](../api.md#sync-run).
 - **Pending approvals.** The discovered next billing period supplies pending
   authorizations, using the original amount and currency. Their kind stays
   unknown. A unique disappearing approval can keep its ID when a compatible

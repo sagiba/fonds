@@ -9,6 +9,7 @@ function transaction(id: string, purchaseId: string | null): Transaction {
   const { cardKey: _cardKey, ...facts } = row(id);
   return {
     ...facts,
+    counterpartyName: facts.counterpartyName ?? null,
     ...unknownLedgerFacts(null),
     purchaseId,
     installmentNumber: purchaseId === null ? null : 1,

@@ -53,6 +53,15 @@ const UNLISTED_CODE = "SYNTHETIC_SECRET_CODE";
 const BRACKETED_CODE = "<Synthetic Bracketed Merchant>";
 const DISGUISED_HOLDER = "Synthetic Disguised Holder";
 const MISMATCH_VOUCHER = "731946288";
+const UNDOCUMENTED_CARD_FIELDS = [
+  "cardStatusDate",
+  "isBlock",
+  "isBusinessCard",
+  "isDigital",
+  "isPremium",
+  "issuingDate",
+  "validUntilDate",
+];
 // Provider-body keys that look like field names but carry private text.
 const ADVERSARIAL_KEYS = ["AliceSmith", "SyntheticHolderKey", "xq7Private"];
 const SECRETS = [
@@ -88,6 +97,7 @@ const SECRETS = [
   "Bracketed",
   DISGUISED_HOLDER,
   MISMATCH_VOUCHER,
+  ...UNDOCUMENTED_CARD_FIELDS,
   ...ADVERSARIAL_KEYS,
   "offline-v137",
   "7319",
@@ -118,6 +128,9 @@ const rawCardList = JSON.stringify({
         limitData: { limit: LIMIT },
         isActive: true,
         isPartner: false,
+        ...Object.fromEntries(
+          UNDOCUMENTED_CARD_FIELDS.map((field) => [field, CARD_LIST_HOLDER]),
+        ),
       },
       {
         ...partner,
@@ -964,7 +977,7 @@ describe("value-free read-only Isracard archive profile", () => {
       applied: { applied: 3 },
       versions: {
         "collector|offline-v1": 3,
-        "parser|isracard-v11": 3,
+        "parser|isracard-v12": 3,
       },
     });
     expect(profile.archives[0].schema.unlistedTables).toBe(0);

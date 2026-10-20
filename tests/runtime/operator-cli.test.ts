@@ -343,5 +343,10 @@ describe("collect on SQLite", () => {
       stdout: "",
       stderr: "--credentials-fd and the provider options need --connection.\n",
     });
+    expect(await run("collect", "--max-details", "0")).toEqual({
+      status: EXIT_CODES.failed,
+      stdout: "",
+      stderr: "--credentials-fd and the provider options need --connection.\n",
+    });
   });
 });

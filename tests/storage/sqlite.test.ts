@@ -44,6 +44,7 @@ it("loads lifecycle annotations by scoped join beyond SQLite's parameter limit",
     const { cardKey, ...facts } = input;
     const template: Transaction = {
       ...facts,
+      counterpartyName: facts.counterpartyName ?? null,
       ...unknownLedgerFacts(cardKey),
       id: "template",
       sourceKey: "synthetic",

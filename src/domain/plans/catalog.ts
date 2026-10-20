@@ -29,6 +29,7 @@ export function resolveTransaction(
   const { cardKey, purchaseKey: _purchaseKey, ...facts } = input;
   return {
     ...facts,
+    counterpartyName: input.counterpartyName ?? null,
     ...unknownLedgerFacts(
       cardKey === null
         ? null

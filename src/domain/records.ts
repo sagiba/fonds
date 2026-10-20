@@ -24,6 +24,8 @@ export interface CollectionFailure {
   accountKey: string | null;
   endpoint: string;
   scope?: CollectionScope | undefined;
+  /** Explicitly failed optional enrichment; omitted failures affect financial coverage. */
+  affectsCoverage?: false | undefined;
   code:
     | "network_error"
     | "authentication_failed"
