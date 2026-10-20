@@ -3,7 +3,7 @@
 Fonds is one TypeScript ESM application whose directories express code ownership
 and dependency direction. The root package owns development, testing and
 compilation; `deploy/` holds deployment recipes for the same source and
-version; `deploy/npm/` packs the SQLite target, dependencies bundled
+version; `deploy/npm/` bundles the SQLite and PostgreSQL targets
 (`scripts/npm-package.mjs`). Start with the
 [contribution guide](../../CONTRIBUTING.md) and [AGENTS.md](../../AGENTS.md);
 this page owns the layer map, structural conventions and generated-artifact

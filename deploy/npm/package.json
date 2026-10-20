@@ -1,7 +1,7 @@
 {
   "name": "fonds-finance",
   "version": "0.1.0",
-  "description": "Fonds, a self-hosted personal financial evidence ledger: the local SQLite CLI and HTTP/MCP server.",
+  "description": "Fonds, a self-hosted personal financial evidence ledger: CLI, local HTTP/MCP server and hosted service on SQLite or PostgreSQL.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -21,6 +21,7 @@
     "cli.js",
     "server.js",
     "chunks/",
+    "postgres/",
     "demo/",
     "NOTICE",
     "THIRD_PARTY_NOTICES",

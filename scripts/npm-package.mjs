@@ -1,5 +1,7 @@
 import { execFile, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
+  cp,
   mkdir,
   mkdtemp,
   readdir,
@@ -9,6 +11,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -49,6 +52,28 @@ const reviewedLicenses = {
     license: "MIT",
     source:
       "https://github.com/standard-webhooks/standard-webhooks/blob/a7d19b4574ae62221042e76240648d0688a8c420/libraries/LICENSE",
+  },
+  // Added to the repository after these releases, for the same project.
+  "@better-auth/utils@0.4.2": {
+    license: "MIT",
+    source:
+      "https://github.com/better-auth/utils/blob/ef522888b7b2ff77ca13f0afb476dfae8f297862/LICENSE",
+  },
+  "@better-auth/utils@0.5.0": {
+    license: "MIT",
+    source:
+      "https://github.com/better-auth/utils/blob/ef522888b7b2ff77ca13f0afb476dfae8f297862/LICENSE",
+  },
+  // The license section of the README at the release tag.
+  "pg-types@2.2.0": {
+    license: "MIT",
+    source:
+      "https://github.com/brianc/node-pg-types/blob/d9d9dfb87eb50914043cbc178c301b7dd3b0c50d/README.md#license",
+  },
+  "pgpass@1.0.5": {
+    license: "MIT",
+    source:
+      "https://github.com/hoegaarden/pgpass/blob/4230ed5e417ba6044ea7eb80b7c33db9ec301398/README.md#license",
   },
   "ajv@8.18.0": { license: "MIT", source: `${registry}/ajv/-/ajv-8.18.0.tgz` },
   "ajv-formats@3.0.1": {
@@ -324,6 +349,30 @@ async function pack(stage) {
     recipe: "deploy/npm",
     bundleDependencies: true,
   });
+  // The PostgreSQL build sits beside it; the launcher picks one per command.
+  const postgres = join(stage, "postgres");
+  await buildTarget("postgres", {
+    output: postgres,
+    recipe: "deploy/npm",
+    bundleDependencies: true,
+  });
+  const metafiles = [];
+  for (const directory of [stage, postgres]) {
+    metafiles.push(
+      JSON.parse(await readFile(join(directory, "metafile.json"), "utf8")),
+    );
+  }
+  // The package root carries the manifest, lockfile and Fonds' own legal files.
+  for (const file of [
+    "package.json",
+    "package-lock.json",
+    "LICENSE",
+    "NOTICE",
+    "metafile.json",
+  ]) {
+    await rm(join(postgres, file));
+  }
+  await cp(resolve(root, "deploy/npm/fonds.mjs"), join(stage, "fonds.mjs"));
   const manifestPath = join(stage, "package.json");
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
   delete manifest.private;
@@ -332,9 +381,9 @@ async function pack(stage) {
     join(stage, "package-lock.json"),
     join(stage, "npm-shrinkwrap.json"),
   );
-  const notices = await thirdPartyNotices(
-    JSON.parse(await readFile(join(stage, "metafile.json"), "utf8")),
-  );
+  const notices = await thirdPartyNotices({
+    outputs: Object.assign({}, ...metafiles.map(({ outputs }) => outputs)),
+  });
   await writeFile(join(stage, "THIRD_PARTY_NOTICES"), notices.text);
   await mkdir(destination, { recursive: true });
   const { stdout } = await run(
@@ -351,12 +400,15 @@ async function pack(stage) {
     "npm-shrinkwrap.json",
     "cli.js",
     "server.js",
+    "postgres/server.js",
     ...Object.keys(targets.sqlite.files),
   ].sort();
+  const chunk = /^(?:postgres\/)?chunks\//;
   const paths = packed.files.map((file) => file.path);
-  const actual = paths.filter((path) => !path.startsWith("chunks/")).sort();
+  const actual = paths.filter((path) => !chunk.test(path)).sort();
   const strayChunks = paths.filter(
-    (path) => path.startsWith("chunks/") && !/^chunks\/[^/]+\.js$/.test(path),
+    (path) =>
+      chunk.test(path) && !/^(?:postgres\/)?chunks\/[^/]+\.js$/.test(path),
   );
   if (
     JSON.stringify(actual) !== JSON.stringify(expected) ||
@@ -440,7 +492,12 @@ async function stdioSession(command, args, env, requests) {
 }
 
 /** Starts `fonds serve` on a free loopback port and returns its URL. */
-function startHttp(command, args, env) {
+const sqliteListening = /listening at (http:\/\/127\.0\.0\.1:\d+)/;
+const hostedListening =
+  /"event":"fonds_hosted_listening","url":"(http:\/\/[^"]+)"/;
+
+/** Starts `fonds serve …` and resolves the URL its readiness line reports. */
+function startHttp(command, args, env, listening = sqliteListening) {
   const child = spawn(command, args, {
     env,
     stdio: ["ignore", "pipe", "pipe"],
@@ -453,7 +510,7 @@ function startHttp(command, args, env) {
     );
     const collect = (data) => {
       output += data;
-      const match = output.match(/listening at (http:\/\/127\.0\.0\.1:\d+)/);
+      const match = output.match(listening);
       if (match) {
         clearTimeout(timeout);
         resolveUrl(match[1]);
@@ -467,6 +524,182 @@ function startHttp(command, args, env) {
     });
   });
   return { child, url };
+}
+
+/** A command's exit status and output, without rejecting on failure. */
+async function outcome(command, args, options) {
+  try {
+    return { status: 0, ...(await run(command, args, options)) };
+  } catch (error) {
+    return { status: error.code, stdout: error.stdout, stderr: error.stderr };
+  }
+}
+
+async function freePort() {
+  const server = createServer();
+  await new Promise((resolveListen) =>
+    server.listen(0, "127.0.0.1", resolveListen),
+  );
+  const { port } = server.address();
+  await new Promise((resolveClose) => server.close(resolveClose));
+  return port;
+}
+
+/** Hosts of a disposable PostgreSQL server on this machine or its container host. */
+const localTestHosts = new Set([
+  "localhost",
+  "127.0.0.1",
+  "[::1]",
+  "host.docker.internal",
+]);
+
+/**
+ * The PostgreSQL modes of the installed package, in a database of their own
+ * on a disposable local server: commands, stdio MCP, loopback HTTP and the
+ * hosted service, plus the refusal of an ambiguous public origin.
+ */
+async function checkPostgres(fonds, packed, scratch, serverUrl) {
+  const server = new URL(serverUrl);
+  if (!localTestHosts.has(server.hostname)) {
+    throw new Error(
+      "FONDS_TEST_POSTGRES_URL must identify a disposable local test server",
+    );
+  }
+  // pg is a development dependency of the repository running this check.
+  const { default: pg } = await import("pg");
+  const admin = new pg.Pool({ connectionString: serverUrl });
+  const name = `fonds_npm_${randomUUID().replaceAll("-", "")}`;
+  await admin.query(`CREATE DATABASE "${name}"`);
+  try {
+    const database = new URL(serverUrl);
+    database.pathname = `/${name}`;
+    const state = join(scratch, "postgres-state");
+    await mkdir(state, { mode: 0o700 });
+    const env = {
+      ...isolatedEnv(join(scratch, "home")),
+      FONDS_DATABASE_URL: database.href,
+      FONDS_STATE_DIR: state,
+      // A container host is a private test network, not loopback.
+      ...(server.hostname === "host.docker.internal" && {
+        FONDS_DATABASE_TLS: "disable",
+      }),
+    };
+    const fondsOutput = async (...args) =>
+      (await run(fonds, args, { cwd: scratch, env })).stdout;
+
+    assert(
+      (await fondsOutput("--version")) === `${packed.version}\n`,
+      "PostgreSQL --version",
+    );
+    await fondsOutput(
+      "init",
+      "--connection",
+      "synthetic-pg",
+      "--provider",
+      "cal",
+    );
+    const responses = await stdioSession(
+      fonds,
+      ["serve", "--transport", "stdio"],
+      env,
+      [
+        {
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-11-25",
+            capabilities: {},
+            clientInfo: { name: "npm-package-check", version: "1" },
+          },
+        },
+        { method: "notifications/initialized" },
+        {
+          id: 2,
+          method: "tools/call",
+          params: { name: "list_connections", arguments: {} },
+        },
+      ],
+    );
+    assert(
+      responses.get(1)?.result?.serverInfo?.version === packed.version,
+      "PostgreSQL stdio MCP serverInfo version",
+    );
+    assert(
+      responses
+        .get(2)
+        ?.result?.structuredContent?.data?.some(
+          (connection) => connection.id === "synthetic-pg",
+        ),
+      "PostgreSQL stdio MCP list_connections",
+    );
+
+    const loopback = startHttp(fonds, ["serve", "--port", "0"], env);
+    try {
+      const url = await loopback.url;
+      const { FONDS_API_TOKEN: token } = parseEnv(
+        await readFile(join(state, "fonds.env"), "utf8"),
+      );
+      const health = await fetch(`${url}/health`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      assert(
+        health.status === 200,
+        `PostgreSQL /health returned ${health.status}`,
+      );
+      assert(
+        (await health.json()).storage === "postgres",
+        "PostgreSQL storage",
+      );
+      assert(
+        (await fetch(`${url}/health`)).status === 401,
+        "PostgreSQL /health without a token",
+      );
+    } finally {
+      loopback.child.kill("SIGTERM");
+    }
+
+    const port = await freePort();
+    const origin = `http://localhost:${port}`;
+    const hostedEnv = { ...env, FONDS_PUBLIC_ORIGIN: origin };
+    const hosted = startHttp(
+      fonds,
+      ["serve", "--hosted", "--port", String(port)],
+      hostedEnv,
+      hostedListening,
+    );
+    try {
+      await hosted.url;
+      const metadata = await fetch(
+        `${origin}/.well-known/oauth-protected-resource/mcp`,
+      );
+      assert(
+        metadata.status === 200,
+        `hosted metadata returned ${metadata.status}`,
+      );
+      assert(
+        (await metadata.json()).resource === `${origin}/mcp`,
+        "hosted protected resource",
+      );
+      assert(
+        (await fetch(`${origin}/mcp`, { method: "POST" })).status === 401,
+        "hosted /mcp without a grant",
+      );
+    } finally {
+      hosted.child.kill("SIGTERM");
+    }
+    const ambiguous = await outcome(fonds, ["serve"], {
+      cwd: scratch,
+      env: hostedEnv,
+    });
+    assert(
+      ambiguous.status === 1 &&
+        ambiguous.stderr.includes("fonds serve --hosted"),
+      "a public origin without --hosted is refused",
+    );
+  } finally {
+    await admin.query(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+    await admin.end();
+  }
 }
 
 /** Installs the tarball as a user would and runs the `fonds` command. */
@@ -559,12 +792,32 @@ async function checkInstalled(packed, scratch) {
   } finally {
     server.child.kill("SIGTERM");
   }
+  const sqliteHosted = await outcome(fonds, ["serve", "--hosted"], {
+    cwd: scratch,
+    env,
+  });
+  assert(
+    sqliteHosted.status === 1 &&
+      sqliteHosted.stderr.includes("runs on PostgreSQL"),
+    "hosted mode on SQLite is refused",
+  );
+
+  const serverUrl = process.env.FONDS_TEST_POSTGRES_URL;
+  if (!serverUrl && process.env.FONDS_TEST_REQUIRE_POSTGRES) {
+    throw new Error(
+      "FONDS_TEST_REQUIRE_POSTGRES needs FONDS_TEST_POSTGRES_URL",
+    );
+  }
+  if (serverUrl) {
+    await checkPostgres(fonds, packed, scratch, serverUrl);
+  }
   return {
     installed: true,
     installedBytes,
     demo: true,
     stdioMcp: true,
     http: true,
+    postgres: Boolean(serverUrl),
   };
 }
 

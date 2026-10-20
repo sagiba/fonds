@@ -84,9 +84,6 @@ jobs:
       # the postgres job runs the PostgreSQL launcher. Experimental targets
       # (Turso, turso-web, D1) run in experimental.yml.
       - run: npm run check:targets -- sqlite --runtime
-      # The npm package as a user installs it: the `fonds` command, demo,
-      # stdio MCP and loopback HTTP.
-      - run: npm run check:npm
 
   postgres:
     needs: changes
@@ -124,6 +121,38 @@ jobs:
         run: node scripts/check-postgres-tests.mjs /tmp/fonds-postgres-results.json
       - name: Run the PostgreSQL launcher in an isolated install
         run: npm run check:targets -- postgres --runtime
+
+  # The npm package as a user installs it: the `fonds` command on SQLite
+  # (demo, stdio MCP, loopback HTTP) and on PostgreSQL (commands, stdio MCP,
+  # loopback HTTP and the hosted service), from one packed tarball.
+  package:
+    needs: changes
+    if: needs.changes.outputs.code != 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:18.6
+        env:
+          POSTGRES_PASSWORD: synthetic-test-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 1s
+          --health-timeout 5s
+          --health-retries 50
+    env:
+      FONDS_TEST_POSTGRES_URL: postgres://postgres:synthetic-test-only@127.0.0.1:5432/postgres
+      FONDS_TEST_REQUIRE_POSTGRES: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run check:npm
 
   docker:
     needs: changes
