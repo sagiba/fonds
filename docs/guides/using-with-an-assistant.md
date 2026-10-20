@@ -68,9 +68,7 @@ These are separate capabilities:
   integration and actually subscribes. Adding an MCP server alone does not
   enable notifications.
 
-A client checks a refresh's outcome with `get_connection`. The operator CLI calls
-the same live refresh `collect`, and scheduler settings use the
-`FONDS_COLLECTION_` prefix.
+A client checks a refresh's outcome with `get_connection`.
 
 A notification says records changed. The receiving assistant or application
 must fetch and interpret them: a change may be a new transaction, a correction

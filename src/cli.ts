@@ -67,7 +67,7 @@ function requireExistingDatabase(path: string): void {
 function validatePrivateDatabase(path: string): void {
   if (path === ":memory:") {
     throw new CliError(
-      "Live collection requires a persistent database outside the repository.",
+      "Provider credentials require a persistent database outside the repository.",
     );
   }
   const isPrivate = (target: string, directory: boolean): boolean => {
@@ -104,7 +104,7 @@ function validatePrivateDatabase(path: string): void {
     }
   } catch {
     throw new CliError(
-      "Live collection requires a private current-owner directory (0700) and regular database files (0600) without links.",
+      "Provider credentials require a private current-owner directory (0700) and regular database files (0600) without links.",
     );
   }
 }

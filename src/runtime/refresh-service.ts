@@ -149,7 +149,7 @@ export function createRefreshService(options: RefreshServiceOptions) {
     try {
       return await options.targets();
     } catch {
-      log({ event: "fonds_collection_discovery_failed" });
+      log({ event: "fonds_refresh_discovery_failed" });
       return { targets: [], failures: 1 };
     }
   }
@@ -525,7 +525,7 @@ export function createRefreshService(options: RefreshServiceOptions) {
       try {
         await options.afterRefresh?.(shutdown);
       } catch {
-        log({ event: "fonds_collection_delivery", status: "failed" });
+        log({ event: "fonds_refresh_delivery", status: "failed" });
       }
     }
     const final = await store.getRefresh(id);

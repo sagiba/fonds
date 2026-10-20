@@ -1,5 +1,5 @@
-# The hosted service on one machine: PostgreSQL and Fonds, which collects on
-# a schedule only once FONDS_COLLECTION_SCHEDULE is set (for example daily).
+# The hosted service on one machine: PostgreSQL and Fonds, which refreshes on
+# a schedule only once FONDS_REFRESH_SCHEDULE is set (for example daily).
 #   docker compose up -d --build
 #   docker compose exec fonds node /app/server.js login-link
 # See docs/guides/docker.md. Publishes only on 127.0.0.1; put a TLS proxy or
@@ -41,8 +41,8 @@ services:
       FONDS_DATABASE_TLS: disable
       # Off unless set: daily (recommended), hourly or hours such as 9,13,18,
       # at this installation's random time, kept in the database's settings.
-      FONDS_COLLECTION_SCHEDULE: ${FONDS_COLLECTION_SCHEDULE:-}
-      FONDS_COLLECTION_TIMEZONE: ${FONDS_COLLECTION_TIMEZONE:-UTC}
+      FONDS_REFRESH_SCHEDULE: ${FONDS_REFRESH_SCHEDULE:-}
+      FONDS_REFRESH_TIMEZONE: ${FONDS_REFRESH_TIMEZONE:-UTC}
       # Behind a TLS proxy or tunnel, set FONDS_TRUST_PROXY: "1" and the public
       # origin in compose.override.yaml (docs/guides/docker.md).
     volumes:

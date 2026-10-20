@@ -23,7 +23,7 @@ function integerOption(
   return Number(value);
 }
 
-/** The `collect` history window, provider controls and credential descriptor. */
+/** The `refresh` history window, provider controls and credential descriptor. */
 export function collectionControls(values: {
   from?: string | undefined;
   to?: string | undefined;

@@ -22,10 +22,10 @@ owned by the user it runs as; a named volume satisfies that:
 docker volume create fonds-data
 docker run --rm -v fonds-data:/data fonds init --connection cal-main --provider cal
 docker run --rm -it -v fonds-data:/data fonds connect --connection cal-main
-docker run --rm -it -v fonds-data:/data fonds collect --connection cal-main
+docker run --rm -it -v fonds-data:/data fonds refresh --connection cal-main
 ```
 
-`connect` and `collect` prompt with hidden input, so they need `-it`. For a host
+`connect` and `refresh` prompt with hidden input, so they need `-it`. For a host
 directory instead, run as your own user so the ownership checks pass:
 `--user "$(id -u):$(id -g)" -v "$HOME/fonds-data:/data"`, with
 `chmod 700 "$HOME/fonds-data"`.
@@ -67,17 +67,17 @@ docker compose exec fonds node /app/server.js init --connection cal-main --provi
 docker compose exec fonds node /app/server.js connect --connection cal-main
 ```
 
-Nothing is collected until you choose a [schedule](hosted-service.md#scheduling).
+Nothing is refreshed until you choose a [schedule](hosted-service.md#scheduling).
 Add it to the `.env` file and recreate the service:
 
 ```sh
-echo FONDS_COLLECTION_SCHEDULE=daily >> .env
+echo FONDS_REFRESH_SCHEDULE=daily >> .env
 docker compose up -d
 ```
 
-`.env` also takes `FONDS_COLLECTION_TIMEZONE`; to pin `FONDS_COLLECTION_TIME`, set
+`.env` also takes `FONDS_REFRESH_TIMEZONE`; to pin `FONDS_REFRESH_TIME`, set
 it under the `fonds` service's `environment` in `compose.override.yaml`. No
-scheduler container is needed; each run is logged as `fonds_scheduled_collection`
+scheduler container is needed; each run is logged as `fonds_scheduled_refresh`
 (`docker compose logs fonds`). Operation commands such as
 `docker compose exec fonds node /app/server.js list-connections` use the same
 database.

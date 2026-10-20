@@ -15,7 +15,7 @@ COPY deploy/postgres ./deploy/postgres
 COPY tests/providers/cal/fixtures/recent-01.json tests/providers/cal/fixtures/recent-02.json ./tests/providers/cal/fixtures/
 RUN node scripts/build-targets.mjs sqlite postgres
 
-# The hosted service: OAuth issuer, API/MCP, scheduled collection and Events.
+# The hosted service: OAuth issuer, API/MCP, scheduled refresh and Events.
 FROM node:24.22.0-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS postgres
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=8787 FONDS_STATE_DIR=/data
 WORKDIR /app

@@ -449,7 +449,7 @@ const definitions = {
   ),
   list_events: define(
     "list_events",
-    "Read a bounded page of the durable event feed after cursor; omit cursor to start from the beginning. Reading does not acknowledge delivery or trigger collection. Events are thin: refetch the transaction for current state. nextCursor is always a resumable checkpoint, even on an empty page.",
+    "Read a bounded page of the durable event feed after cursor; omit cursor to start from the beginning. Reading does not acknowledge delivery or start a refresh. Events are thin: refetch the transaction for current state. nextCursor is always a resumable checkpoint, even on an empty page.",
     connectionScopeSchema.extend({
       cursor: listCursorSchema.optional(),
       limit: z.number().int().min(1).max(200).default(100),
@@ -458,7 +458,7 @@ const definitions = {
   ),
   list_sync_runs: define(
     "list_sync_runs",
-    "Browse recent collection run metadata, newest first, without returning raw source snapshots. No collection is triggered.",
+    "Browse recent sync run metadata, newest first, without returning raw source snapshots. Does not start a refresh.",
     connectionScopeSchema.extend({
       cursor: listCursorSchema.optional(),
       limit: z.number().int().min(1).max(100).default(20),

@@ -141,7 +141,7 @@ export function bearerScheduleAuthenticator(
 }
 
 export const COLLECTION_TRIGGER_PATH = "/internal/triggers/recent";
-export const COLLECTION_OPERATOR_PATH = "/internal/collect/recent";
+export const COLLECTION_OPERATOR_PATH = "/internal/refresh/recent";
 
 export const COLLECTION_CONTINUE_PATH = "/internal/refreshes/continue";
 
@@ -194,7 +194,7 @@ export function createCollectionRoutes(
 ) {
   const origin = new URL(hostedOrigin(routes.publicOrigin));
   if (!/^[A-Za-z0-9_-]{32,256}$/.test(routes.manualSecret)) {
-    throw new Error("Invalid collection route configuration");
+    throw new Error("Invalid refresh route configuration");
   }
   const secret = Buffer.from(routes.manualSecret);
   const log =

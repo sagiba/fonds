@@ -185,7 +185,7 @@ in [auto-posting.ts](../src/domain/plans/auto-posting.ts) and its tests.
 Annotations are independently versioned owner documents that source refresh never
 writes. A review change also guards the transaction version, and staleness
 compares recorded money, currency, basis and kind, not versions. Reads are live
-and bounded; only `get_refresh` collects, to [resume](api.md#refreshes) an
+and bounded; only `get_refresh` calls the provider, to [resume](api.md#refreshes) an
 interrupted refresh. Writes return committed receipts; with no general command
 idempotency, an uncertain outcome needs a reread. The event feed names records to
 refetch, not deltas, and imports are not fresh spending. Webhooks only wake
@@ -195,17 +195,17 @@ recovers a missed wake-up; exactly-once delivery is not promised
 
 ## Runtime and deliberate limits
 
-Collection runs in the service, independently of reads, the same on every
-supported backend, as recorded [refreshes](api.md#refreshes) under one
-per-connection [lock](../src/application/collection-lock.ts). Scheduled collection
-is off until [configured](guides/hosted-service.md#scheduling). Owner identity and
+[Refreshes](api.md#refreshes) run in the service, independently of reads, the
+same on every supported backend, under one per-connection
+[lock](../src/application/collection-lock.ts). Scheduled refresh is off until
+[configured](guides/hosted-service.md#scheduling). Owner identity and
 exact resource and operation scopes constrain access
 ([admission](security-model.md#admission)); local bearer HTTP and stdio are
 single-client interfaces. Schema changes ship as
 [migrations](database.md#migrations), and recovery pairs a database with its
 [state directory](database.md#state-directory-and-backup).
 
-Beyond the collection lease, distributed coordination, commit chains, chunk protocols,
+Beyond the refresh lease, distributed coordination, commit chains, chunk protocols,
 general merge and replay frameworks, historical reinterpretation, bidirectional
 sync and broad exporters wait for a concrete requirement.
 [Acceptance](internals/acceptance.md) indexes the behavioral checks.

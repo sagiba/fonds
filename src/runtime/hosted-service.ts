@@ -55,18 +55,18 @@ export const hostedEnvironmentSchema = z.object({
   }),
   FONDS_AUTH_SECRET: z.string().min(32),
   FONDS_OWNER_ID: z.string().trim().min(1).max(256),
-  FONDS_COLLECTION_SECRET: z
+  FONDS_REFRESH_SECRET: z
     .string()
     .regex(/^[A-Za-z0-9_-]{32,256}$/)
     .optional(),
-  FONDS_COLLECTION_CONNECTION_ID: z
+  FONDS_CONNECTION_ID: z
     .string()
     .min(1)
     .max(512)
     .refine((value) => value === value.trim())
     .optional(),
-  FONDS_COLLECTION_PROVIDER: z.string().min(1).optional(),
-  FONDS_COLLECTION_CREDENTIALS: z.string().min(1).max(16_384).optional(),
+  FONDS_CONNECTION_PROVIDER: z.string().min(1).optional(),
+  FONDS_CONNECTION_CREDENTIALS: z.string().min(1).max(16_384).optional(),
   // Optional owner-linked sign-in providers, each a complete OAuth client pair.
   FONDS_GOOGLE_CLIENT_ID: z.string().min(1).max(512).optional(),
   FONDS_GOOGLE_CLIENT_SECRET: z.string().min(1).max(512).optional(),
@@ -102,10 +102,10 @@ export function hostedConfiguration(
   values: z.infer<typeof hostedEnvironmentSchema>,
 ) {
   const {
-    FONDS_COLLECTION_SECRET: manualSecret,
-    FONDS_COLLECTION_CONNECTION_ID: connectionId,
-    FONDS_COLLECTION_PROVIDER: provider,
-    FONDS_COLLECTION_CREDENTIALS: credentials,
+    FONDS_REFRESH_SECRET: manualSecret,
+    FONDS_CONNECTION_ID: connectionId,
+    FONDS_CONNECTION_PROVIDER: provider,
+    FONDS_CONNECTION_CREDENTIALS: credentials,
   } = values;
   // One env-configured connection is all-or-nothing; stored ones need no env.
   const configured = [connectionId, provider, credentials].filter(Boolean);
@@ -114,7 +114,7 @@ export function hostedConfiguration(
     (configured.length !== 0 && !fullyConfigured) ||
     (fullyConfigured && manualSecret === undefined)
   ) {
-    throw new HostedConfigurationError("Incomplete collection configuration");
+    throw new HostedConfigurationError("Incomplete connection configuration");
   }
   const socialLogin = Object.fromEntries(
     (
@@ -180,7 +180,7 @@ function collectionCredentials(provider: string, text: string) {
     );
   } catch {
     throw new HostedConfigurationError(
-      "Invalid collection provider or credentials configuration",
+      "Invalid connection provider or credentials configuration",
     );
   }
 }
@@ -270,7 +270,7 @@ function collectionServices(
   };
   if (embedded?.schedule && !config.collection) {
     throw new HostedConfigurationError(
-      "FONDS_COLLECTION_SCHEDULE needs FONDS_COLLECTION_SECRET",
+      "FONDS_REFRESH_SCHEDULE needs FONDS_REFRESH_SECRET",
     );
   }
   const refreshes =

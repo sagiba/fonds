@@ -42,7 +42,7 @@ cover only their synthetic parts:
 - Hosted backup and restore, including coordinating restored history with
   consumer cursors and external recipients.
 - Production host eligibility: real payload size, secrets, transactions and the
-  chosen trigger, with collection working while the owner's computer is off.
+  chosen trigger, with refreshes working while the owner's computer is off.
 - Signed-webhook delivery to the real host's receiver on each deployment; grants,
   cursors, retries and signing are synthetic in `tests/application/events.test.ts`,
   `tests/runtime/webhook.test.ts` and `tests/storage/operations-parity.test.ts`.
@@ -61,8 +61,8 @@ cover only their synthetic parts:
 ## Boundaries
 
 Standalone candidate dismissal, resolution of ambiguous duplicate identities and
-refund-to-original links are not implemented. Collection has no separate live
-opt-in flag: `collect` rejects `--live` (`tests/runtime/cli.test.ts`). Historical facts are not immutable
+refund-to-original links are not implemented. Refresh has no separate live
+opt-in flag: `refresh` rejects `--live` (`tests/runtime/cli.test.ts`). Historical facts are not immutable
 because of their age, and a recent overlap window is not a completeness
 guarantee. Email and other delivery channels, bank
 collection, statement or PDF collection, distributed coordination beyond the
