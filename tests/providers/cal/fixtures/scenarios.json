@@ -181,7 +181,7 @@
       "note": "Synthetic user note",
       "category": "Example category",
       "business_use": "uncertain",
-      "expected": "preserve through update; fixed-amount allocations need review",
+      "expected": "preserve through update",
       "evidence_basis": "constructed application behavior case"
     },
     "unknown_original_currency": {

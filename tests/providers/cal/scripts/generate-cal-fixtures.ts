@@ -492,7 +492,7 @@ function scenarios(): Row {
       note: "Synthetic user note",
       category: "Example category",
       business_use: "uncertain",
-      expected: "preserve through update; fixed-amount allocations need review",
+      expected: "preserve through update",
     },
     unknown_original_currency: {
       id: "SYNTHETIC-TXN-UNKNOWN-ORIGINAL-CURRENCY",
