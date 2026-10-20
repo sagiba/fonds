@@ -1,3 +1,4 @@
+import { canonicalJson } from "../domain/observations.js";
 import {
   reconciliationFailure,
   type RunInput,
@@ -23,11 +24,13 @@ export function prepareRun(input: RunInput, adapter: SourceAdapter) {
 export function retainedRun(
   run: ReturnType<typeof prepareRun>,
   adapter: SourceAdapter,
+  digest: string,
 ) {
+  const startedAt = run.startedAt ?? new Date().toISOString();
   return {
     id: run.runId,
     connectionId: run.connectionId,
-    startedAt: run.startedAt ?? new Date().toISOString(),
+    startedAt,
     status: "started" as const,
     collectorVersion: run.collectorVersion ?? DEFAULT_COLLECTOR_VERSION,
     parserVersion: adapter.parserVersion,
@@ -39,15 +42,50 @@ export function retainedRun(
     coverage: [],
     warnings: [],
     refreshId: run.refreshId ?? null,
+    evidenceDigest: digest,
+    bodyRetention: "staged" as const,
+    bodyExpiresAt:
+      run.debugArchiveDays === undefined
+        ? null
+        : new Date(
+            Date.now() + run.debugArchiveDays * 86_400_000,
+          ).toISOString(),
   };
 }
 
 export type RetainedRun = ReturnType<typeof retainedRun>;
 
+export async function contentDigest(value: unknown): Promise<string> {
+  const bytes = new TextEncoder().encode(canonicalJson(value));
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
+}
+
+export function runEvidenceDigest(
+  run: ReturnType<typeof prepareRun>,
+): Promise<string> {
+  return contentDigest({
+    digestSchema: "fonds-run-evidence-v1",
+    connectionId: run.connectionId,
+    collectorVersion: run.collectorVersion ?? DEFAULT_COLLECTOR_VERSION,
+    responses: run.responses,
+    failures: run.failures,
+  });
+}
+
 export function assertSameEvidence(
   existing: Run,
   run: ReturnType<typeof prepareRun>,
+  digest: string,
 ) {
+  if (existing.evidenceDigest !== null) {
+    if (existing.evidenceDigest !== digest) {
+      throw new Error("Run ID already refers to different evidence");
+    }
+    return;
+  }
   if (
     existing.connectionId !== run.connectionId ||
     existing.collectorVersion !==

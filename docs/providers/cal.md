@@ -70,8 +70,9 @@ become review candidates.
 - CAL provides no opening balance, bank-side card repayments, complete income or
   transfers, or complete account history, so purchase totals are not a current
   debt balance.
-- Fee discounts, VAT amounts, cash-account and rate-like fields, billing-month
-  amounts, and card limits or the next debit stay in the retained responses only.
+- Uninterpreted financial fields such as discounts, cash-account amounts and
+  rates stay private provider evidence. Card limits and next-debit metadata are
+  omitted; whole-response retention requires optional raw archives.
 - Types without an established meaning, such as services or charge/credit
   adjustments, stay `unknown` with unresolved money for review. Rows whose sign
   and refund flag disagree, and unknown currency markers, also stay unresolved.
@@ -92,13 +93,3 @@ and repeated network or invalid-response failures stop after a bounded budget
 and report the gap. Resolve a challenge or password change on CAL's own site,
 run `connect` again if the credentials changed, wait out a rate limit, then rerun
 the refresh or the reported history range.
-
-`contentFingerprint` ignores only the top-level per-request `groupPid`, using
-lossless JSON. Collection skips a just-fetched successful reread only when it
-matches the last accepted capture for the account, endpoint and scope and the ledger
-has not changed. Parser, collector, policy and horizon settings take part in this
-identity. Changed content or ledger state, delayed captures and rejected responses
-go through normal persistence and reconciliation, and rejected captures are never
-cached as success. Archived versions are immutable. A skipped check neither advances
-`lastSeenAt` nor creates a sync run; the refresh counts it as an unchanged
-capture.

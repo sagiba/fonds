@@ -22,6 +22,7 @@ const httpUrl = process.env.FONDS_TEST_LIBSQL_HTTP_URL;
 const largeHttpUrl = process.env.FONDS_TEST_LIBSQL_LARGE_HTTP_URL;
 const captureInput = (connectionId: string, runId: string, text: string) => ({
   runId,
+  debugArchiveDays: 2,
   connectionId,
   responses: [
     {
@@ -299,7 +300,7 @@ describe.skipIf(!postgresUrl)(
       ).toEqual([]);
       const run = (
         await db.pool.query(
-          "SELECT applied_at,snapshot_json FROM sync_runs WHERE id='nul-scalar'",
+          "SELECT r.applied_at,b.snapshot_json FROM sync_runs r JOIN sync_run_bodies b ON b.run_id=r.id WHERE r.id='nul-scalar'",
         )
       ).rows[0];
       expect(run.applied_at).not.toBeNull();
@@ -592,7 +593,7 @@ describe.skipIf(!httpUrl)("libSQL over actual HTTP", () => {
       expect(delayed).toBe(true);
       const stored = (
         await normal.execute({
-          sql: "SELECT applied_at,snapshot_json FROM sync_runs WHERE id=?",
+          sql: "SELECT r.applied_at,b.snapshot_json FROM sync_runs r JOIN sync_run_bodies b ON b.run_id=r.id WHERE r.id=?",
           args: [id],
         })
       ).rows[0]!;

@@ -1,5 +1,6 @@
 import type { JsonObject, TransactionFacts } from "../../domain/model.js";
 import { canonicalJson } from "../../domain/observations.js";
+import { currentSourceRows } from "../../domain/provider-evidence.js";
 
 /** Opaque CAL discriminators; null is missing evidence, never false or zero. */
 export interface CalPostingEvidence {
@@ -124,15 +125,15 @@ function rowEvidence(
 }
 
 /**
- * Decode retained CAL observations only; sticky canonical enrichment is not
- * evidence. Every retained observation must name the same card, the card the
+ * Decode the current CAL source statements; sticky canonical enrichment is not
+ * evidence. Every current observation must name the same card, the card the
  * extractor derived the row's card key from.
  */
 export function calPostingEvidence(
   row: Pick<TransactionFacts, "details">,
 ): CalPostingEvidence | null {
-  const rows = row.details.provider.cal?.rows;
-  if (!Array.isArray(rows) || rows.length === 0) {
+  const rows = currentSourceRows(row.details.provider.cal ?? {});
+  if (rows.length === 0) {
     return null;
   }
   const evidence = rows.map((raw) => (object(raw) ? rowEvidence(raw) : null));

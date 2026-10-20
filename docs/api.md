@@ -82,8 +82,8 @@ cursor only to the list that issued it.
   It is a resumable checkpoint. See [events](#events).
 
 Browsing is a live read: each page sees current data, and concurrent writes can
-change later pages. Use the event feed to synchronize financial changes; enrichment
-fields and card-to-account links update without an event. Sort orders are fixed:
+change later pages. Use the event feed to synchronize transaction content;
+observation freshness and card-to-account links update without an event.
 
 | List            | Order                                                | `limit` (default) |
 | --------------- | ---------------------------------------------------- | ----------------- |
@@ -137,24 +137,29 @@ windows, or `null` before any.
 
 ## Refreshes
 
-A refresh is one recorded collection of a connection: an owner, model, schedule
-or operator `collect` started it.
+A refresh records one connection's manual or scheduled collection.
 
-| Field                                  | Meaning                                                                                                                                                                  |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `id`, `connectionId`                   | The refresh and its connection.                                                                                                                                          |
-| `trigger`                              | `manual` or `scheduled`.                                                                                                                                                 |
-| `status`                               | `pending`, `running`, then `completed`, `partial` (some requested work failed) or `failed`; `skipped` for a scheduled occurrence that did not run.                       |
-| `skipReason`                           | For `skipped`: `busy`, `cooldown`, `requires_attention` or `missed`; otherwise `null`.                                                                                   |
-| `range`                                | A backfill's inclusive `{from, to}`, or `null` for the recent window.                                                                                                    |
-| `scheduledAt`                          | A scheduled refresh's occurrence time, otherwise `null`.                                                                                                                 |
-| `createdAt`, `startedAt`, `finishedAt` | Acceptance, first execution and finish; the last two `null` until then.                                                                                                  |
-| `requiresAttention`                    | Provider authentication needs the owner.                                                                                                                                 |
-| `counts`                               | `{captures, unchanged, failures, created, updated}`: captures accepted, of them unchanged, failures (at least 1 for a failed refresh), transactions created and updated. |
-| `failureCodes`                         | Reconciliation codes met, at most `"implausible_empty"`.                                                                                                                 |
-| `failureReason`                        | `expired` when it was still unfinished a day after `createdAt`; otherwise `null`.                                                                                        |
-| `missed`                               | A `missed` skip's gap `{through, count}`, from `scheduledAt` through `through`; otherwise `null`.                                                                        |
-| `windows`                              | `get_refresh` and starts only: a backfill's months, newest first, each `{from, to, status}`.                                                                             |
+| Field                                  | Meaning                                                                                                                                            |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`, `connectionId`                   | The refresh and its connection.                                                                                                                    |
+| `trigger`                              | `manual` or `scheduled`.                                                                                                                           |
+| `status`                               | `pending`, `running`, then `completed`, `partial` (some requested work failed) or `failed`; `skipped` for a scheduled occurrence that did not run. |
+| `skipReason`                           | For `skipped`: `busy`, `cooldown`, `requires_attention` or `missed`; otherwise `null`.                                                             |
+| `range`                                | A backfill's inclusive `{from, to}`, or `null` for the recent window.                                                                              |
+| `scheduledAt`                          | A scheduled refresh's occurrence time, otherwise `null`.                                                                                           |
+| `createdAt`, `startedAt`, `finishedAt` | Acceptance, first execution and finish; the last two `null` until then.                                                                            |
+| `requiresAttention`                    | Provider authentication needs the owner.                                                                                                           |
+| `counts`                               | Cumulative observation and change counts, including retries.                                                                                       |
+| `failureCodes`                         | Reconciliation codes met, at most `"implausible_empty"`.                                                                                           |
+| `failureReason`                        | `expired` when it was still unfinished a day after `createdAt`; otherwise `null`.                                                                  |
+| `missed`                               | A `missed` skip's gap `{through, count}`, from `scheduledAt` through `through`; otherwise `null`.                                                  |
+| `windows`                              | `get_refresh` and starts only: a backfill's months, newest first, each `{from, to, status}`.                                                       |
+
+`counts` distinguishes recorded financial `captures`, successful `unchanged` captures
+without content changes, and accepted `observed` transaction identities counted once
+per capture (overlaps repeat). `unchangedTransactions` counts unchanged observations;
+`created`, `updated`, `unlisted` count creations, content updates and absence marks.
+Counts need not partition observations. `failures` is positive when failed.
 
 `refresh_connection` takes `connectionId` and optional `from` and `to` (both or
 neither, at most 120 months). A start records the refresh, runs it in the same
@@ -179,13 +184,12 @@ No change event announces completion.
 
 ## Sync run
 
-One archived collection unit, not a whole refresh:
+Collection receipt:
 `{id, connectionId, status, startedAt, finishedAt, appliedAt, collectorVersion, parserVersion, refreshId}`.
-`status` is `started`, `completed`, `partial` or `failed`. `finishedAt` and
-`appliedAt` are nullable, and `appliedAt` records application to the ledger, which is
-separate from collection. `refreshId` names the refresh that archived the run, or
-is `null` for offline ingestion or a deleted refresh. Source responses and
-coverage details are excluded. `list_sync_runs` does not start collection.
+`status` is `started`, `completed`, `partial` or `failed`; nullable `finishedAt` and `appliedAt`
+distinguish collection from application. `refreshId` names its
+refresh, or `null` for offline ingestion. Unchanged reads still create receipts.
+`list_sync_runs` excludes bodies and coverage and never starts collection.
 
 Optional enrichment failures remain visible in status and failure counts without
 marking transaction coverage incomplete; authentication can still require owner
@@ -313,33 +317,25 @@ for a client is:
 
 ### Versioned fields
 
-`version` increments, and a `transaction.updated` event lists `changedFields`, when
-any of these change:
-
-- `amount`, `originalAmount`, `amountBasis`, `kind`, `status`, `presence`
-- `transactionDate`, `bookingDate`, `billingDate`
-- `installmentCount`, `installmentNumber`, `purchaseId`, `supersededById`
-- `description`, `counterpartyName`, `merchant.name`, `merchant.providerId`,
-  `merchant.categoryCode`
-- `currencyExchange`, `fxFee`
-
-Payment context, `providerTransactionCode`, the remaining merchant members,
-`transactionDateTime` and `additionalInformation` are enrichment. They update
-without a version change or an event.
+Retained content, including enrichment, `review.sourceIssues` and private provider
+evidence, is versioned. Changes increment `version` and emit
+`transaction.updated`. `changedFields` names fields; `evidence` signals private
+evidence changes without exposing values. Refetch even with visible fields unchanged. Observation freshness and references stay quiet; owner annotations are
+independently versioned.
 
 ### Detailed read
 
 `get_transaction` returns the detailed record by default. It replaces the annotation
 summary with the full annotation and adds:
 
-| Member                  | Meaning                                                                                                                                                                                                                               |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `additionalInformation` | Provider explanatory text that has no typed home, as an array of strings. Treat markup as plain text. At most 100 entries, with `additionalInformationCount` when more existed. Detail only: list records omit it to keep pages lean. |
-| `review`                | Adds `reasons[]`, `sourceIssues[]`, `pendingPostingCandidateIds[]`, `truncated` and `counts`. Candidates are suggestions, not proof of a match.                                                                                       |
-| `source`                | `{identityStrength, firstSeenAt, lastSeenAt, lastSyncRunId}`. `identityStrength` is `native`, `weak` or `ambiguous`.                                                                                                                  |
-| `annotation`            | The full [annotation](#annotations), or null.                                                                                                                                                                                         |
-| `postingMatch`          | `{supersededTransactionId, automatic, policyVersion, evidence, unlinked}` or null. See [matching](#pending-to-posted-matching).                                                                                                       |
-| `evidence`              | With `includeEvidence: true`: `[{runId, path}]` references to archived source text (at most 100), with `diagnosticCounts.evidence` and `diagnosticsTruncated`. References only, never source bodies.                                  |
+| Member                  | Meaning                                                                                                                                                                                                                                                         |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `additionalInformation` | Provider explanatory text that has no typed home, as an array of strings. Treat markup as plain text. At most 100 entries, with `additionalInformationCount` when more existed. Detail only: list records omit it to keep pages lean.                           |
+| `review`                | Adds `reasons[]`, `sourceIssues[]`, `pendingPostingCandidateIds[]`, `truncated` and `counts`. Candidates are suggestions, not proof of a match.                                                                                                                 |
+| `source`                | `{identityStrength, firstSeenAt, lastSeenAt, lastSyncRunId}`. `identityStrength` is `native`, `weak` or `ambiguous`.                                                                                                                                            |
+| `annotation`            | The full [annotation](#annotations), or null.                                                                                                                                                                                                                   |
+| `postingMatch`          | `{supersededTransactionId, automatic, policyVersion, evidence, unlinked}` or null. See [matching](#pending-to-posted-matching).                                                                                                                                 |
+| `evidence`              | With `includeEvidence: true`: `[{runId, path}]` references to collection receipts and paths (at most 100), with `diagnosticCounts.evidence` and `diagnosticsTruncated`. Latest capture per account, resource and scope; optional raw bodies are never returned. |
 
 Previews are bounded. Review arrays hold at most 100 entries. When the aggregate
 response would exceed 256 KiB, optional content is shortened first and a truncation
@@ -589,8 +585,8 @@ Event IDs are integers, ordered ascending.
 
 Events are thin. They identify records to refetch in their current state, and carry
 no object snapshot. Neither `created` nor `imported` proves when spending occurred.
-Diagnostic freshness and enrichment update quietly, so reread when needed instead of
-expecting every observation in the feed.
+Observation freshness and references update quietly; the feed signals retained
+content changes, including enrichment and private evidence.
 
 The feed's `nextCursor` is **always** a resumable checkpoint: the position after the
 last event returned, or the request's own cursor when the page is empty. Start

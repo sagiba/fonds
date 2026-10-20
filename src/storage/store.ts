@@ -30,6 +30,12 @@ import {
   OCCURRENCE_LEASE_MS,
   OCCURRENCE_RETENTION_MS,
 } from "../application/scheduled-collections.js";
+import {
+  elapsedMs,
+  syncCorrelationIds,
+  syncDiagnostics,
+  type SyncDiagnosticSink,
+} from "../application/sync-diagnostics.js";
 import { cardDiscoverySchema } from "../domain/cards.js";
 import { InvalidInputError, NotFoundError } from "../domain/errors.js";
 import {
@@ -48,6 +54,7 @@ import {
 import { FinancialPlan } from "../domain/plans/state.js";
 import {
   extractRun,
+  finishTransactionContent,
   planRun,
   type RunInput,
   type SyncResult,
@@ -57,9 +64,11 @@ import type { Connection, ConnectionConfig } from "../domain/records.js";
 import type { SourceAdapter } from "../domain/source-adapter.js";
 import {
   assertSameEvidence,
+  contentDigest,
   prepareRun,
   replayResult,
   retainedRun,
+  runEvidenceDigest,
 } from "./run-evidence.js";
 import type { PlanScope } from "./sql.js";
 import type { RefreshRow, RefreshWindowRow, Statements } from "./statements.js";
@@ -97,6 +106,9 @@ function refreshFromRow(
       failures: row.failures,
       created: row.created,
       updated: row.updated,
+      observed: row.observed,
+      unchangedTransactions: row.unchangedTransactions,
+      unlisted: row.unlisted,
     },
     failureCodes: row.failureCodes,
     failureReason: row.failureReason,
@@ -217,7 +229,7 @@ export function lockedCollectionStore<Db>(
     updateConfig: store.updateConfig,
     ledgerRevision: store.ledgerRevision,
     updateRefresh: store.updateRefresh,
-    async recoverPendingRuns(adapter) {
+    async recoverPendingRuns(adapter, onDiagnostic) {
       signal.throwIfAborted();
       const pending = await db.execute(
         statements.pendingRuns(db.root, connectionId, 101),
@@ -231,7 +243,7 @@ export function lockedCollectionStore<Db>(
       const results: SyncResult[] = [];
       for (const run of pending) {
         signal.throwIfAborted();
-        results.push(await store.applyRun(run.id, adapter));
+        results.push(await store.applyRun(run.id, adapter, onDiagnostic));
       }
       return results;
     },
@@ -461,10 +473,16 @@ function buildStore<Db>(
     }
   }
 
-  async function savePlan(tx: Db, plan: FinancialPlan, runId?: string) {
+  async function savePlan(
+    tx: Db,
+    plan: FinancialPlan,
+    runId?: string,
+    after: Iterable<PromiseLike<unknown>> = [],
+  ) {
     // Catalog rows precede financial writes inside the same transaction/batch.
     await commit(tx, plan.snapshot.connection, [
       ...statements.applyPlan(tx, plan, runId),
+      ...after,
     ]);
   }
 
@@ -553,37 +571,95 @@ function buildStore<Db>(
       relatedIds,
     );
     const result = command(plan);
+    finishTransactionContent(
+      plan,
+      undefined,
+      undefined,
+      plan.events[0]?.createdAt ?? new Date().toISOString(),
+      new Set(),
+      plan.events[0]?.actor ?? "owner",
+    );
     await savePlan(tx, plan);
     return result;
   }
 
-  async function ingestRun(input: RunInput, adapter: SourceAdapter) {
+  async function ingestRun(
+    input: RunInput,
+    adapter: SourceAdapter,
+    onDiagnostic?: SyncDiagnosticSink,
+  ) {
     const run = prepareRun(input, adapter);
-    await db.transaction(async (tx) => {
-      const connection = (
-        await statements.lockConnection(tx, run.connectionId)
-      )[0];
-      if (!connection) {
-        throw new NotFoundError("Connection not found");
-      }
-      if (connection.provider !== adapter.provider) {
-        throw new Error("Connection provider mismatch");
-      }
-      const [inserted] = await commit(tx, connection, [
-        statements.insertRun(tx, retainedRun(run, adapter)),
-      ]);
-      if (!inserted.length) {
-        // Retained evidence is immutable, so this may follow the commit.
-        assertSameEvidence((await statements.run(tx, run.runId))[0]!, run);
-      }
+    const digest = await runEvidenceDigest(run);
+    const emit = syncDiagnostics(onDiagnostic);
+    const ids = syncCorrelationIds({
+      captureId: run.runId,
+      refreshId: run.refreshId,
     });
-    return applyRun(run.runId, adapter);
+    const started = performance.now();
+    let staged = false;
+    emit({ event: "fonds_sync", ...ids, stage: "archive", outcome: "started" });
+    await db
+      .transaction(async (tx) => {
+        const connection = (
+          await statements.lockConnection(tx, run.connectionId)
+        )[0];
+        if (!connection) {
+          throw new NotFoundError("Connection not found");
+        }
+        if (connection.provider !== adapter.provider) {
+          throw new Error("Connection provider mismatch");
+        }
+        const existing = (await statements.runState(tx, run.runId))[0];
+        if (existing) {
+          if (existing.evidenceDigest !== null) {
+            if (existing.evidenceDigest !== digest) {
+              throw new Error("Run ID already refers to different evidence");
+            }
+          } else {
+            assertSameEvidence(
+              (await statements.run(tx, run.runId))[0]!,
+              run,
+              digest,
+            );
+          }
+        } else {
+          const retained = retainedRun(run, adapter, digest);
+          await commit(tx, connection, [
+            statements.insertRun(tx, retained),
+            statements.insertRunBody(tx, retained),
+          ]);
+          staged = true;
+        }
+      })
+      .catch((error: unknown) => {
+        emit({
+          event: "fonds_sync",
+          ...ids,
+          stage: "archive",
+          outcome: "failed",
+          reason: "persistence_failure",
+          failureCategory: "persistence",
+        });
+        throw error;
+      });
+    emit({
+      event: "fonds_sync",
+      ...ids,
+      stage: "archive",
+      outcome: "completed",
+      reason: staged ? "body_staged" : "content_unchanged",
+      durationMs: elapsedMs(started),
+    });
+    return applyRun(run.runId, adapter, onDiagnostic);
   }
 
   async function applyRun(
     id: string,
     adapter: SourceAdapter,
+    onDiagnostic?: SyncDiagnosticSink,
   ): Promise<SyncResult> {
+    const emit = syncDiagnostics(onDiagnostic);
+    const ids = syncCorrelationIds({ captureId: id });
     const stored = (
       await db.execute(statements.runWithConnection(db.root, id))
     )[0];
@@ -591,6 +667,10 @@ function buildStore<Db>(
       throw new NotFoundError("Run not found");
     }
     const { run: archived, connection } = stored;
+    Object.assign(
+      ids,
+      syncCorrelationIds({ refreshId: archived.refreshId ?? undefined }),
+    );
     if (connection.provider !== adapter.provider) {
       throw new Error("Connection provider mismatch");
     }
@@ -600,26 +680,164 @@ function buildStore<Db>(
     if (archived.parserVersion !== adapter.parserVersion) {
       throw new Error("Run parser version differs from adapter");
     }
-    const extraction = extractRun(archived, adapter);
-    return db.transaction(async (tx) => {
-      const locked = (await statements.lockConnection(tx, connection.id))[0]!;
-      const state = (await statements.runState(tx, id))[0]!;
-      const run = { ...archived, ...state };
-      if (run.appliedAt) {
-        return replayResult(run);
-      }
-      const plan = await loadPlan(tx, locked, undefined, [], true);
-      const result = planRun(
-        plan,
-        run,
-        adapter,
-        extraction,
-        new Date().toISOString(),
-        () => crypto.randomUUID(),
-      );
-      await savePlan(tx, plan, id);
-      return result;
+    if (!archived.bodyAvailable) {
+      throw new Error("Unapplied run has no recoverable source body");
+    }
+    const started = performance.now();
+    emit({
+      event: "fonds_sync",
+      ...ids,
+      stage: "extraction",
+      outcome: "started",
     });
+    let extraction: ReturnType<typeof extractRun>;
+    try {
+      extraction = extractRun(archived, adapter);
+    } catch (error) {
+      emit({
+        event: "fonds_sync",
+        ...ids,
+        stage: "extraction",
+        outcome: "failed",
+        failureCategory: "invalid_response",
+      });
+      throw error;
+    }
+    emit({
+      event: "fonds_sync",
+      ...ids,
+      stage: "extraction",
+      outcome: "completed",
+      durationMs: elapsedMs(started),
+      counts: {
+        extracted: extraction.extracted.reduce(
+          (count, item) => count + item.result.transactions.length,
+          0,
+        ),
+      },
+    });
+    let phase: "reconciliation" | "commit" = "reconciliation";
+    let commitStarted = performance.now();
+    const result = await db
+      .transaction(async (tx) => {
+        const locked = (await statements.lockConnection(tx, connection.id))[0]!;
+        const state = (await statements.runState(tx, id))[0]!;
+        const run = { ...archived, ...state };
+        if (run.appliedAt) {
+          return replayResult(run);
+        }
+        const plan = await loadPlan(tx, locked, undefined, [], true);
+        const reconciliationStarted = performance.now();
+        emit({
+          event: "fonds_sync",
+          ...ids,
+          stage: "reconciliation",
+          outcome: "started",
+        });
+        const result = planRun(
+          plan,
+          run,
+          adapter,
+          extraction,
+          new Date().toISOString(),
+          () => crypto.randomUUID(),
+        );
+        emit({
+          event: "fonds_sync",
+          ...ids,
+          stage: "reconciliation",
+          outcome: "completed",
+          durationMs: elapsedMs(reconciliationStarted),
+          counts: {
+            observed: result.observed ?? 0,
+            created: result.created,
+            changed: result.updated,
+            unchangedTransactions: result.unchanged ?? 0,
+            absent: result.unlisted,
+            deferred: plan.deferredCandidates.length,
+          },
+        });
+        const deferred = await Promise.all(
+          plan.deferredCandidates.map(async (candidate) => ({
+            id: await contentDigest({
+              digestSchema: "fonds-deferred-evidence-v1",
+              connectionId: connection.id,
+              ...candidate,
+            }),
+            connectionId: connection.id,
+            ...candidate,
+            firstSeenRunId: id,
+            lastSeenRunId: id,
+          })),
+        );
+        phase = "commit";
+        commitStarted = performance.now();
+        emit({
+          event: "fonds_sync",
+          ...ids,
+          stage: "commit",
+          outcome: "started",
+        });
+        await savePlan(tx, plan, id, [
+          ...[...new Map(deferred.map((row) => [row.id, row])).values()].map(
+            (row) => statements.upsertDeferredEvidence(tx, row),
+          ),
+          ...(archived.bodyRetention === "legacy"
+            ? []
+            : statements.finishRunEvidence(tx, id, archived.bodyExpiresAt)),
+        ]);
+        return result;
+      })
+      .catch((error: unknown) => {
+        emit({
+          event: "fonds_sync",
+          ...ids,
+          stage: phase,
+          outcome: "failed",
+          failureCategory: phase === "commit" ? "persistence" : "execution",
+        });
+        throw error;
+      });
+    emit({
+      event: "fonds_sync",
+      ...ids,
+      stage: "commit",
+      outcome: "completed",
+      durationMs: elapsedMs(commitStarted),
+    });
+    emit({
+      event: "fonds_sync",
+      ...ids,
+      stage: "archive",
+      outcome: "completed",
+      reason:
+        archived.bodyRetention === "legacy"
+          ? "legacy_body_retained"
+          : archived.bodyExpiresAt === null
+            ? "body_released"
+            : "debug_body_retained",
+    });
+    // Expiration is maintenance after the atomic financial commit; failure cannot undo it.
+    try {
+      await db.execute(
+        statements.pruneDebugBodies(db.root, new Date().toISOString()),
+      );
+      emit({
+        event: "fonds_sync",
+        ...ids,
+        stage: "purge",
+        outcome: "completed",
+      });
+    } catch {
+      emit({
+        event: "fonds_sync",
+        ...ids,
+        stage: "purge",
+        outcome: "failed",
+        failureCategory: "persistence",
+      });
+    }
+    return result;
   }
 
   async function latestEventId(connectionId?: string) {

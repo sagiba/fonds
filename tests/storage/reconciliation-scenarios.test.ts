@@ -68,6 +68,7 @@ describe.each(backends)(
     function capture(envelope: Envelope, day: number, scope?: CollectionScope) {
       return db.ingestRun(
         {
+          debugArchiveDays: 2,
           connectionId,
           runId: `synthetic-run-${day}`,
           responses: [
@@ -226,7 +227,6 @@ describe.each(backends)(
         details: {
           ...purchase.details,
           sourceRefs: [
-            ...purchase.details.sourceRefs,
             { runId: "synthetic-run-2", path: "/result/transactions/0" },
           ],
         },
@@ -432,7 +432,7 @@ describe.each(backends)(
           });
           expect(await ledger()).toEqual(before);
           const [archived] = await db.raw(
-            "SELECT * FROM sync_runs WHERE id = ?",
+            "SELECT r.*, b.snapshot_json FROM sync_runs r LEFT JOIN sync_run_bodies b ON b.run_id=r.id WHERE r.id = ?",
             [`synthetic-run-${day}`],
           );
           expect(archived).toMatchObject({
@@ -483,6 +483,7 @@ describe.each(backends)(
       await expect(
         db.ingestRun(
           {
+            debugArchiveDays: 2,
             connectionId,
             runId: "pending-archive",
             responses: [
@@ -648,6 +649,7 @@ describe.each(backends)(
       expect(
         await db.ingestRun(
           {
+            debugArchiveDays: 2,
             connectionId,
             runId: "synthetic-other-account",
             responses: [
@@ -673,6 +675,7 @@ describe.each(backends)(
       // Build the state an absence policy without the empty-list guard produces.
       await db.ingestRun(
         {
+          debugArchiveDays: 2,
           connectionId,
           runId: "synthetic-unguarded",
           responses: [
@@ -768,6 +771,7 @@ describe.each(backends)(
         for (const [index, transactions] of [inputs, []].entries()) {
           await db.ingestRun(
             {
+              debugArchiveDays: 2,
               connectionId,
               runId: `horizon-${index}`,
               responses: [

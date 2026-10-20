@@ -20,6 +20,7 @@ import {
   backends,
   type Harness,
   open,
+  renameTransactionFixture,
   row,
   synthetic,
 } from "../helpers/storage-harness.js";
@@ -44,6 +45,7 @@ for (const backend of backends) {
     ) =>
       db.ingestRun(
         {
+          debugArchiveDays: 2,
           runId: `${connectionId}:${runId}`,
           connectionId,
           startedAt: "2040-08-01T00:00:00Z",
@@ -132,7 +134,7 @@ for (const backend of backends) {
       expect(enriched).toMatchObject({
         id: initial.id,
         amountMinor: 0,
-        version: sparse.version,
+        version: sparse.version + 1,
         presence: "seen",
         lastSeenRunId: sparse.lastSeenRunId,
         lastSeenAt: sparse.lastSeenAt,
@@ -237,7 +239,7 @@ for (const backend of backends) {
           annotation: { data: { notes: "Preserved owner annotation" } },
         });
         const archived = await db.raw(
-          "SELECT snapshot_json FROM sync_runs WHERE id = ?",
+          "SELECT snapshot_json FROM sync_run_bodies WHERE run_id = ?",
           [`${connectionId}:native-conflict`],
         );
         expect(
@@ -382,6 +384,7 @@ for (const backend of backends) {
       await db.ensureConnection({ id: other, provider: "cal" });
       await db.ingestRun(
         {
+          debugArchiveDays: 2,
           runId: `${other}:run`,
           connectionId: other,
           startedAt: "2040-08-01T00:00:00Z",
@@ -408,6 +411,15 @@ for (const backend of backends) {
         "UPDATE events SET transaction_id = NULL WHERE transaction_id = ?",
         [victim!.id],
       );
+      for (const table of [
+        "transaction_observations",
+        "transaction_reconciliation",
+        "transaction_posting_links",
+      ]) {
+        await db.raw(`DELETE FROM ${table} WHERE transaction_id = ?`, [
+          victim!.id,
+        ]);
+      }
       await db.raw("DELETE FROM transactions WHERE id = ?", [victim!.id]);
       expect(await db.ledgerRevision(connectionId)).toBe(`${latest}:0`);
     });
@@ -518,9 +530,14 @@ for (const backend of backends) {
         ["bmp", "\uE000"],
         ["undated", "undated"],
       ]) {
-        await db.raw(
-          "UPDATE transactions SET id = ? WHERE connection_id = ? AND source_key = ?",
-          [`${connectionId}:${id!}`, connectionId, sourceKey!],
+        const [current] = await db.raw(
+          "SELECT id FROM transactions WHERE connection_id = ? AND source_key = ?",
+          [connectionId, sourceKey!],
+        );
+        await renameTransactionFixture(
+          db,
+          String(current!.id),
+          `${connectionId}:${id!}`,
         );
       }
       // Keyset seeks compare IDs with the same UTF-8 byte order as ORDER BY.
@@ -559,6 +576,7 @@ for (const backend of backends) {
       const failure = (runId: string) =>
         db.ingestRun(
           {
+            debugArchiveDays: 2,
             runId: `${connectionId}:${runId}`,
             connectionId,
             startedAt: "2040-08-01T00:00:00Z",
@@ -605,6 +623,7 @@ for (const backend of backends) {
       const endpoint = "synthetic:cal/recent\u0000context";
       await db.ingestRun(
         {
+          debugArchiveDays: 2,
           runId,
           connectionId,
           responses: [
@@ -620,7 +639,7 @@ for (const backend of backends) {
       );
       await capture([row("later")]);
       const stored = await db.raw(
-        "SELECT snapshot_json FROM sync_runs WHERE id = ?",
+        "SELECT snapshot_json FROM sync_run_bodies WHERE run_id = ?",
         [runId],
       );
       expect(
@@ -678,7 +697,7 @@ for (const backend of backends) {
       };
       const result = await collectFromStore(
         db,
-        { connectionId },
+        { connectionId, debugArchiveDays: 2 },
         collector,
         synthetic,
       );
@@ -705,7 +724,7 @@ for (const backend of backends) {
       });
       for (const [index, runId] of result.runIds.entries()) {
         const stored = await db.raw(
-          "SELECT snapshot_json, warnings_json, coverage_json, applied_at FROM sync_runs WHERE id = ?",
+          "SELECT b.snapshot_json, r.warnings_json, r.coverage_json, r.applied_at FROM sync_runs r JOIN sync_run_bodies b ON b.run_id=r.id WHERE r.id = ?",
           [runId],
         );
         expect(
@@ -793,7 +812,7 @@ for (const backend of backends) {
       };
       const result = await collectFromStore(
         db,
-        { connectionId },
+        { connectionId, debugArchiveDays: 2 },
         collector,
         synthetic,
       );

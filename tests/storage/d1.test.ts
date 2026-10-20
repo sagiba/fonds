@@ -295,8 +295,11 @@ describe.skipIf(!d1Enabled)("guarded D1 write batches", () => {
     });
     await store.acknowledgeCursor(connectionId, "consumer", 0, 1);
     await store.ensureConnection({ id: "synthetic-other", provider: "cal" });
-    // Creating a connection is one atomic statement outside any store transaction.
+    // Expired debugging bodies and connection creation are independent maintenance writes.
     expect(direct).toEqual([
+      expect.stringMatching(
+        /^delete from "sync_run_bodies" where \("sync_run_bodies"\."retention" = \? and "sync_run_bodies"\."expires_at" <= \?\)$/i,
+      ),
       expect.stringMatching(/^insert into "connections"/i),
     ]);
   });
@@ -312,7 +315,7 @@ describe.skipIf(!d1Enabled)("guarded D1 write batches", () => {
     await capture(db, "run-1");
     expect(await revision()).toBe(2);
     await capture(db, "run-1");
-    // A replay's evidence batch inserts nothing but still advances the revision.
-    expect(await revision()).toBe(3);
+    // An applied replay performs no guarded write batch.
+    expect(await revision()).toBe(2);
   });
 });

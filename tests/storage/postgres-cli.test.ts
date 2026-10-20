@@ -280,9 +280,13 @@ describe.skipIf(!postgresUrl)("PostgreSQL operator CLI", () => {
       type: "collection_summary",
       status: "completed",
       captures: 1,
+      unchanged: 0,
       failures: 0,
-      created: expect.any(Number),
+      created: 21,
       updated: 0,
+      observed: 21,
+      unchangedTransactions: 0,
+      unlisted: 0,
     });
     expect(collected.credentials).toHaveLength(1);
     expect(await command("demo")).toMatchObject({ status: 3, stdout: "" });

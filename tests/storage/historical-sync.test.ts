@@ -23,6 +23,7 @@ import {
 import {
   cards,
   type CollectionScope,
+  syncRunBodies,
   syncRuns,
 } from "../../src/storage/sqlite/schema.js";
 
@@ -72,12 +73,15 @@ describe("historical capture reconciliation", () => {
     context: {
       endpoint?: string;
       httpStatus?: number;
+      debugArchiveDays?: number;
     } = {},
   ) {
+    const { debugArchiveDays, ...captureContext } = context;
     return await db.ingestRun(
       {
         runId,
         connectionId,
+        ...(debugArchiveDays !== undefined && { debugArchiveDays }),
         collectorVersion: "synthetic-stream-v1",
         responses: [
           {
@@ -86,7 +90,7 @@ describe("historical capture reconciliation", () => {
             capturedAt: `2040-08-${String(day).padStart(2, "0")}T00:00:00Z`,
             responseText,
             ...(scope ? { scope } : {}),
-            ...context,
+            ...captureContext,
           },
         ],
       },
@@ -94,16 +98,30 @@ describe("historical capture reconciliation", () => {
     );
   }
 
+  function captureArchived(...args: Parameters<typeof capture>) {
+    return capture(args[0], args[1], args[2], args[3], {
+      ...args[4],
+      debugArchiveDays: 2,
+    });
+  }
+
+  async function archivedResponse(runId: string) {
+    const body = await db.orm
+      .select()
+      .from(syncRunBodies)
+      .where(eq(syncRunBodies.runId, runId))
+      .get();
+    return body?.snapshot.responses[0]?.responseText;
+  }
+
   it("archives raw source, requested scope, and collector provenance without inferred completeness", async () => {
     const scope = { ...history(), from: "2040-05-03", to: "2040-05-31" };
     const raw = response([regular]);
-    await capture("historical", raw, scope);
+    await captureArchived("historical", raw, scope);
     const run = (await db.orm.select().from(syncRuns).get())!;
     expect(run.collectorVersion).toBe("synthetic-stream-v1");
-    expect(run.snapshot.responses[0]).toMatchObject({
-      responseText: raw,
-      scope,
-    });
+    expect(run.snapshot.responses[0]).toMatchObject({ scope });
+    expect(await archivedResponse("historical")).toBe(raw);
     expect(
       run.coverage.every(
         (part) =>
@@ -113,9 +131,11 @@ describe("historical capture reconciliation", () => {
       ),
     ).toBe(true);
     await expect(
-      capture("historical", raw, history("2040-06")),
+      captureArchived("historical", raw, history("2040-06")),
     ).rejects.toThrow(/different evidence/);
-    expect((await capture("historical", raw, scope)).replayed).toBe(true);
+    expect((await captureArchived("historical", raw, scope)).replayed).toBe(
+      true,
+    );
   });
 
   it("does not let a later-collected old historical window overwrite or unlist current facts", async () => {
@@ -187,14 +207,12 @@ describe("historical capture reconciliation", () => {
         .map((row) => row.installmentNumber)
         .sort(),
     ).toEqual([2, 4]);
-    expect(after.details.sourceRefs.map((ref) => ref.runId)).toEqual(
-      expect.arrayContaining([
-        "recent",
-        "history-may",
-        "history-overlap",
-        "history-repeat",
-      ]),
-    );
+    expect(after.details.sourceRefs.map((ref) => ref.runId).sort()).toEqual([
+      "history-overlap",
+      "history-overlap",
+      "history-repeat",
+      "recent",
+    ]);
     expect(after).toMatchObject({
       amountMinor: before.amountMinor,
       lastSeenRunId: "recent",
@@ -498,9 +516,9 @@ describe("historical capture reconciliation", () => {
       "completed",
     );
     const bad = JSON.stringify({ statusCode: 2, result: null });
-    expect((await capture("older-failure-later", bad, scope, 3)).status).toBe(
-      "failed",
-    );
+    expect(
+      (await captureArchived("older-failure-later", bad, scope, 3)).status,
+    ).toBe("failed");
     expect(
       (await capture("newer-success-repeat", valid, scope, 4)).status,
     ).toBe("completed");
@@ -512,15 +530,7 @@ describe("historical capture reconciliation", () => {
     expect(
       (await db.listEvents()).filter((change) => change.type === "sync.failed"),
     ).toEqual([expect.objectContaining({ runId: "older-failure-later" })]);
-    expect(
-      (
-        await db.orm
-          .select()
-          .from(syncRuns)
-          .where(eq(syncRuns.id, "older-failure-later"))
-          .get()
-      )?.snapshot.responses[0]?.responseText,
-    ).toBe(bad);
+    expect(await archivedResponse("older-failure-later")).toBe(bad);
     expect((await capture("later-real-failure", bad, scope, 5)).status).toBe(
       "failed",
     );
@@ -578,7 +588,9 @@ describe("historical capture reconciliation", () => {
         statusCode: 1,
         result: { transArr: [regular, wrong] },
       });
-      expect(await capture("scope-card-mismatch", raw, scope)).toMatchObject({
+      expect(
+        await captureArchived("scope-card-mismatch", raw, scope),
+      ).toMatchObject({
         status: "partial",
         created: 1,
         unlisted: 0,
@@ -588,14 +600,14 @@ describe("historical capture reconciliation", () => {
       expect(card?.providerKey).toBe("SYNTHETIC-CARD-A");
       expect((await db.listTransactions())[0]?.cardId).toBe(card?.id);
       const run = (await db.orm.select().from(syncRuns).get())!;
-      expect(run.snapshot.responses[0]?.responseText).toBe(raw);
+      expect(await archivedResponse(run.id)).toBe(raw);
       expect(run.warnings).toEqual(["out_of_scope_card"]);
       expect(run.coverage[0]).toMatchObject({
         success: false,
         comparable: false,
       });
       expect(
-        JSON.parse(run.snapshot.responses[0]!.responseText).result.transArr,
+        JSON.parse((await archivedResponse(run.id))!).result.transArr,
       ).toHaveLength(2);
     },
   );
@@ -753,7 +765,7 @@ describe("historical capture reconciliation", () => {
       result: { transactions: [], clearanceRequests: [] },
       unknownSourceField: sentinel,
     });
-    await capture("large-prior", large, history());
+    await captureArchived("large-prior", large, history());
     const begin = db.client.transaction.bind(db.client);
     const statements: string[] = [];
     const spy = vi
@@ -785,15 +797,7 @@ describe("historical capture reconciliation", () => {
     );
     expect(priorMetadata).not.toContain("SYNTHETIC_LARGE_RAW_BODY");
     expect(priorMetadata.length).toBeLessThan(5000);
-    expect(
-      (
-        await db.orm
-          .select()
-          .from(syncRuns)
-          .where(eq(syncRuns.id, "large-prior"))
-          .get()
-      )?.snapshot.responses[0]?.responseText,
-    ).toBe(large);
+    expect(await archivedResponse("large-prior")).toBe(large);
   });
 
   it("does not treat source-code-only monthly fields as validated purchase commitments", async () => {
@@ -827,7 +831,7 @@ describe("historical capture reconciliation", () => {
         ],
       },
     });
-    expect(await capture("monthly", raw, history())).toMatchObject({
+    expect(await captureArchived("monthly", raw, history())).toMatchObject({
       status: "failed",
       created: 0,
       updated: 0,
@@ -838,7 +842,7 @@ describe("historical capture reconciliation", () => {
       .from(syncRuns)
       .where(eq(syncRuns.id, "monthly"))
       .get())!;
-    expect(run.snapshot.responses[0]?.responseText).toBe(raw);
+    expect(await archivedResponse(run.id)).toBe(raw);
     expect(run.warnings).toEqual([
       "unsupported_monthly_projection",
       "unsupported_monthly_rows:2",
@@ -977,7 +981,7 @@ describe("historical capture reconciliation", () => {
     const searchEndpoint =
       "https://api.cal-online.co.il/Transactions/api/filteredTransactions/getFilteredTransactions";
     expect(
-      await capture(
+      await captureArchived(
         "empty-search",
         raw,
         { kind: "history", from: "2010-01-01", to: "2010-12-31" },
@@ -996,7 +1000,7 @@ describe("historical capture reconciliation", () => {
       .from(syncRuns)
       .where(eq(syncRuns.id, "empty-search"))
       .get())!;
-    expect(run.snapshot.responses[0]?.responseText).toBe(raw);
+    expect(await archivedResponse(run.id)).toBe(raw);
     expect(run.warnings).toEqual(["empty_search_result"]);
     expect(run.coverage).toEqual([
       expect.objectContaining({
@@ -1120,7 +1124,7 @@ describe("historical capture reconciliation", () => {
     };
     expect(
       (
-        await capture("edge-february", firstRaw, firstScope, 1, {
+        await captureArchived("edge-february", firstRaw, firstScope, 1, {
           endpoint: searchEndpoint,
         })
       ).created,
@@ -1137,7 +1141,7 @@ describe("historical capture reconciliation", () => {
       review: { status: "approved" },
     });
     expect(
-      await capture("edge-march", secondRaw, secondScope, 2, {
+      await captureArchived("edge-march", secondRaw, secondScope, 2, {
         endpoint: searchEndpoint,
       }),
     ).toMatchObject({ created: 1, updated: 0, unlisted: 0 });
@@ -1172,15 +1176,16 @@ describe("historical capture reconciliation", () => {
       ],
     });
     const runs = await db.orm.select().from(syncRuns).all();
-    expect(runs.map((run) => run.snapshot.responses[0]?.responseText)).toEqual([
-      firstRaw,
-      secondRaw,
-    ]);
     expect(
-      runs.map(
-        (run) =>
-          JSON.parse(run.snapshot.responses[0]!.responseText).result.transArr
-            .length,
+      await Promise.all(runs.map((run) => archivedResponse(run.id))),
+    ).toEqual([firstRaw, secondRaw]);
+    expect(
+      await Promise.all(
+        runs.map(
+          async (run) =>
+            JSON.parse((await archivedResponse(run.id))!).result.transArr
+              .length,
+        ),
       ),
     ).toEqual([2, 2]);
     expect(runs.map((run) => run.snapshot.responses[0]?.scope)).toEqual([
@@ -1321,7 +1326,7 @@ describe("historical capture reconciliation", () => {
     });
     expect(
       (
-        await capture("empty-search-paged", paged, scope, 1, {
+        await captureArchived("empty-search-paged", paged, scope, 1, {
           endpoint: searchEndpoint,
         })
       ).status,
@@ -1331,7 +1336,7 @@ describe("historical capture reconciliation", () => {
       .from(syncRuns)
       .where(eq(syncRuns.id, "empty-search-paged"))
       .get())!;
-    expect(run.snapshot.responses[0]?.responseText).toBe(paged);
+    expect(await archivedResponse(run.id)).toBe(paged);
     expect(run.warnings).toEqual([
       "unsupported_pagination",
       "empty_search_result",
@@ -1439,7 +1444,7 @@ describe("historical capture reconciliation", () => {
         { ...regular, trnIntId: "SYNTHETIC-HTTP-ERROR-OTHER" },
       ]);
       expect(
-        await capture("http-error", raw, undefined, 2, { httpStatus }),
+        await captureArchived("http-error", raw, undefined, 2, { httpStatus }),
       ).toMatchObject({
         status: "failed",
         created: 0,
@@ -1452,10 +1457,8 @@ describe("historical capture reconciliation", () => {
         .from(syncRuns)
         .where(eq(syncRuns.id, "http-error"))
         .get())!;
-      expect(run.snapshot.responses[0]).toMatchObject({
-        responseText: raw,
-        httpStatus,
-      });
+      expect(run.snapshot.responses[0]).toMatchObject({ httpStatus });
+      expect(await archivedResponse(run.id)).toBe(raw);
       expect(run.warnings).toEqual(["unexpected_http_status"]);
       expect(
         run.coverage.every((part) => !part.success && !part.comparable),

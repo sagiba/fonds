@@ -41,6 +41,7 @@ for (const backend of backends) {
     ) =>
       db.ingestRun(
         {
+          debugArchiveDays: 2,
           runId,
           connectionId,
           responses: [
@@ -527,7 +528,7 @@ for (const backend of backends) {
         replayed: true,
       });
       const stored = await db.raw(
-        "SELECT snapshot_json FROM sync_runs WHERE id = ?",
+        "SELECT snapshot_json FROM sync_run_bodies WHERE run_id = ?",
         [runId],
       );
       expect(
@@ -558,7 +559,11 @@ for (const backend of backends) {
       await expect(
         Promise.resolve().then(() =>
           db.ingestRun(
-            { ...input, connectionId },
+            {
+              debugArchiveDays: 2,
+              ...input,
+              connectionId,
+            },
             {
               ...synthetic,
               provider: "other-provider",
@@ -628,6 +633,7 @@ for (const backend of backends) {
         Promise.resolve().then(() =>
           db.ingestRun(
             {
+              debugArchiveDays: 2,
               runId,
               connectionId: other,
               responses: [
@@ -684,7 +690,7 @@ for (const backend of backends) {
       const text = "actual\u0000literal\\u0000 astral 🚀";
       await capture(text, adapter, runId);
       const stored = await db.raw(
-        "SELECT snapshot_json FROM sync_runs WHERE id = ?",
+        "SELECT snapshot_json FROM sync_run_bodies WHERE run_id = ?",
         [runId],
       );
       expect(

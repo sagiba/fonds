@@ -4,6 +4,7 @@ import {
   createApplication,
   inProcessInvoker,
 } from "../../src/application/operations.js";
+import { createSyncDiagnosticReport } from "../../src/application/sync-diagnostics.js";
 import { NotFoundError } from "../../src/domain/errors.js";
 import type {
   CollectionEvent,
@@ -71,6 +72,120 @@ describe("refresh service", () => {
       ...options,
     });
   }
+
+  it("commits refresh and ledger results even when the operational logger throws or rejects", async () => {
+    for (const mode of ["throw", "reject"]) {
+      const log = vi.fn(() => {
+        if (mode === "throw") {
+          throw new Error("private-log-error");
+        }
+        return Promise.reject(new Error("private-log-error"));
+      });
+      const refreshes = service(
+        async () =>
+          source(async function* () {
+            yield capture(mode);
+          }),
+        { log },
+      );
+      const [result] = await refreshes.wait([
+        await refreshes.start(connectionId, {
+          trigger: "manual",
+          operator: true,
+        }),
+      ]);
+      await refreshes.settled();
+      expect(result?.refresh).toMatchObject({
+        status: "completed",
+        counts: { observed: 1, created: 1, updated: 0 },
+      });
+      expect(
+        (await db.listTransactions()).some(
+          (transaction) => transaction.sourceKey === mode,
+        ),
+      ).toBe(true);
+      expect(log).toHaveBeenCalled();
+    }
+  });
+
+  it("returns observed, unchanged and meaningful enrichment changes in the ordinary refresh response", async () => {
+    let address = "First invented address";
+    let observation = 0;
+    const refreshes = service(async () =>
+      source(async function* () {
+        const event = capture("same") as Extract<
+          CollectionEvent,
+          { type: "capture" }
+        >;
+        const transaction = row("same");
+        transaction.details.merchant.address = address;
+        event.capture.responseText = JSON.stringify([transaction]);
+        event.capture.capturedAt = new Date(
+          Date.now() + ++observation * 1_000,
+        ).toISOString();
+        yield event;
+      }),
+    );
+    const invoker = inProcessInvoker(
+      createApplication(db, { refreshes: ownerRefreshes(refreshes) }),
+    );
+
+    async function refresh() {
+      const [result] = await refreshes.wait([
+        await refreshes.start(connectionId, {
+          trigger: "manual",
+          operator: true,
+        }),
+      ]);
+      return invoker.invoke("get_refresh", { refreshId: result!.refresh!.id });
+    }
+
+    expect(await refresh()).toMatchObject({
+      refresh: {
+        counts: {
+          observed: 1,
+          unchangedTransactions: 0,
+          created: 1,
+          updated: 0,
+        },
+      },
+    });
+    const first = (await db.listTransactions())[0]!;
+    const annotation = await db.editAnnotation({
+      transactionId: first.id,
+      expectedVersion: 0,
+      notes: "Independent owner annotation",
+    });
+    expect(await refresh()).toMatchObject({
+      refresh: {
+        counts: {
+          observed: 1,
+          unchangedTransactions: 1,
+          unchanged: 1,
+          created: 0,
+          updated: 0,
+        },
+      },
+    });
+    address = "Corrected invented address";
+    expect(await refresh()).toMatchObject({
+      refresh: {
+        counts: {
+          observed: 1,
+          unchangedTransactions: 0,
+          unchanged: 0,
+          created: 0,
+          updated: 1,
+          unlisted: 0,
+        },
+      },
+    });
+    expect(await db.getTransaction(first.id)).toMatchObject({
+      version: first.version + 1,
+      details: { merchant: { address } },
+      annotation,
+    });
+  });
 
   it("refuses a connection it cannot collect and a range over 120 months", async () => {
     const refreshes = service(async () => source(async function* () {}));
@@ -226,6 +341,66 @@ describe("refresh service", () => {
     });
   });
 
+  it("preserves committed unit counts across interruption and counts resumed observations without duplicating creations", async () => {
+    const shutdown = new AbortController();
+    const ready = Promise.withResolvers<void>();
+    const stopping = service(
+      async () =>
+        source(async function* (options) {
+          yield capture("observed-before-interruption");
+          ready.resolve();
+          await new Promise((resolve) =>
+            options.signal?.addEventListener("abort", resolve, { once: true }),
+          );
+        }),
+      { signal: shutdown.signal },
+    );
+    const started = await stopping.start(connectionId, {
+      trigger: "manual",
+      range: { from: "2040-03-01", to: "2040-03-31" },
+    });
+    await ready.promise;
+    shutdown.abort();
+    await stopping.settled();
+    expect(await db.getRefresh(started.refresh!.id)).toMatchObject({
+      status: "running",
+      windows: [{ status: "running" }],
+      counts: {
+        captures: 1,
+        observed: 1,
+        created: 1,
+        updated: 0,
+        unchanged: 0,
+        unchangedTransactions: 0,
+      },
+    });
+    const restarted = service(async () =>
+      source(async function* () {
+        yield capture("observed-before-interruption");
+      }),
+    );
+    await restarted.resumeStalled();
+    await restarted.settled();
+    expect(await db.getRefresh(started.refresh!.id)).toMatchObject({
+      status: "completed",
+      windows: [{ status: "completed" }],
+      counts: {
+        captures: 2,
+        observed: 2,
+        created: 1,
+        updated: 0,
+        unchanged: 1,
+        unchangedTransactions: 1,
+      },
+    });
+    expect(await db.listTransactions()).toHaveLength(1);
+    expect(
+      (await db.listEvents()).filter(
+        (event) => event.type === "transaction.imported",
+      ),
+    ).toHaveLength(1);
+  });
+
   it("answers a start that meets an active refresh at once, ahead of the cooldown", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -283,6 +458,9 @@ describe("refresh service", () => {
         counts: {
           captures: 0,
           unchanged: 0,
+          observed: 0,
+          unchangedTransactions: 0,
+          unlisted: 0,
           failures: 0,
           created: 0,
           updated: 0,
@@ -361,6 +539,9 @@ describe("refresh service", () => {
         counts: {
           captures: 0,
           unchanged: 0,
+          observed: 0,
+          unchangedTransactions: 0,
+          unlisted: 0,
           failures: 0,
           created: 0,
           updated: 0,
@@ -415,6 +596,72 @@ describe("refresh service", () => {
       failureReason: "expired",
       counts: { failures: 1 },
     });
+  });
+
+  it("traces recovered ingestion stages through the refresh logger with original correlation IDs", async () => {
+    const refreshId = crypto.randomUUID();
+    const captureId = crypto.randomUUID();
+    await abandoned(new Date().toISOString(), {
+      id: refreshId,
+      range: null,
+      windows: [],
+    });
+    await db.client.execute(
+      "CREATE TRIGGER interrupt_financial_application BEFORE INSERT ON transactions BEGIN SELECT RAISE(ABORT, 'synthetic interrupted application'); END",
+    );
+    const event = capture("recovered-for-diagnostics") as Extract<
+      CollectionEvent,
+      { type: "capture" }
+    >;
+    await expect(
+      db.ingestRun(
+        {
+          runId: captureId,
+          refreshId,
+          connectionId,
+          responses: [event.capture],
+        },
+        synthetic,
+      ),
+    ).rejects.toThrow();
+    await db.client.execute("DROP TRIGGER interrupt_financial_application");
+    const report = createSyncDiagnosticReport();
+    const refreshes = service(
+      async () =>
+        source(async function* () {
+          yield capture("fresh-after-recovery");
+        }),
+      { log: report.log },
+    );
+    await refreshes.resumeStalled();
+    await refreshes.settled();
+    expect(await db.getRefresh(refreshId)).toMatchObject({
+      status: "completed",
+      counts: { created: 2, observed: 2 },
+    });
+    expect(report.report().entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          refreshId,
+          captureId,
+          stage: "extraction",
+          outcome: "completed",
+          counts: { extracted: 1 },
+        }),
+        expect.objectContaining({
+          refreshId,
+          captureId,
+          stage: "commit",
+          outcome: "completed",
+        }),
+        expect.objectContaining({
+          refreshId,
+          stage: "recovery",
+          outcome: "completed",
+          counts: { recoveredRuns: 1 },
+        }),
+      ]),
+    );
   });
 
   it("finishes an abandoned refresh when a read polls it", async () => {
@@ -652,7 +899,10 @@ describe("provider sessions across a backfill", () => {
     return { calls, expire: () => valid.clear() };
   }
 
-  async function backfill(collector: ProviderCollector) {
+  async function backfill(
+    collector: ProviderCollector,
+    debugArchiveDays?: number,
+  ) {
     const [result] = await runOperatorRefresh({
       store: db,
       targets: async () => ({
@@ -666,6 +916,7 @@ describe("provider sessions across a backfill", () => {
         failures: 0,
       }),
       connectionId: calConnection,
+      ...(debugArchiveDays !== undefined && { debugArchiveDays }),
       range: { from: "2040-01-01", to: "2040-03-31" },
     });
     return result?.refresh;
@@ -740,10 +991,11 @@ describe("provider sessions across a backfill", () => {
         username: "SYNTHETIC-USER",
         password: "SYNTHETIC-PASSWORD",
       }),
+      2,
     );
     expect(refresh?.status).toBe("partial");
     const archived = await db.client.execute(
-      "SELECT snapshot_json FROM sync_runs",
+      "SELECT metadata_json AS evidence FROM sync_runs UNION ALL SELECT snapshot_json AS evidence FROM sync_run_bodies",
     );
     expect(JSON.stringify(archived.rows)).not.toContain("SYNTHETIC-TOKEN");
   });
@@ -757,20 +1009,23 @@ describe("provider sessions across a backfill", () => {
       password: "SYNTHETIC-PASSWORD",
     });
     let months = 0;
-    const refresh = await backfill({
-      ...collector,
-      async *collect(options) {
-        // The second month replaces token 1 with token 2; the third echoes token 1.
-        if (++months === 2) {
-          cal.expire();
-        }
-        yield* collector.collect(options);
+    const refresh = await backfill(
+      {
+        ...collector,
+        async *collect(options) {
+          // The second month replaces token 1 with token 2; the third echoes token 1.
+          if (++months === 2) {
+            cal.expire();
+          }
+          yield* collector.collect(options);
+        },
       },
-    });
+      2,
+    );
     expect(cal.calls.logins).toBe(2);
     expect(refresh?.status).toBe("partial");
     const archived = await db.client.execute(
-      "SELECT snapshot_json FROM sync_runs",
+      "SELECT metadata_json AS evidence FROM sync_runs UNION ALL SELECT snapshot_json AS evidence FROM sync_run_bodies",
     );
     expect(JSON.stringify(archived.rows)).not.toContain("SYNTHETIC-TOKEN");
   });

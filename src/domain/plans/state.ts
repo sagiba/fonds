@@ -35,11 +35,21 @@ export interface FinancialSnapshot {
   catalog?: { cards: Card[]; accounts: Account[] };
 }
 
+export interface DeferredCandidate {
+  sourceScope: string;
+  sourceKey: string;
+  reason: string;
+  content: Record<string, unknown>;
+}
+
 /** Finite financial write plan; the adapter supplies a consistent operation-scoped snapshot. */
 export class FinancialPlan {
   readonly rows: Map<string, Transaction>;
   readonly annotations: Map<string, Annotation>;
   readonly transactionWrites = new Map<string, Transaction>();
+  /** Fresh observations commit independently of unchanged transaction content. */
+  readonly observationWrites = new Map<string, Transaction>();
+  readonly deferredCandidates: DeferredCandidate[] = [];
   readonly annotationWrites = new Map<string, Annotation>();
   readonly events: LedgerEventWrite[] = [];
   /** Catalog writes; applied before transactions, accounts first. */

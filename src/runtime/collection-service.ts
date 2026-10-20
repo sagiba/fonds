@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import type { CredentialStore } from "../application/credential-store.js";
 import {
   createEventService,
@@ -15,6 +17,7 @@ import type {
   MissedOccurrences,
   ScheduledOccurrence,
 } from "../application/scheduled-collections.js";
+import { safeLog } from "../application/sync-diagnostics.js";
 import type { ProviderCredentials } from "../domain/credentials.js";
 import { LOCAL_IDENTITY } from "../transport/http.js";
 import type {
@@ -43,7 +46,7 @@ import {
 } from "./refresh-service.js";
 import { sendSignedWebhook, verifyWebhookCallback } from "./webhook.js";
 
-/** Receives count-only operational events; never financial values or secrets. */
+/** Receives operational metadata; never financial values or secrets. */
 export type OperationsLog = (entry: object) => void;
 
 /** The hosted default: one JSON line per event on stdout. */
@@ -53,6 +56,36 @@ export const stdoutLog: OperationsLog = (entry) =>
 /** For processes whose stdout is a protocol or a command's result. */
 export const stderrLog: OperationsLog = (entry) =>
   process.stderr.write(`${JSON.stringify(entry)}\n`);
+
+const transportDiagnosticSchema = z.object({
+  endpoint: z.enum(["login", "init", "recent", "monthly", "search", "unknown"]),
+  httpStatus: z.number().int().min(100).max(599).nullable(),
+  contentType: z.enum(["json", "html", "other"]),
+  outcome: z.enum([
+    "network_error",
+    "authentication_failed",
+    "authentication_challenge",
+    "rate_limited",
+    "invalid_response",
+    "success",
+  ]),
+  stage: z.enum([
+    "request",
+    "redirect",
+    "http_status",
+    "response_size",
+    "response_body",
+    "utf8_decode",
+    "json_keys",
+    "json_parse",
+    "json_shape",
+    "authentication",
+    "complete",
+    "endpoint_policy",
+    "timeout",
+    "cancelled",
+  ]),
+});
 
 export interface CollectionTargetSources {
   store: Pick<InternalStore, "listConnections">;
@@ -77,7 +110,7 @@ export interface CollectionTargetSources {
 export function collectionTargets(sources: CollectionTargetSources) {
   const { configured, credentials: credentialStore } = sources;
   const providerFor = sources.providerFor ?? runtimeProvider;
-  const log = sources.log ?? stdoutLog;
+  const log = safeLog(sources.log ?? stdoutLog);
   const target = (
     connectionId: string,
     providerName: string,
@@ -93,12 +126,12 @@ export function collectionTargets(sources: CollectionTargetSources) {
           throw new Error("Stored credentials disappeared");
         }
         return provider.createCollector(loaded, {
-          onDiagnostic: (diagnostic) =>
-            log({
-              event: "fonds_provider_transport",
-              provider: provider.adapter.provider,
-              ...diagnostic,
-            }),
+          onDiagnostic: safeLog((diagnostic: object) => {
+            const parsed = transportDiagnosticSchema.safeParse(diagnostic);
+            if (parsed.success) {
+              log({ event: "fonds_provider_transport", ...parsed.data });
+            }
+          }),
         });
       },
     };
@@ -182,7 +215,7 @@ export interface CollectionServiceOptions extends Omit<
 
 /** Refreshes over every collectable connection, with Events delivery, on any backend. */
 export function createCollectionService(options: CollectionServiceOptions) {
-  const log = options.log ?? stdoutLog;
+  const log = safeLog(options.log ?? stdoutLog);
   const { events } = options;
   return createRefreshService({
     store: options.store,
@@ -256,12 +289,13 @@ export function createLocalService(
   refreshes: RefreshService;
   scheduler: EmbeddedScheduler;
 } {
+  const log = safeLog(options.log);
   const events = createEventService({
     store: backend.eventSubscriptions,
     source: backend.store,
     // Request logs follow the service's log, so stdio's stdout stays protocol-only.
-    sendSignedWebhook: (input) => sendSignedWebhook(input, options.log),
-    verifyWebhookCallback: (input) => verifyWebhookCallback(input, options.log),
+    sendSignedWebhook: (input) => sendSignedWebhook(input, log),
+    verifyWebhookCallback: (input) => verifyWebhookCallback(input, log),
     ...options.webhooks,
     grantCheck: async (principal) =>
       principal.ownerId === LOCAL_IDENTITY.ownerId &&
@@ -273,7 +307,7 @@ export function createLocalService(
     credentialsKey: backend.credentialsKey,
     events,
     signal: options.signal,
-    log: options.log,
+    log: log,
     ...(options.providerFor && { providerFor: options.providerFor }),
   });
   const scheduler = createEmbeddedScheduler({
@@ -286,10 +320,10 @@ export function createLocalService(
       await refreshes.resumeStalled();
       const outcome = await events.deliver({ limit: 100, signal });
       if (outcome.sent || outcome.failed) {
-        options.log({ event: "fonds_event_delivery", ...outcome });
+        log({ event: "fonds_event_delivery", ...outcome });
       }
     },
-    log: (event, fields) => options.log({ event, ...fields }),
+    log: (event, fields) => log({ event, ...fields }),
   });
   return {
     application: createApplication(backend.store, {

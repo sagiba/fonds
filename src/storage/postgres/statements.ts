@@ -37,6 +37,13 @@ import {
   transactionOrder,
   transactionSeek,
 } from "../sql.js";
+import type { DeferredEvidenceWrite } from "../statements.js";
+import {
+  decodeTransaction,
+  encodeObservation,
+  encodeReconciliation,
+  transactionContentWrites,
+} from "../transaction-codec.js";
 import * as schema from "./schema.js";
 
 type Database = NodePgDatabase<typeof schema>;
@@ -48,11 +55,9 @@ export type Executor = Pick<
 
 const { ingestionOrder: _transactionOrder, ...transactionColumns } =
   getTableColumns(schema.transactions);
-const {
-  ingestionOrder: _runOrder,
-  metadata: _metadata,
-  ...runColumns
-} = getTableColumns(schema.syncRuns);
+const { ingestionOrder: _runOrder, ...runColumns } = getTableColumns(
+  schema.syncRuns,
+);
 
 export const cards = (db: Executor, connectionId: string) =>
   db
@@ -127,16 +132,32 @@ export const connections = (db: Executor) =>
     .select(connectionColumns(schema.connections))
     .from(schema.connections)
     .orderBy(asc(schema.connections.createdAt), asc(schema.connections.id));
-export const transaction = (db: Executor, id: string) =>
-  db
-    .select(transactionColumns)
-    .from(schema.transactions)
-    .where(eq(schema.transactions.id, id));
 
 function joinedTransactions(db: Executor) {
   return db
-    .select({ row: transactionColumns, annotation: schema.annotations })
+    .select({
+      row: transactionColumns,
+      observation: schema.transactionObservations,
+      reconciliation: schema.transactionReconciliation,
+      posting: schema.transactionPostingLinks,
+      annotation: schema.annotations,
+    })
     .from(schema.transactions)
+    .innerJoin(
+      schema.transactionObservations,
+      eq(schema.transactionObservations.transactionId, schema.transactions.id),
+    )
+    .innerJoin(
+      schema.transactionReconciliation,
+      eq(
+        schema.transactionReconciliation.transactionId,
+        schema.transactions.id,
+      ),
+    )
+    .innerJoin(
+      schema.transactionPostingLinks,
+      eq(schema.transactionPostingLinks.transactionId, schema.transactions.id),
+    )
     .leftJoin(
       schema.annotations,
       eq(schema.annotations.transactionId, schema.transactions.id),
@@ -144,8 +165,21 @@ function joinedTransactions(db: Executor) {
     .$dynamic();
 }
 
+const decodedRows = async (query: ReturnType<typeof joinedTransactions>) =>
+  (await query).map((input) => ({
+    row: decodeTransaction(input),
+    annotation: input.annotation,
+  }));
+
+export const transaction = async (db: Executor, id: string) =>
+  (
+    await decodedRows(
+      joinedTransactions(db).where(eq(schema.transactions.id, id)),
+    )
+  ).map(({ row }) => row);
+
 export const transactionWithAnnotation = (db: Executor, id: string) =>
-  joinedTransactions(db).where(eq(schema.transactions.id, id));
+  decodedRows(joinedTransactions(db).where(eq(schema.transactions.id, id)));
 
 export function transactionPage(db: Executor, input: TransactionQuery) {
   const query = joinedTransactions(db)
@@ -156,7 +190,9 @@ export function transactionPage(db: Executor, input: TransactionQuery) {
       ),
     )
     .orderBy(...transactionOrder(schema.transactions));
-  return input.limit === undefined ? query : query.limit(input.limit);
+  return decodedRows(
+    input.limit === undefined ? query : query.limit(input.limit),
+  );
 }
 
 export const totals = (db: Executor, input: TransactionQuery) =>
@@ -187,21 +223,53 @@ export function latestEvent(db: Executor, connectionId?: string) {
 
 export const event = (db: Executor, id: number) =>
   db.select().from(schema.events).where(eq(schema.events.id, id));
-export const run = (db: Executor, id: string) =>
-  db.select(runColumns).from(schema.syncRuns).where(eq(schema.syncRuns.id, id));
-export const runWithConnection = (db: Executor, id: string) =>
-  db
-    .select({ run: runColumns, connection: schema.connections })
+
+function joinedRuns(db: Executor) {
+  return db
+    .select({
+      run: runColumns,
+      body: schema.syncRunBodies,
+      connection: schema.connections,
+    })
     .from(schema.syncRuns)
     .innerJoin(
       schema.connections,
       eq(schema.syncRuns.connectionId, schema.connections.id),
     )
-    .where(eq(schema.syncRuns.id, id));
+    .leftJoin(
+      schema.syncRunBodies,
+      eq(schema.syncRunBodies.runId, schema.syncRuns.id),
+    );
+}
+
+function decodeRun(input: Awaited<ReturnType<typeof joinedRuns>>[number]) {
+  return {
+    ...input.run,
+    snapshot: input.body?.snapshot ?? {
+      ...input.run.snapshot,
+      responses: input.run.snapshot.responses.map((response) => ({
+        ...response,
+        responseText: "",
+      })),
+    },
+    bodyAvailable: input.body !== null,
+    bodyRetention: input.body?.retention ?? null,
+    bodyExpiresAt: input.body?.expiresAt ?? null,
+  };
+}
+
+export const run = async (db: Executor, id: string) =>
+  (await joinedRuns(db).where(eq(schema.syncRuns.id, id))).map(decodeRun);
+export const runWithConnection = async (db: Executor, id: string) =>
+  (await joinedRuns(db).where(eq(schema.syncRuns.id, id))).map((input) => ({
+    run: decodeRun(input),
+    connection: input.connection,
+  }));
 export const runState = (db: Executor, id: string) =>
   db
     .select({
       appliedAt: schema.syncRuns.appliedAt,
+      evidenceDigest: schema.syncRuns.evidenceDigest,
       status: schema.syncRuns.status,
       warnings: schema.syncRuns.warnings,
     })
@@ -251,9 +319,11 @@ export const syncRuns = (db: Executor, id: string, page: SyncRunPageInput) =>
     .orderBy(desc(schema.syncRuns.startedAt), desc(schema.syncRuns.id))
     .limit(page.limit);
 export const planRows = (db: Executor, id: string, scope?: PlanScope) =>
-  joinedTransactions(db)
-    .where(planCondition(schema.transactions, id, scope))
-    .orderBy(asc(schema.transactions.ingestionOrder));
+  decodedRows(
+    joinedTransactions(db)
+      .where(planCondition(schema.transactions, id, scope))
+      .orderBy(asc(schema.transactions.ingestionOrder)),
+  );
 export const priorRuns = (db: Executor, id: string) =>
   db
     .select({
@@ -261,7 +331,7 @@ export const priorRuns = (db: Executor, id: string) =>
       status: schema.syncRuns.status,
       startedAt: schema.syncRuns.startedAt,
       coverage: schema.syncRuns.coverage,
-      snapshot: schema.syncRuns.metadata,
+      snapshot: schema.syncRuns.snapshot,
     })
     .from(schema.syncRuns)
     .where(
@@ -299,7 +369,8 @@ export const insertRun = (db: Executor, row: RetainedRun) =>
     .insert(schema.syncRuns)
     .values({
       ...row,
-      metadata: {
+      snapshot: {
+        schemaVersion: 1,
         responses: row.snapshot.responses.map(
           ({ responseText: _responseText, ...metadata }) => metadata,
         ),
@@ -308,6 +379,61 @@ export const insertRun = (db: Executor, row: RetainedRun) =>
     })
     .onConflictDoNothing({ target: schema.syncRuns.id })
     .returning({ id: schema.syncRuns.id });
+export const upsertDeferredEvidence = (
+  db: Executor,
+  row: DeferredEvidenceWrite,
+) =>
+  db
+    .insert(schema.deferredEvidence)
+    .values(row)
+    .onConflictDoUpdate({
+      target: schema.deferredEvidence.id,
+      set: { lastSeenRunId: row.lastSeenRunId },
+    });
+export const insertRunBody = (db: Executor, row: RetainedRun) =>
+  db.insert(schema.syncRunBodies).values({
+    runId: row.id,
+    snapshot: row.snapshot,
+    retention: "staged",
+    expiresAt: row.bodyExpiresAt,
+  });
+
+export function* finishRunEvidence(
+  db: Executor,
+  id: string,
+  keepUntil: string | null,
+) {
+  if (keepUntil === null) {
+    yield db
+      .delete(schema.syncRunBodies)
+      .where(
+        and(
+          eq(schema.syncRunBodies.runId, id),
+          eq(schema.syncRunBodies.retention, "staged"),
+        ),
+      );
+  } else {
+    yield db
+      .update(schema.syncRunBodies)
+      .set({ retention: "debug", expiresAt: keepUntil })
+      .where(
+        and(
+          eq(schema.syncRunBodies.runId, id),
+          eq(schema.syncRunBodies.retention, "staged"),
+        ),
+      );
+  }
+}
+
+export const pruneDebugBodies = (db: Executor, now: string) =>
+  db
+    .delete(schema.syncRunBodies)
+    .where(
+      and(
+        eq(schema.syncRunBodies.retention, "debug"),
+        sql`${schema.syncRunBodies.expiresAt} <= ${now}`,
+      ),
+    );
 export const setConfig = (db: Executor, id: string, config: ConnectionConfig) =>
   db
     .update(schema.connections)
@@ -555,6 +681,24 @@ const transactionUpdates = excludedSet(schema.transactions, [
   "ingestionOrder",
 ]);
 const annotationUpdates = excludedSet(schema.annotations, ["transactionId"]);
+const transactionChanged = sql.join(
+  Object.entries(getTableColumns(schema.transactions))
+    .filter(([key]) => Object.hasOwn(transactionUpdates, key))
+    .map(
+      ([, column]) =>
+        sql`${column} IS DISTINCT FROM excluded.${sql.identifier(column.name)}`,
+    ),
+  sql` OR `,
+);
+const observationUpdates = excludedSet(schema.transactionObservations, [
+  "transactionId",
+]);
+const reconciliationUpdates = excludedSet(schema.transactionReconciliation, [
+  "transactionId",
+]);
+const postingUpdates = excludedSet(schema.transactionPostingLinks, [
+  "transactionId",
+]);
 
 export function* applyPlan(db: Executor, plan: FinancialPlan, runId?: string) {
   if (plan.runUpdate && !runId) {
@@ -573,11 +717,53 @@ export function* applyPlan(db: Executor, plan: FinancialPlan, runId?: string) {
       set: cardUpdates,
     });
   }
-  for (const rows of chunks(plan.orderedTransactionWrites(), 25)) {
+  for (const rows of chunks(transactionContentWrites(plan), 25)) {
     yield db.insert(schema.transactions).values(rows).onConflictDoUpdate({
       target: schema.transactions.id,
       set: transactionUpdates,
+      setWhere: transactionChanged,
     });
+  }
+  const transactionRows = plan.orderedTransactionWrites();
+  const observations = new Map(transactionRows.map((row) => [row.id, row]));
+  for (const [id, row] of plan.observationWrites) {
+    observations.set(id, row);
+  }
+  for (const rows of chunks(
+    [...observations.values()].map(encodeObservation),
+    100,
+  )) {
+    yield db
+      .insert(schema.transactionObservations)
+      .values(rows)
+      .onConflictDoUpdate({
+        target: schema.transactionObservations.transactionId,
+        set: observationUpdates,
+      });
+  }
+  for (const rows of chunks(transactionRows.map(encodeReconciliation), 100)) {
+    yield db
+      .insert(schema.transactionReconciliation)
+      .values(rows)
+      .onConflictDoUpdate({
+        target: schema.transactionReconciliation.transactionId,
+        set: reconciliationUpdates,
+      });
+  }
+  for (const rows of chunks(
+    transactionRows.map((row) => ({
+      transactionId: row.id,
+      postingLink: row.details.postingLink ?? null,
+    })),
+    100,
+  )) {
+    yield db
+      .insert(schema.transactionPostingLinks)
+      .values(rows)
+      .onConflictDoUpdate({
+        target: schema.transactionPostingLinks.transactionId,
+        set: postingUpdates,
+      });
   }
   for (const rows of chunks([...plan.annotationWrites.values()], 100)) {
     yield db.insert(schema.annotations).values(rows).onConflictDoUpdate({

@@ -121,22 +121,26 @@ On Neon, `--env-file` supplies the private env file instead
 
 ## Collection, refresh and scheduling
 
-Every collection is a recorded [refresh](../api.md#refreshes), whose tools,
-routes and grants the [API reference](../api.md#operations) lists: an owner or
-model start, a scheduled occurrence, the operator retry and the CLI `collect`.
-The [design](../design.md#collection-and-evidence) owns what a collection rereads
-and commits; each refresh first replays archived runs a failed application left
-unapplied. A start without a connection, a scheduled occurrence and the operator
-retry cover every **target**, resolved at each start: the env-configured
-connection and every connection whose credentials `connect` stored. Their
-refreshes run one after another under the connection's
-[collection lease](../../src/application/collection-lock.ts), so manual,
-scheduled and CLI collection never run at once across processes. Each month, or
-the recent window, is bounded at ten minutes. Starting any launcher never
-collects by itself, apart from resuming refreshes a stopped process left active:
-the SQLite server (HTTP or stdio), the PostgreSQL loopback launcher and the
-service on a Node host do so from startup and each minute, with or without a
-schedule.
+Owner/model requests, schedules, operator retries and CLI `collect` create recorded
+[refreshes](../api.md#refreshes). The
+[design](../design.md#collection-and-evidence) defines rereads and commits. Each
+refresh first recovers unfinished ingestion. Each start resolves targets from the
+env-configured connection and stored credentials; unscoped starts, schedules and
+operator retries cover all targets.
+Refreshes run serially under each connection's
+[collection lease](../../src/application/collection-lock.ts), across processes;
+each month or recent window is bounded at ten minutes.
+
+`fonds_sync` emits refresh/capture IDs, stage/reason codes, counts, durations and
+failure categories. `observed` counts accepted identities per capture;
+`extracted` counts parser inputs. Logs exclude source values, credentials and
+private provider identifiers. For a bounded report or temporary raw archives, use
+the [operator CLI](local-development.md#operator-commands).
+
+The [API reference](../api.md#operations) lists the refresh tools and routes and
+their grants. The SQLite server and the PostgreSQL loopback launcher offer the
+same refreshes and Events behind their bearer token. Starting any launcher never
+collects by itself, apart from resuming refreshes a stopped process left active.
 A lost or expired client request is not proof the provider work did not run;
 list the connection's refreshes before retrying.
 

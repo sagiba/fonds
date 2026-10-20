@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { ConflictError } from "../../src/domain/errors.js";
-import { emptyDetails } from "../../src/domain/model.js";
+import { emptyDetails, unknownLedgerFacts } from "../../src/domain/model.js";
 import { reviewBasis, reviewState } from "../../src/domain/plans/annotation.js";
 import { calAdapter } from "../../src/providers/cal/adapter.js";
 import {
@@ -17,6 +17,7 @@ import {
   type Transaction,
   transactions,
 } from "../../src/storage/sqlite/schema.js";
+import { insertTransaction } from "../helpers/sqlite-transactions.js";
 
 describe("public review state and scalar totals", () => {
   let db: Database;
@@ -41,43 +42,39 @@ describe("public review state and scalar totals", () => {
   afterEach(() => db.close());
 
   async function insert(id = "purchase", overrides: Partial<Transaction> = {}) {
-    return await db.orm
-      .insert(transactions)
-      .values({
-        id,
-        connectionId: "synthetic",
-        sourceScope: "account",
-        cardId: null,
-        sourceKey: id,
-        sourceAliases: [],
-        identityStrength: "native",
-        status: "posted",
-        presence: "seen",
-        description: null,
-        counterpartyName: null,
-        kind: "purchase",
-        merchantName: "Synthetic merchant",
-        merchantProviderId: null,
-        merchantCategoryCode: null,
-        transactionDate: "2040-07-01",
-        bookingDate: null,
-        billingDate: null,
-        amountMinor: -12345,
-        currency: "ILS",
-        amountBasis: "purchase_commitment",
-        originalAmountMinor: null,
-        originalCurrency: null,
-        installmentCount: null,
-        details: emptyDetails(),
-        firstSeenAt: "2040-08-01T00:00:00Z",
-        lastSeenAt: "2040-08-01T00:00:00Z",
-        lastSeenRunId: "run",
-        version: 1,
-        supersededById: null,
-        ...overrides,
-      })
-      .returning()
-      .get();
+    return await insertTransaction(db.orm, {
+      id,
+      connectionId: "synthetic",
+      sourceScope: "account",
+      sourceKey: id,
+      sourceAliases: [],
+      identityStrength: "native",
+      status: "posted",
+      presence: "seen",
+      description: null,
+      counterpartyName: null,
+      kind: "purchase",
+      merchantName: "Synthetic merchant",
+      merchantProviderId: null,
+      merchantCategoryCode: null,
+      transactionDate: "2040-07-01",
+      bookingDate: null,
+      billingDate: null,
+      amountMinor: -12345,
+      currency: "ILS",
+      amountBasis: "purchase_commitment",
+      originalAmountMinor: null,
+      originalCurrency: null,
+      installmentCount: null,
+      ...unknownLedgerFacts(null),
+      details: emptyDetails(),
+      firstSeenAt: "2040-08-01T00:00:00Z",
+      lastSeenAt: "2040-08-01T00:00:00Z",
+      lastSeenRunId: "run",
+      version: 1,
+      supersededById: null,
+      ...overrides,
+    });
   }
 
   it("honors an explicit needs_review instruction without manufacturing a parser issue", async () => {
@@ -96,9 +93,7 @@ describe("public review state and scalar totals", () => {
       reasons: ["user_needs_review"],
       candidates: [],
     });
-    expect(
-      (await db.orm.select().from(transactions).get())!.details.issues,
-    ).toEqual([]);
+    expect((await db.getTransaction(row.id))!.details.issues).toEqual([]);
     expect((await db.listEvents()).map((change) => change.type)).toEqual([
       "annotation.updated",
       "transaction.review_required",
@@ -751,7 +746,7 @@ describe("public review state and scalar totals", () => {
     // Deliberately corrupt only this synthetic database: any JSON projection must fail.
     await db.client.execute("PRAGMA ignore_check_constraints = ON");
     await db.client.execute({
-      sql: "UPDATE transactions SET details_json = ?, source_aliases_json = ?",
+      sql: "UPDATE transactions SET provider_json = ?, source_aliases_json = ?",
       args: ["invalid details JSON", "invalid aliases JSON"],
     });
     await db.client.execute({

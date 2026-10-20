@@ -274,7 +274,6 @@ describe.each(backends)("%s automatic posting and split", (backend) => {
       presence: "seen",
     });
     expect(result.posted.details.sourceRefs.map((ref) => ref.runId)).toEqual([
-      "posting-3",
       "posting-4",
     ]);
     expect((await db.getTransaction(pending.id))!.annotation).toEqual(note);
@@ -811,6 +810,7 @@ describe.each(backends)("%s automatic posting and split", (backend) => {
       for (const [index, envelope] of [first, second].entries()) {
         await db.ingestRun(
           {
+            debugArchiveDays: 2,
             connectionId: harness.connectionId,
             runId: `cal-ordinal-${index}`,
             responses: [
@@ -843,7 +843,7 @@ describe.each(backends)("%s automatic posting and split", (backend) => {
         },
       ]);
       const archived = await db.raw(
-        "SELECT snapshot_json FROM sync_runs WHERE id=?",
+        "SELECT snapshot_json FROM sync_run_bodies WHERE run_id=?",
         ["cal-ordinal-1"],
       );
       expect(
@@ -1094,10 +1094,11 @@ describe.each(backends)("%s automatic posting and split", (backend) => {
     expect(await harness.state()).toEqual(before);
   });
 
-  it("blocks unapplied cal-v5 archives under cal-v11 without changing evidence or financial state", async () => {
+  it("blocks unapplied cal-v5 archives under cal-v12 without changing evidence or financial state", async () => {
     await expect(
       db.ingestRun(
         {
+          debugArchiveDays: 2,
           connectionId: harness.connectionId,
           runId: "cal-v5-unapplied",
           responses: [
@@ -1122,7 +1123,7 @@ describe.each(backends)("%s automatic posting and split", (backend) => {
     const runs = await db.listSyncRuns(harness.connectionId, {
       limit: 20,
     });
-    expect(calAdapter.parserVersion).toBe("cal-v11");
+    expect(calAdapter.parserVersion).toBe("cal-v12");
     await expect(db.applyRun("cal-v5-unapplied", calAdapter)).rejects.toThrow(
       "Run parser version differs from adapter",
     );
@@ -1225,7 +1226,6 @@ describe.each(backends)("%s automatic posting and split", (backend) => {
       "posting-5",
     ]);
     expect(split.posted.details.sourceRefs.map((ref) => ref.runId)).toEqual([
-      "posting-3",
       "posting-4",
     ]);
   });
@@ -1250,11 +1250,10 @@ describe.each(backends)("%s automatic posting and split", (backend) => {
 
   it("rejects legacy links without before-state provenance without inventing pending facts", async () => {
     const { survivor, postedId } = await linked();
-    const { postingLink: _link, ...details } = survivor.details;
-    await db.raw("UPDATE transactions SET details_json=? WHERE id=?", [
-      JSON.stringify(details),
-      survivor.id,
-    ]);
+    await db.raw(
+      "UPDATE transaction_posting_links SET posting_link_json=NULL WHERE transaction_id=?",
+      [survivor.id],
+    );
     const before = await harness.state();
     await expect(
       db.unlinkPendingTransaction(await harness.command(survivor.id, postedId)),
@@ -1411,6 +1410,7 @@ describe.each(backends)("%s automatic posting and split", (backend) => {
       async function calCapture(runId: string, day: number, envelope: unknown) {
         return db.ingestRun(
           {
+            debugArchiveDays: 2,
             connectionId: harness.connectionId,
             runId,
             responses: [

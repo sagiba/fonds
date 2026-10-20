@@ -304,6 +304,11 @@ const KNOWN_TABLES = new Set([
   "settings",
   "sqlite_sequence",
   "sync_runs",
+  "sync_run_bodies",
+  "deferred_evidence",
+  "transaction_observations",
+  "transaction_reconciliation",
+  "transaction_posting_links",
   "transactions",
 ]);
 const RUN_COLUMNS = [
@@ -315,6 +320,8 @@ const RUN_COLUMNS = [
   "collector_version",
   "parser_version",
   "snapshot_json",
+  "metadata_json",
+  "evidence_digest",
   "coverage_json",
   "warnings_json",
   "applied_at",
@@ -1988,7 +1995,14 @@ function profileExtraction(result: ExtractionResult, cardKey: string): void {
     const provider = transaction.details.provider.isracard;
     const observations =
       object(provider) && Array.isArray(provider.observations)
-        ? (provider.observations as unknown[]).filter(object)
+        ? (provider.observations as unknown[])
+            .filter(object)
+            .map((item, index): SourceRow => ({
+              ...item,
+              row: Array.isArray(provider.rows)
+                ? provider.rows[index]
+                : item.row,
+            }))
         : [];
     // Array indexes in observation paths change when rows reorder; the
     // generation, container and row content identify the observation.
@@ -2238,11 +2252,23 @@ function readArchive(
         ).count,
       );
     }
-    if (!columns.includes("snapshot_json")) {
+    if (
+      !columns.includes("snapshot_json") &&
+      !columns.includes("metadata_json")
+    ) {
       return runs;
     }
     stage = "read_runs";
-    const selected = RUN_COLUMNS.filter((name) => columns.includes(name));
+    const selected = RUN_COLUMNS.filter((name) => columns.includes(name)).map(
+      (name) => `sync_runs.${name}`,
+    );
+    const separateBodies =
+      !columns.includes("snapshot_json") && tables.includes("sync_run_bodies");
+    if (!columns.includes("snapshot_json")) {
+      selected.push(
+        `${separateBodies ? "coalesce(sync_run_bodies.snapshot_json,sync_runs.metadata_json)" : "sync_runs.metadata_json"} AS snapshot_json`,
+      );
+    }
     const statuses = new Counter();
     const applied = new Counter();
     const versions = new Counter();
@@ -2257,7 +2283,7 @@ function readArchive(
     let previousStart: string | null = null;
     let outOfOrder = 0;
     const statement = database.prepare(
-      `SELECT ${selected.join(", ")} FROM sync_runs ORDER BY rowid`,
+      `SELECT ${selected.join(", ")} FROM sync_runs ${separateBodies ? "LEFT JOIN sync_run_bodies ON sync_run_bodies.run_id=sync_runs.id" : ""} ORDER BY sync_runs.rowid`,
     );
     for (const row of statement.iterate() as Iterable<
       Record<string, unknown>

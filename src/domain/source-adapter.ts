@@ -1,6 +1,10 @@
 import type { CardDiscovery } from "./cards.js";
 import type { CredentialInput, ProviderCredentials } from "./credentials.js";
-import type { TransactionFacts, TransactionInput } from "./model.js";
+import type {
+  JsonObject,
+  TransactionFacts,
+  TransactionInput,
+} from "./model.js";
 import type {
   CollectionFailure,
   CollectionScope,
@@ -41,13 +45,13 @@ export interface AutomaticPostingCapability {
   ): boolean;
 }
 
-/** Collection owns provider paging; adapters project one archived capture at a time. */
+/** Collection owns provider paging; adapters project one captured unit at a time. */
 export interface SourceAdapter {
   provider: string;
   parserVersion: string;
-  /** Exact documented aliases only; raw endpoint context remains in the archive. */
+  /** Exact documented aliases only; endpoint context remains in the receipt. */
   resourceKey?(endpoint: string): string;
-  /** Validate criteria; an optional parsed result preserves provider archive normalization. */
+  /** Validate criteria; an optional parsed result preserves provider capture normalization. */
   validateScope?(scope: CollectionScope): CollectionScope | void;
   /** Normalize equivalent request criteria only for health/precedence comparison. */
   normalizeScope?(scope: CollectionScope): CollectionScope;
@@ -59,16 +63,18 @@ export interface SourceAdapter {
   recentComparableDays?: number;
   /** Reject a successful empty recent posted partition if comparable posted rows exist. */
   rejectEmptyRecentPosted?: boolean;
+  /** Declared source evidence only, projected identically for stored and new rows. */
+  retainProviderEvidence?(evidence: JsonObject): JsonObject;
+  /** Adapter-derived reconciliation state, never part of source-content comparison. */
+  projectProviderState?(evidence: JsonObject): JsonObject;
+  /** Merge declared components from overlapping captures without duplicating observations. */
+  mergeProviderEvidence?(
+    previous: JsonObject,
+    incoming: JsonObject,
+  ): JsonObject;
   /**
-   * The response's source content without per-request noise such as request IDs.
-   * Equal values let collection skip archiving an identical repeat capture;
-   * omit it to archive every capture.
-   */
-  contentFingerprint?(responseText: string): string;
-  /**
-   * Declared identity groups use `details.provider[provider].identity.baseKey`.
-   * Retain identity-distinguishing raw observations in that provider's `rows`;
-   * shared uncertain-identity comparison consumes them to preserve annotation ownership.
+   * Identity groups declare `identity.baseKey`; retained rows preserve their
+   * distinguishing source facts. Shared matching uses the current observation.
    */
   extract(responseText: string, context: ExtractionContext): ExtractionResult;
 }

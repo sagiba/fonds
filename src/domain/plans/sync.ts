@@ -17,6 +17,11 @@ import {
   retainObservations,
   retainProviderEvidence,
 } from "../observations.js";
+import {
+  currentSourceRowIndices,
+  currentSourceRows,
+  sortedEvidence,
+} from "../provider-evidence.js";
 import { inPerspective } from "../read-model.js";
 import {
   type CollectionFailure,
@@ -28,6 +33,11 @@ import {
   type Transaction,
 } from "../records.js";
 import type { ExtractionResult, SourceAdapter } from "../source-adapter.js";
+import {
+  changedTransactionContent,
+  retainedTransactionEvidence,
+  transactionContent,
+} from "../transaction-content.js";
 import { reviewState } from "./annotation.js";
 import { automaticPostingPairs, postingComponents } from "./auto-posting.js";
 import { purchaseResolver, resolveTransaction } from "./catalog.js";
@@ -36,7 +46,7 @@ import {
   postingRejected,
   refreshDuplicatePlans,
 } from "./lifecycle.js";
-import { FinancialPlan } from "./state.js";
+import { type DeferredCandidate, FinancialPlan } from "./state.js";
 
 const scopeSchema = z
   .object({
@@ -119,6 +129,7 @@ export const runSchema = z
     startedAt: z.iso.datetime({ offset: true }).optional(),
     collectorVersion: z.string().min(1).optional(),
     refreshId: z.string().min(1).max(RESOURCE_ID_MAX_LENGTH).optional(),
+    debugArchiveDays: z.number().int().min(1).max(30).optional(),
     responses: z.array(responseSchema),
     failures: z.array(failureSchema).default([]),
   })
@@ -153,6 +164,10 @@ export type { SourceAdapter } from "../source-adapter.js";
 export interface SyncResult {
   runId: string;
   replayed: boolean;
+  /** Transaction identities observed by this run, independently of content writes. */
+  observed?: number;
+  /** Observed transactions whose retained content did not change. */
+  unchanged?: number;
   created: number;
   updated: number;
   unlisted: number;
@@ -161,7 +176,7 @@ export interface SyncResult {
 }
 
 /** Bump when shared reconciliation rules change, independently of archived parser versions. */
-export const RECONCILIATION_POLICY_VERSION = "auto-posting-v9";
+export const RECONCILIATION_POLICY_VERSION = "auto-posting-v10";
 
 export function reconciliationFailure(warnings: readonly string[]) {
   const failureCode = reconciliationFailureCodeSchema.options.find((code) =>
@@ -231,10 +246,16 @@ function identityBase(row: TransactionFacts, provider: string): string {
 function identityFingerprint(
   row: TransactionFacts,
   includeSource: boolean,
-  provider: string,
+  adapter: SourceAdapter,
 ): string {
+  const namespace = row.details.provider[adapter.provider] ?? {};
   const source = includeSource
-    ? row.details.provider[provider]?.rows
+    ? currentSourceRows({
+        ...retainedTransactionEvidence(row, adapter),
+        ...(namespace.identity === undefined
+          ? {}
+          : { identity: namespace.identity }),
+      })
     : undefined;
   return canonicalJson({ financial: financialState(row), source });
 }
@@ -242,10 +263,10 @@ function identityFingerprint(
 function groupSignature(
   rows: TransactionFacts[],
   includeSource: boolean,
-  provider: string,
+  adapter: SourceAdapter,
 ): string {
   return JSON.stringify(
-    rows.map((row) => identityFingerprint(row, includeSource, provider)).sort(),
+    rows.map((row) => identityFingerprint(row, includeSource, adapter)).sort(),
   );
 }
 
@@ -365,7 +386,11 @@ function retainedEnrichment(
   };
 }
 
-function retainEvidence(previous: Transaction, input: TransactionFacts): void {
+function retainEvidence(
+  previous: Transaction,
+  input: TransactionFacts,
+  adapter: SourceAdapter,
+): void {
   input.sourceAliases = [
     ...new Set([
       ...previous.sourceAliases,
@@ -390,6 +415,39 @@ function retainEvidence(previous: Transaction, input: TransactionFacts): void {
     earlier.provider,
     input.details.provider,
   );
+  if (adapter.mergeProviderEvidence) {
+    const state =
+      adapter.projectProviderState?.(
+        input.details.provider[adapter.provider] ?? {},
+      ) ?? {};
+    const incoming =
+      adapter.retainProviderEvidence?.(
+        input.details.provider[adapter.provider] ?? {},
+      ) ?? {};
+    const merged = adapter.mergeProviderEvidence(
+      earlier.provider[adapter.provider] ?? {},
+      input.details.provider[adapter.provider] ?? {},
+    );
+    const identity =
+      state.identity &&
+      typeof state.identity === "object" &&
+      !Array.isArray(state.identity)
+        ? state.identity
+        : {};
+    input.details.provider = {
+      [adapter.provider]: {
+        ...state,
+        ...merged,
+        identity: {
+          ...identity,
+          currentRows: currentSourceRowIndices(
+            Array.isArray(merged.rows) ? merged.rows : [],
+            Array.isArray(incoming.rows) ? incoming.rows : [],
+          ),
+        },
+      },
+    };
+  }
   if (earlier.pendingPostingCandidates) {
     input.details.pendingPostingCandidates = [
       ...earlier.pendingPostingCandidates,
@@ -649,10 +707,11 @@ function indexRunHistory(runs: PriorRun[], adapter: SourceAdapter) {
 function indexAccountRows(
   current: Transaction[],
   inputs: TransactionFacts[],
-  provider: string,
+  adapter: SourceAdapter,
   capturedAt: string,
   history: ReturnType<typeof indexRunHistory>,
 ) {
+  const provider = adapter.provider;
   const baseKey = (row: TransactionFacts) => identityBase(row, provider);
   const knownGroups = Map.groupBy(current, baseKey);
   const oldGroups = Map.groupBy(
@@ -706,7 +765,7 @@ function indexAccountRows(
       const fingerprints = new Map(
         [
           ...Map.groupBy(uncertain ? oldGroup : [], (row) =>
-            identityFingerprint(row, includeSource, provider),
+            identityFingerprint(row, includeSource, adapter),
           ),
         ].map(([key, rows]) => [key, { rows, next: 0 }]),
       );
@@ -734,8 +793,8 @@ function indexAccountRows(
             uncertain &&
             oldGroup.length > 0 &&
             (oldGroup.length !== newGroup.length ||
-              groupSignature(oldGroup, includeSource, provider) !==
-                groupSignature(newGroup, includeSource, provider)),
+              groupSignature(oldGroup, includeSource, adapter) !==
+                groupSignature(newGroup, includeSource, adapter)),
           hasNewerCurrent: knownGroup.some(
             (row) => !history.historical(row) && row.lastSeenAt > capturedAt,
           ),
@@ -1087,9 +1146,10 @@ function runStatus(
     : "partial";
 }
 
-/** Extract and validate archived evidence before entering the atomic compare/write. */
+/** Extract staged evidence before entering the atomic compare/write. */
 export function extractRun(run: Run, adapter: SourceAdapter) {
   const runId = run.id;
+  const deferred: DeferredCandidate[] = [];
   const extracted = run.snapshot.responses.map((response) => {
     const result: ExtractionResult = unexpectedHttpStatus(response)
       ? {
@@ -1120,6 +1180,24 @@ export function extractRun(run: Run, adapter: SourceAdapter) {
       const parsed = transactionInputSchema.safeParse(input);
       if (parsed.success) {
         return [parsed.data];
+      }
+      const providerEvidence =
+        adapter.retainProviderEvidence?.(
+          input.details?.provider?.[adapter.provider] ?? {},
+        ) ?? {};
+      if (Object.keys(providerEvidence).length > 0) {
+        deferred.push({
+          sourceScope: response.accountKey.includes("\u0000")
+            ? ""
+            : response.accountKey,
+          sourceKey:
+            typeof input.sourceKey === "string" &&
+            !input.sourceKey.includes("\u0000")
+              ? input.sourceKey
+              : "",
+          reason: "invalid_extracted_row",
+          content: { providerEvidence },
+        });
       }
       result.warnings.push(`invalid_extracted_${input.status}_row`);
       for (const partition of result.partitions) {
@@ -1178,7 +1256,7 @@ export function extractRun(run: Run, adapter: SourceAdapter) {
     failures.length,
     hasAcceptedRows,
   );
-  return { extracted, coverage, warnings, status };
+  return { extracted, coverage, warnings, status, deferred };
 }
 
 type ExtractedResponse = ReturnType<typeof extractRun>["extracted"][number];
@@ -1208,6 +1286,202 @@ function implausiblyEmptyPosted(
   );
 }
 
+/** Every financial operation uses the same content rule, including indirect review changes. */
+export function finishTransactionContent(
+  plan: FinancialPlan,
+  adapter: SourceAdapter | undefined,
+  run: Run | undefined,
+  now: string,
+  observed: Set<string> = new Set(),
+  actor = "sync",
+): { updated: number; unchanged: number } {
+  const runId = run?.id;
+  const contentAdapter = adapter ?? {
+    provider: plan.snapshot.connection.provider,
+  };
+  const runs = new Map<
+    string,
+    { snapshot: { responses: Omit<FinancialResponse, "responseText">[] } }
+  >([
+    ...plan.snapshot.priorRuns.map((prior) => [prior.id, prior] as const),
+    ...(run ? [[run.id, run] as const] : []),
+  ]);
+  const references = (row: Transaction) => {
+    if (!run || !adapter) {
+      return row.details.sourceRefs;
+    }
+    const latestByOrigin = new Map<string, TransactionDetails["sourceRefs"]>();
+    for (const reference of row.details.sourceRefs) {
+      const response = runs
+        .get(reference.runId)
+        ?.snapshot.responses.find(
+          (candidate) => candidate.accountKey === row.sourceScope,
+        );
+      const origin = response
+        ? canonicalJson([
+            response.accountKey,
+            resourceKey(adapter, response.endpoint),
+            scopeKey(adapter, response.scope),
+          ])
+        : reference.runId;
+      const prior = latestByOrigin.get(origin);
+      if (prior?.[0]?.runId === reference.runId) {
+        if (!prior.some((item) => item.path === reference.path)) {
+          prior.push(reference);
+        }
+      } else {
+        latestByOrigin.set(origin, [reference]);
+      }
+    }
+    return [...latestByOrigin.values()].flat();
+  };
+  const originals = new Map(plan.snapshot.rows.map((row) => [row.id, row]));
+  const changedIds = new Set<string>();
+  for (const [id, current] of plan.transactionWrites) {
+    const previous = originals.get(id);
+    current.details.sourceRefs = references(current);
+    if (current.details.additionalInformation) {
+      current.details.additionalInformation = sortedEvidence(
+        current.details.additionalInformation,
+      );
+    }
+    current.details.issues = sortedEvidence([
+      ...new Set(current.details.issues),
+    ]);
+    if (adapter?.retainProviderEvidence) {
+      const namespace = current.details.provider[adapter.provider] ?? {};
+      current.details.provider = {
+        [adapter.provider]: {
+          ...adapter.projectProviderState?.(namespace),
+          ...adapter.retainProviderEvidence(namespace),
+        },
+      };
+      const pending = current.details.postingLink?.pending;
+      if (pending) {
+        pending.details.sourceRefs = references(pending);
+        const pendingEvidence =
+          pending.details.provider[adapter.provider] ?? {};
+        pending.details.provider = {
+          [adapter.provider]: {
+            ...adapter.projectProviderState?.(pendingEvidence),
+            ...adapter.retainProviderEvidence(pendingEvidence),
+          },
+        };
+      }
+    }
+    if (!previous) {
+      continue;
+    }
+    const changes = changedTransactionContent(
+      transactionContent(previous, contentAdapter),
+      transactionContent(current, contentAdapter),
+    );
+    const changed = Object.keys(changes.after).length > 0;
+    const lifecycle = plan.events.some(
+      (entry) =>
+        entry.transactionId === id &&
+        [
+          "transaction.posted",
+          "transaction.linked",
+          "transaction.unlinked",
+          "transaction.removed",
+          "transaction.restored",
+          "transaction.unlisted",
+        ].includes(entry.type),
+    );
+    const posting = plan.events.some(
+      (entry) =>
+        entry.transactionId === id &&
+        [
+          "transaction.posted",
+          "transaction.linked",
+          "transaction.unlinked",
+        ].includes(entry.type),
+    );
+    const updateIndex = plan.events.findIndex(
+      (entry) =>
+        entry.transactionId === id && entry.type === "transaction.updated",
+    );
+    const priorUpdate = updateIndex < 0 ? undefined : plan.events[updateIndex];
+    const priorReason =
+      priorUpdate?.after &&
+      typeof priorUpdate.after === "object" &&
+      "reason" in priorUpdate.after
+        ? priorUpdate.after.reason
+        : undefined;
+    for (let index = plan.events.length - 1; index >= 0; index--) {
+      if (
+        plan.events[index]!.transactionId === id &&
+        plan.events[index]!.type === "transaction.updated"
+      ) {
+        plan.events.splice(index, 1);
+      }
+    }
+    if (changed) {
+      changedIds.add(id);
+      if (!Number.isSafeInteger(previous.version + 1)) {
+        throw new Error("Transaction version exhausted");
+      }
+      current.version = Math.max(current.version, previous.version + 1);
+      if (!posting) {
+        plan.event({
+          transactionId: id,
+          ...(runId ? { runId } : {}),
+          type: "transaction.updated",
+          actor,
+          createdAt: now,
+          before: changes.before,
+          after: {
+            ...changes.after,
+            ...(priorReason === undefined ? {} : { reason: priorReason }),
+          },
+        });
+        if (updateIndex >= 0) {
+          const event = plan.events.pop()!;
+          plan.events.splice(
+            Math.min(updateIndex, plan.events.length),
+            0,
+            event,
+          );
+        }
+      }
+    } else {
+      if (!lifecycle) {
+        current.version = previous.version;
+      }
+    }
+    const state = (row: Transaction) => {
+      const {
+        lastSeenAt: _seenAt,
+        lastSeenRunId: _run,
+        details,
+        ...facts
+      } = row;
+      const { sourceRefs: _refs, ...stateDetails } = details;
+      return { ...facts, details: stateDetails };
+    };
+    if (canonicalJson(state(previous)) === canonicalJson(state(current))) {
+      plan.transactionWrites.delete(id);
+      plan.observationWrites.set(id, current);
+    }
+  }
+  let unchanged = 0;
+  for (const id of observed) {
+    const previous = originals.get(id);
+    const current = plan.transaction(id);
+    if (
+      previous &&
+      current &&
+      !changedIds.has(id) &&
+      current.presence === previous.presence &&
+      current.supersededById === previous.supersededById
+    ) {
+      unchanged++;
+    }
+  }
+  return { updated: changedIds.size, unchanged };
+}
+
 /** Pure reconciliation against a complete consistent connection snapshot. */
 export function planRun(
   plan: FinancialPlan,
@@ -1229,12 +1503,33 @@ export function planRun(
       ...reconciliationFailure(run.warnings),
     };
   }
-  const { extracted, coverage, warnings, status } = structuredClone(extraction);
+  const { extracted, coverage, warnings, status, deferred } =
+    structuredClone(extraction);
+  plan.deferredCandidates.push(...deferred);
+  const defer = (
+    input: TransactionFacts,
+    reason: string,
+    cardKey: string | null,
+    purchaseKey: string | null,
+  ) => {
+    const {
+      cardId: _cardId,
+      purchaseId: _purchaseId,
+      ...content
+    } = transactionContent(input, adapter);
+    plan.deferredCandidates.push({
+      sourceScope: input.sourceScope,
+      sourceKey: input.sourceKey,
+      reason,
+      content: { ...content, cardKey, purchaseKey },
+    });
+  };
   let created = 0;
   let updated = 0;
   let unlisted = 0;
   let baselineCreated = 0;
   const baselineDiscoveryAccounts = new Set<string>();
+  const observedIds = new Set<string>();
   const event = (
     type: EventType,
     id: string | null,
@@ -1343,6 +1638,7 @@ export function planRun(
         facts: withoutInstallmentFx(resolved),
         purchaseKey,
         counterpartyAbsent: input.counterpartyName === undefined,
+        cardKey: input.cardKey,
       };
     });
     const inputs = prepared.map(({ facts }) => facts);
@@ -1350,7 +1646,7 @@ export function planRun(
     const index = indexAccountRows(
       current,
       inputs,
-      adapter.provider,
+      adapter,
       response.capturedAt,
       history,
     );
@@ -1392,8 +1688,11 @@ export function planRun(
       comparableAbsence,
       baseline: baselineAccounts.has(response.accountKey),
     });
-    const markSeen = (id: string) => {
+    const markSeen = (id: string, observed = true) => {
       seenIds.add(id);
+      if (observed) {
+        observedIds.add(id);
+      }
       index.consume(id);
     };
     const markedGroups = new Set<Transaction[]>();
@@ -1403,13 +1702,13 @@ export function planRun(
       }
       markedGroups.add(rows);
       for (const row of rows) {
-        markSeen(row.id);
+        markSeen(row.id, false);
       }
     };
     const reviewedGroups = new Set<string>();
     // Purchases are planned before billed lines, so a line resolves to a
     // purchase first seen in this capture whatever the adapter's row order.
-    for (const { facts: input, purchaseKey, counterpartyAbsent } of [
+    for (const { facts: input, purchaseKey, cardKey, counterpartyAbsent } of [
       ...prepared.filter((entry) => entry.purchaseKey === null),
       ...prepared.filter((entry) => entry.purchaseKey !== null),
     ]) {
@@ -1418,6 +1717,7 @@ export function planRun(
           ? index.linkedPostedAliases.get(input.sourceKey)
           : undefined;
       if (linked) {
+        observedIds.add(linked.id);
         // An accepted authorization alias is supporting evidence, never a downgrade to pending.
         const latest = plan.transaction(linked.id)!;
         plan.updateTransaction(linked.id, {
@@ -1493,6 +1793,7 @@ export function planRun(
           (known.sourceKey === input.sourceKey ||
             known.sourceAliases.includes(input.sourceKey));
         if (enrichesKnownIdentity) {
+          observedIds.add(known.id);
           const previous = plan.transaction(known.id)!;
           plan.updateTransaction(previous.id, {
             details: {
@@ -1509,6 +1810,8 @@ export function planRun(
               ),
             },
           });
+        } else {
+          defer(input, "historical_identity", cardKey, purchaseKey);
         }
         continue;
       }
@@ -1521,7 +1824,7 @@ export function planRun(
       const matches = index.matches(input.sourceKey);
       // Within an unchanged uncertain set, match facts, never an array ordinal.
       const sameFacts = fingerprints.get(
-        identityFingerprint(input, includeSource, adapter.provider),
+        identityFingerprint(input, includeSource, adapter),
       );
       // A cursor consumes occurrences without shifting a large duplicate bucket.
       if (sameFacts) {
@@ -1557,15 +1860,16 @@ export function planRun(
         matches.count === 0
       ) {
         // A partial capture cannot distinguish a changed generation identity from
-        // a second purchase in the adapter's declared identity group. Archive the
-        // new evidence and defer identity changes until comparable evidence exists.
+        // a second purchase. Preserve declared evidence separately until comparable.
         markGroupSeen(oldGroup);
+        defer(input, "partial_native_identity", cardKey, purchaseKey);
         continue;
       }
       if (changedUncertainSet && !comparable) {
         // Partial observations cannot safely replace the existing uncertain set.
-        // Keep the new evidence in the archived response and defer identity changes.
+        // Preserve declared evidence separately until identity changes are safe.
         markGroupSeen(oldGroup);
+        defer(input, "partial_ambiguous_identity", cardKey, purchaseKey);
         continue;
       }
       if (changedUncertainSet && !reviewedGroups.has(base)) {
@@ -1582,14 +1886,17 @@ export function planRun(
       }
       if (
         changedUncertainSet ||
-        matches.count > 1 ||
+        (matches.count > 1 && !uncertain) ||
         previous?.identityStrength === "ambiguous"
       ) {
+        const alreadyAmbiguous = input.identityStrength === "ambiguous";
         input.identityStrength = "ambiguous";
-        input.details.issues = withIssue(
-          input.details.issues,
-          "ambiguous_identity",
-        );
+        if (!alreadyAmbiguous || changedUncertainSet) {
+          input.details.issues = withIssue(
+            input.details.issues,
+            "ambiguous_identity",
+          );
+        }
       }
       // Historical archives can add evidence but cannot replace current observations.
       if (previous && (result.historical || hasNewerCurrent)) {
@@ -1727,14 +2034,14 @@ export function planRun(
             "conflicting_installment_plan",
           );
         }
-        retainEvidence(plan.transaction(id)!, accepted);
+        retainEvidence(plan.transaction(id)!, accepted, adapter);
         const changed =
           JSON.stringify(financialState(previous)) !==
           JSON.stringify(financialState(accepted));
         plan.updateTransaction(id, {
           ...accepted,
-          // Payment context is quiet enrichment: a read without evidence for a
-          // fact keeps the stored value; a value or a conflict (null) replaces it.
+          // Missing payment evidence keeps the stored value; a value or conflict
+          // replaces it before the shared content comparison.
           ...storedPaymentContext(accepted, plan.transaction(id)),
           presence: "seen",
           lastSeenAt: response.capturedAt,
@@ -1935,5 +2242,22 @@ export function planRun(
     appliedAt: now,
     parserVersion: adapter.parserVersion,
   };
-  return { runId, replayed: false, created, updated, unlisted, status };
+  const content = finishTransactionContent(
+    plan,
+    adapter,
+    run,
+    now,
+    observedIds,
+  );
+  updated = content.updated;
+  return {
+    runId,
+    replayed: false,
+    observed: observedIds.size,
+    unchanged: content.unchanged,
+    created,
+    updated,
+    unlisted,
+    status,
+  };
 }

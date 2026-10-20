@@ -95,7 +95,7 @@ describe("source explanatory information", () => {
     expect(transaction.details).not.toHaveProperty("fees");
   });
 
-  it("projects CAL transaction-type details and the ongoing-transaction comment as text, keeping the raw rows exact", () => {
+  it("projects CAL explanatory text while discarding undeclared nested contents", () => {
     const source = calResponse(null);
     const row = source.result.transactions[0]!;
     row.transTypeCommentDetails = [
@@ -117,7 +117,12 @@ describe("source explanatory information", () => {
     expect(transaction.details.provider.cal).toMatchObject({
       rows: [
         {
-          transTypeCommentDetails: row.transTypeCommentDetails,
+          transTypeCommentDetails: [
+            "  ",
+            "Synthetic installment note",
+            "\u200fSynthetic amount - \u200e$9.99\u200f",
+            {},
+          ],
           onGoingTransactionsComment: "Synthetic ongoing note",
         },
       ],

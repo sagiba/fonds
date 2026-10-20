@@ -291,11 +291,91 @@ describe("collect on SQLite", () => {
       type: "collection_summary",
       status: "failed",
       captures: 0,
+      unchanged: 0,
+      observed: 0,
+      unchangedTransactions: 0,
+      unlisted: 0,
       failures: 1,
       created: 0,
       updated: 0,
     });
     expect(result.stderr).not.toContain("synthetic discovery failure");
+  });
+
+  it("offers bounded sync diagnostics only when requested and validates archive duration", async () => {
+    await run("init", "--connection", "diagnostic", "--provider", "cal");
+    await connect("diagnostic", "INVENTED-DIAGNOSTIC");
+    const first = await run("collect", "--connection", "diagnostic");
+    expect(first.status).toBe(EXIT_CODES.ok);
+    expect(
+      collectionSummarySchema.parse(JSON.parse(first.stdout)),
+    ).not.toHaveProperty("diagnostics");
+    const second = await run(
+      "collect",
+      "--connection",
+      "diagnostic",
+      "--diagnostics",
+      "--archive-days",
+      "2",
+    );
+    expect(second.status).toBe(EXIT_CODES.ok);
+    const summary = collectionSummarySchema.parse(JSON.parse(second.stdout));
+    expect(summary).toMatchObject({
+      observed: 21,
+      unchangedTransactions: 21,
+      created: 0,
+      updated: 0,
+      unlisted: 0,
+      diagnostics: { dropped: 0, truncated: false },
+    });
+    expect(summary.diagnostics!.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          stage: "ingest",
+          outcome: "completed",
+          counts: expect.objectContaining({
+            observed: 21,
+            unchangedTransactions: 21,
+            changed: 0,
+          }),
+        }),
+      ]),
+    );
+    expect(
+      new Set(summary.diagnostics!.entries.map((entry) => entry.stage)),
+    ).toEqual(
+      new Set([
+        "refresh",
+        "recovery",
+        "collection",
+        "capture",
+        "ingest",
+        "archive",
+        "extraction",
+        "reconciliation",
+        "commit",
+        "purge",
+        "observation",
+      ]),
+    );
+    const entries = summary.diagnostics!.entries;
+    const extracted = entries.find(
+      (entry) => entry.stage === "extraction" && entry.outcome === "completed",
+    )!;
+    expect(extracted.counts).toMatchObject({ extracted: 21 });
+    expect(extracted.counts).not.toHaveProperty("observed");
+    expect(
+      entries.every((entry) => entry.refreshId === entries[0]!.refreshId),
+    ).toBe(true);
+    expect(second.stdout).not.toContain("INVENTED-");
+    expect(second.stdout).not.toContain("SYNTHETIC-ACCOUNT");
+    for (const days of ["0", "31", "1.5", "-1", "secret"]) {
+      expect(await run("collect", `--archive-days=${days}`)).toEqual({
+        status: EXIT_CODES.failed,
+        stdout: "",
+        stderr: "--archive-days must be an integer from 1 through 30.\n",
+      });
+    }
   });
 
   it("prints one summary shape for every stored connection and for one", async () => {

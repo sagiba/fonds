@@ -36,9 +36,11 @@ import {
   syncRuns,
   transactions,
 } from "../../src/storage/sqlite/schema.js";
+import { run as readRun } from "../../src/storage/sqlite/statements.js";
+import type { StoredTransactionRow } from "../../src/storage/transaction-codec.js";
 
 describe("shared storage domain", () => {
-  it("keeps all seven SQLite row shapes mutually assignable with owned domain types", () => {
+  it("keeps physical rows aligned across drivers and decoded rows aligned with domain types", () => {
     expectTypeOf<typeof accounts.$inferSelect>().toExtend<Account>();
     expectTypeOf<Account>().toExtend<typeof accounts.$inferSelect>();
     expectTypeOf<typeof pg.accounts.$inferSelect>().toExtend<Account>();
@@ -49,10 +51,14 @@ describe("shared storage domain", () => {
     expectTypeOf<Card>().toExtend<typeof pg.cards.$inferSelect>();
     expectTypeOf<typeof connections.$inferSelect>().toExtend<Connection>();
     expectTypeOf<Connection>().toExtend<typeof connections.$inferSelect>();
-    expectTypeOf<typeof syncRuns.$inferSelect>().toExtend<Run>();
-    expectTypeOf<Run>().toExtend<typeof syncRuns.$inferSelect>();
-    expectTypeOf<typeof transactions.$inferSelect>().toExtend<Transaction>();
-    expectTypeOf<Transaction>().toExtend<typeof transactions.$inferSelect>();
+    expectTypeOf<Awaited<ReturnType<typeof readRun>>[number]>().toExtend<Run>();
+    expectTypeOf<Run>().toExtend<Awaited<ReturnType<typeof readRun>>[number]>();
+    expectTypeOf<
+      typeof transactions.$inferSelect
+    >().toExtend<StoredTransactionRow>();
+    expectTypeOf<StoredTransactionRow>().toExtend<
+      typeof transactions.$inferSelect
+    >();
     expectTypeOf<typeof annotations.$inferSelect>().toExtend<Annotation>();
     expectTypeOf<Annotation>().toExtend<typeof annotations.$inferSelect>();
     expectTypeOf<typeof events.$inferSelect>().toExtend<LedgerEvent>();
@@ -60,15 +66,15 @@ describe("shared storage domain", () => {
     expectTypeOf<typeof pg.connections.$inferSelect>().toExtend<Connection>();
     expectTypeOf<Connection>().toExtend<typeof pg.connections.$inferSelect>();
     expectTypeOf<
-      Omit<typeof pg.syncRuns.$inferSelect, "ingestionOrder" | "metadata">
-    >().toExtend<Run>();
-    expectTypeOf<Run>().toExtend<
-      Omit<typeof pg.syncRuns.$inferSelect, "ingestionOrder" | "metadata">
+      Omit<typeof pg.syncRuns.$inferSelect, "ingestionOrder">
+    >().toExtend<typeof syncRuns.$inferSelect>();
+    expectTypeOf<typeof syncRuns.$inferSelect>().toExtend<
+      Omit<typeof pg.syncRuns.$inferSelect, "ingestionOrder">
     >();
     expectTypeOf<
       Omit<typeof pg.transactions.$inferSelect, "ingestionOrder">
-    >().toExtend<Transaction>();
-    expectTypeOf<Transaction>().toExtend<
+    >().toExtend<StoredTransactionRow>();
+    expectTypeOf<StoredTransactionRow>().toExtend<
       Omit<typeof pg.transactions.$inferSelect, "ingestionOrder">
     >();
     expectTypeOf<typeof pg.annotations.$inferSelect>().toExtend<Annotation>();
@@ -101,6 +107,10 @@ describe("shared storage domain", () => {
         status: "started",
         collectorVersion: "synthetic-v1",
         parserVersion: calAdapter.parserVersion,
+        evidenceDigest: null,
+        bodyAvailable: true,
+        bodyRetention: "staged",
+        bodyExpiresAt: null,
         snapshot: {
           schemaVersion: 1,
           responses: [

@@ -245,6 +245,9 @@ describe("operation commands", () => {
         counts: {
           captures: 0,
           unchanged: 0,
+          observed: 0,
+          unchangedTransactions: 0,
+          unlisted: 0,
           failures: 0,
           created: 0,
           updated: 0,

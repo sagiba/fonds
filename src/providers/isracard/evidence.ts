@@ -1,0 +1,191 @@
+import type { JsonObject, JsonValue } from "../../domain/model.js";
+import { canonicalJson } from "../../domain/observations.js";
+import {
+  evidenceObject,
+  type EvidenceShape,
+  mergeDeclaredEvidence,
+  projectEvidence,
+  scalarFields,
+  sortedEvidence,
+} from "../../domain/provider-evidence.js";
+
+export const isracardDigitalRowShape =
+  scalarFields(`seqVoucherNumber voucherNumber purchaseDate purchaseTime
+  billingAmount billingAmountCurrency billingAmountCurrencySymbol originalAmount originalCurrency originalCurrencyIso
+  discountAmount discountIndication discountClubName ilsAmount usdAmount
+  businessName businessNumber cityDescription countryCode countryDescription
+  transactionCode transactionDescription tranzacCodeType tranzacCodeDescription clearedCode clearedDescription
+  isIsraelDeal currentInstallmentNum numberOfInstallment isLastInstallment moreInfo
+  presentCard isTransactionSecure isWalletTransaction isdirectDebit isNewDirectDebit`);
+export const isracardApprovalRowShape =
+  scalarFields(`confirmationLocation seqConfirmationNumber confirmationTimeStamp confirmationNumber
+  businessName purchaseDate originalAmount originalCurrency currencyIso currencySimbol ilsBillingAmount israelTransactionTime
+  transactionCode transactionDescription tranzacCodeType isTransactionSecure isWalletTransaction branchCodeDescription`);
+export const isracardLegacyRowShape =
+  scalarFields(`voucherNumber voucherNumberRatz voucherNumberRatzOutbound
+  fullPurchaseDate fullPurchaseDateOutbound fullPaymentDate purchaseDate purchaseDateOutbound paymentDate
+  paymentSum paymentSumOutbound paymentSumSign dealSum dealSumOutbound dealSumType
+  currencyId currentPaymentCurrency kodMatbeaMekori
+  fullSupplierNameHeb fullSupplierNameOutbound supplierId supplierName supplierNameOutbound city
+  moreInfo isHoraatKeva horaatKeva`);
+
+export const isracardDetailShape: EvidenceShape = {
+  ...scalarFields(`voucherNumber voucherNumberRatz purchaseDateOutboundIsracard purchaseTime
+    address phoneNumber city supplierId supplierName supplierNameIsracard motavName
+    transactionType walletPayName dealCode dealType numberOfPayments paymentNumber
+    dealSum chargeSum chargeSumToDisplay dealSumOutbound dealSumOutboundInshekels
+    currencyId currencyIdForCharge currencyIdOutbound linking
+    discount sumBeforeDiscount saleName secondSaleName moreInfo sector
+    moedChiuvFull valueDate conversionCurrency conversionDateZMD dateConversion dateConversionOutBound
+    dollarConversion dollarTransferRate exchangeRateZMD
+    commissionDiscountPercentage commissionDiscountSum commissionNetValue commissionNetValueCurrency
+    interestPercentage interestSum moneyWithdrawalCommission dollarTransferCommissionPercentage
+    amlaDolarCa amlaDolarCaMatbea scumAmla sumDollar sumOfCompensation sumOfFund sumOfValueAddedTax`),
+  Table1: [scalarFields("paymentNumber paymentDate paymentSum currencyId")],
+};
+
+export function isracardEvidenceGeneration(
+  row: unknown,
+): "approval" | "digital" | "legacy" {
+  if (row && typeof row === "object") {
+    if (
+      ["voucherNumberRatz", "voucherNumberRatzOutbound"].some((key) =>
+        Object.hasOwn(row, key),
+      )
+    ) {
+      return "legacy";
+    }
+    if (Object.hasOwn(row, "seqVoucherNumber")) {
+      return "digital";
+    }
+    if (Object.hasOwn(row, "billingAmount")) {
+      return "digital";
+    }
+    if (
+      [
+        "confirmationLocation",
+        "seqConfirmationNumber",
+        "confirmationTimeStamp",
+        "confirmationNumber",
+        "currencyIso",
+        "currencySimbol",
+        "israelTransactionTime",
+      ].some((key) => Object.hasOwn(row, key))
+    ) {
+      return "approval";
+    }
+    if (
+      [
+        "seqVoucherNumber",
+        "billingAmount",
+        "businessName",
+        "transactionCode",
+      ].some((key) => Object.hasOwn(row, key))
+    ) {
+      return "digital";
+    }
+  }
+  return "legacy";
+}
+
+export function isracardRowEvidence(
+  row: unknown,
+  generation = isracardEvidenceGeneration(row),
+): JsonObject {
+  return evidenceObject(
+    row,
+    generation === "approval"
+      ? isracardApprovalRowShape
+      : generation === "digital"
+        ? isracardDigitalRowShape
+        : isracardLegacyRowShape,
+  );
+}
+
+export function isracardDetailEvidence(value: unknown): JsonObject {
+  return evidenceObject(value, isracardDetailShape);
+}
+
+export const isracardStateShape: EvidenceShape = {
+  identity: {
+    ...scalarFields("baseKey occurrenceCount"),
+    currentRows: ["scalar"],
+  },
+  observations: [scalarFields("generation path")],
+  monetaryEvidence: {
+    ...scalarFields(
+      "billingMinor billingCurrency originalMinor originalCurrency convention",
+    ),
+    statedTotals: [["scalar"]],
+  },
+  billingMonth: "scalar",
+};
+
+export function projectIsracardState(value: JsonObject): JsonObject {
+  return evidenceObject(value, isracardStateShape);
+}
+
+export function retainIsracardEvidence(value: JsonObject): JsonObject {
+  const result: JsonObject = {};
+  if (Object.hasOwn(value, "rows")) {
+    result.rows = Array.isArray(value.rows)
+      ? sortedEvidence(
+          value.rows.map((row) =>
+            row && typeof row === "object" && !Array.isArray(row)
+              ? isracardRowEvidence(row)
+              : projectEvidence(row, {}),
+          ),
+        )
+      : projectEvidence(value.rows, [{}]);
+  }
+  if (Object.hasOwn(value, "detail")) {
+    result.detail = projectEvidence(value.detail, isracardDetailShape);
+  }
+  return result;
+}
+
+function componentKey(row: JsonValue): string | null {
+  if (!row || typeof row !== "object" || Array.isArray(row)) {
+    return null;
+  }
+  if (isracardEvidenceGeneration(row) === "approval") {
+    return typeof row.confirmationLocation === "string" &&
+      /^\d+$/.test(row.confirmationLocation) &&
+      Number.isSafeInteger(Number(row.confirmationLocation)) &&
+      typeof row.seqConfirmationNumber === "string" &&
+      row.seqConfirmationNumber.trim() !== "" &&
+      typeof row.confirmationTimeStamp === "string" &&
+      row.confirmationTimeStamp.trim() !== ""
+      ? canonicalJson([
+          "approval",
+          Number(row.confirmationLocation),
+          row.seqConfirmationNumber,
+          row.confirmationTimeStamp,
+        ])
+      : null;
+  }
+  if (Object.hasOwn(row, "seqVoucherNumber")) {
+    return typeof row.seqVoucherNumber === "string" ||
+      typeof row.seqVoucherNumber === "number"
+      ? canonicalJson(["digital", row.seqVoucherNumber, row.purchaseDate])
+      : null;
+  }
+  const voucher = row.voucherNumberRatz ?? row.voucherNumberRatzOutbound;
+  return typeof voucher === "string" || typeof voucher === "number"
+    ? canonicalJson([
+        "legacy",
+        voucher,
+        row.fullPurchaseDate ?? row.fullPurchaseDateOutbound,
+      ])
+    : null;
+}
+
+export function mergeIsracardEvidence(
+  previous: JsonObject,
+  incoming: JsonObject,
+): JsonObject {
+  return mergeDeclaredEvidence(previous, incoming, {
+    project: retainIsracardEvidence,
+    componentKey,
+  });
+}

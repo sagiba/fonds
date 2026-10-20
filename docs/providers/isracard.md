@@ -105,7 +105,8 @@ database never receives it. No CLI command applies it.
 - Fonds collects no opening balance, bank repayments, income or complete history
   from Isracard, so totals are not a current debt balance. Parallel-currency
   amounts, discount components, null fee and rate placeholders (null is not
-  zero), clearing codes and payment tables stay in the retained responses only.
+  zero), clearing codes and payment tables remain private evidence, without
+  inferred accounting roles.
 - A source total that disagrees with its rows adds a value-free warning without
   failing the run; a match does not prove that no row is missing.
 
@@ -135,10 +136,6 @@ wait out a rate limit, then rerun the refresh or the reported history range.
 
 Unsupported approval shapes leave pending coverage incomplete; inspect the run's
 reported failures before retrying. A retry cannot resolve an unsupported shape.
-
-`contentFingerprint` ignores only the session `cardGuid` values, which every login
-renews. Collection remembers one capture per connection, so of a refresh's
-card-month captures only the last can be skipped as an unchanged repeat.
 
 Still unverified: hosted collection and EU-region egress, unattended operation,
 session lifetime, reuse of a card's final four digits, partner and co-branded

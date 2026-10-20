@@ -2,18 +2,19 @@
 
 > For Isracard adapter maintainers. Owns source evidence, interpretation rationale and uncertainty; the adapter code owns the mappings and the linked tests own expected outcomes.
 
-Isracard's JSON comes from private endpoints with no public contract. These
-observations come from owner-authorized collection, a value-free
-[archive profiler](../../../tests/providers/isracard/scripts/audit-isracard-db.ts) and cited public
-implementations. Private observations are maintainer attestations, not publicly
-reproducible validation. No credentials, values or identifiers are published, and
-the [fixtures](../../../tests/providers/isracard/fixtures/README.md) are invented. Nothing here
-certifies every Isracard account, card type or a future shape, and establishing
-an accounting meaning needs new evidence, never an option that bypasses review.
+Isracard's private endpoints have no public contract. Observations are maintainer
+attestations from owner-authorized collection, a value-free
+[archive profiler](../../../tests/providers/isracard/scripts/audit-isracard-db.ts) and
+cited public implementations, not reproducible validation. [Fixtures](../../../tests/providers/isracard/fixtures/README.md)
+are invented. Neither certifies every account or future shape. Accounting meanings
+need evidence, never a review-bypass option.
 
-Each record keeps three levels apart: what was **observed**, the **policy** Fonds
-adopts, and issuer semantics that stay **unknown** and raw. **Checks** name test
-cases in the linked suites.
+[Declared retention](evidence.ts) keeps source identity, money, dates, merchant and
+payment facts, explanations and bound financial detail, including unresolved roles
+described below. It excludes unknown fields and nested noise. Interpretations,
+session GUIDs and billing-month context are separate; exact responses require
+optional raw archives. Overlapping observations keep distinct vouchers and source
+generations; a fresh component replaces its earlier evidence.
 
 ## isracard.login: login, TLS and session
 
@@ -189,7 +190,7 @@ cases in the linked suites.
   identity when a later login issues a new session cardGuid", "matches reordered
   duplicate rows by source facts…"; [pending] "uses the full opaque detail-address
   tuple…", "automatically continues a same-month singleton on the pending ID…";
-  [fingerprint].
+  [refresh].
 
 ## isracard.money: signs and currency codes
 
@@ -393,7 +394,7 @@ and every code had one label. That label is the evidence for a kind:
 [amount basis]: ../../../tests/providers/isracard/amount-basis.test.ts
 [collection]: ../../../tests/providers/isracard/collection.test.ts
 [extraction]: ../../../tests/providers/isracard/extraction.test.ts
-[fingerprint]: ../../../tests/providers/isracard/fingerprint.test.ts
+[refresh]: ../../../tests/providers/isracard/repeated-refresh.test.ts
 [installments]: ../../../tests/providers/isracard/installments.test.ts
 [matching-design]: ../../../docs/design.md#pending-to-posted-matching
 [node http]: ../../../tests/providers/isracard/node-http.test.ts

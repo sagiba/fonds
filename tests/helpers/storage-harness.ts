@@ -68,6 +68,38 @@ export type Harness = InternalStore &
     close(): Promise<void>;
   };
 
+/** Synthetic ID-ordering fixtures must move the joined records with their parent. */
+export async function renameTransactionFixture(
+  db: Harness,
+  previousId: string,
+  id: string,
+) {
+  const tables = [
+    "transaction_observations",
+    "transaction_reconciliation",
+    "transaction_posting_links",
+  ];
+  const retained = await Promise.all(
+    tables.map((table) =>
+      db.raw(`SELECT * FROM ${table} WHERE transaction_id = ?`, [previousId]),
+    ),
+  );
+  for (const table of tables) {
+    await db.raw(`DELETE FROM ${table} WHERE transaction_id = ?`, [previousId]);
+  }
+  await db.raw("UPDATE transactions SET id = ? WHERE id = ?", [id, previousId]);
+  for (const [index, table] of tables.entries()) {
+    for (const row of retained[index]!) {
+      row.transaction_id = id;
+      const columns = Object.keys(row);
+      await db.raw(
+        `INSERT INTO ${table} (${columns.join(",")}) VALUES (${columns.map(() => "?").join(",")})`,
+        columns.map((column) => row[column]),
+      );
+    }
+  }
+}
+
 export type Backend =
   "sqlite" | "libsql-local" | "libsql-http" | "postgres" | "d1-local";
 

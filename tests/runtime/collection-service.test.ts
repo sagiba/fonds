@@ -1,6 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
 
-import { createLocalService } from "../../src/runtime/collection-service.js";
+import { calProvider } from "../../src/providers/cal/provider.js";
+import {
+  collectionTargets,
+  createLocalService,
+} from "../../src/runtime/collection-service.js";
 import { openDatabase } from "../../src/storage/sqlite/database.js";
 import { row, synthetic } from "../helpers/storage-harness.js";
 
@@ -71,5 +75,68 @@ it("keeps webhook request logs on the service's log, off a stdio server's stdout
     expect(info).not.toHaveBeenCalled();
   } finally {
     await db.close();
+  }
+});
+
+it("projects provider transport diagnostics and isolates failing log callbacks", async () => {
+  for (const failing of [false, true]) {
+    const log = vi.fn(() => {
+      if (failing) {
+        throw new Error("private-logger");
+      }
+    });
+    const discover = collectionTargets({
+      store: { listConnections: async () => [] },
+      credentials: {
+        getCredentials: async () => undefined,
+        saveCredentials: async () => {},
+      },
+      credentialsKey: () => undefined,
+      configured: {
+        connectionId: "private-connection",
+        provider: "cal",
+        credentials: { username: "private-user", password: "private-password" },
+      },
+      providerFor: () => ({
+        ...calProvider,
+        createCollector: (_credentials, options) => {
+          options?.onDiagnostic?.({
+            endpoint: "recent",
+            httpStatus: 200,
+            contentType: "json",
+            outcome: "success",
+            stage: "complete",
+            responseText: "private-body",
+            credentials: "private-password",
+          });
+          options?.onDiagnostic?.({
+            endpoint: "https://private-endpoint",
+            httpStatus: 200,
+            contentType: "json",
+            outcome: "success",
+            stage: "complete",
+          });
+          return {
+            provider: "cal",
+            collectorVersion: "1",
+            async *collect() {},
+          };
+        },
+      }),
+      log,
+    });
+    const { targets } = await discover();
+    await expect(targets[0]!.collector()).resolves.toMatchObject({
+      provider: "cal",
+    });
+    expect(log).toHaveBeenCalledExactlyOnceWith({
+      event: "fonds_provider_transport",
+      endpoint: "recent",
+      httpStatus: 200,
+      contentType: "json",
+      outcome: "success",
+      stage: "complete",
+    });
+    expect(JSON.stringify(log.mock.calls)).not.toContain("private-");
   }
 });
