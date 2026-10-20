@@ -26,6 +26,10 @@ export type PlanScope = { transactionId: string } | { accountOf: string };
 
 type Columns<T> = { [Key in keyof T]: AnyColumn };
 
+type TransactionColumns = Columns<
+  Omit<Transaction, "details" | "lastSeenAt" | "lastSeenRunId">
+>;
+
 const dateColumns = {
   transaction: "transactionDate",
   booking: "bookingDate",
@@ -34,7 +38,7 @@ const dateColumns = {
 
 /** The domain's perspective membership rule, compiled to SQL. */
 function perspectiveFilter(
-  table: Columns<Transaction>,
+  table: TransactionColumns,
   perspective: Perspective,
 ) {
   const rule = perspectiveRule(perspective);
@@ -54,13 +58,13 @@ function perspectiveFilter(
 }
 
 /** Transactions page in `transactionDate` descending (nulls last), then `id`. */
-export function transactionOrder(table: Columns<Transaction>) {
+export function transactionOrder(table: TransactionColumns) {
   return [sql`${table.transactionDate} desc nulls last`, sql`${table.id} asc`];
 }
 
 /** Rows after a keyset position in `transactionOrder`. */
 export function transactionSeek(
-  table: Columns<Transaction>,
+  table: TransactionColumns,
   after: TransactionQuery["after"],
 ) {
   if (after === undefined) {
@@ -101,7 +105,7 @@ export function keysetSeek(
  * transactions and billing accounts.
  */
 export function transactionFilter(
-  table: Columns<Transaction>,
+  table: TransactionColumns,
   filters: TransactionQuery,
   cards: { id: AnyColumn; billingAccountId: AnyColumn } & Table,
 ) {
@@ -181,7 +185,7 @@ export function connectionColumns<T extends Columns<Connection>>(
   };
 }
 
-export function totalsColumns<T extends Columns<Transaction>>(
+export function totalsColumns<T extends TransactionColumns>(
   table: T,
 ): Pick<
   T,
@@ -213,7 +217,7 @@ export function totalsColumns<T extends Columns<Transaction>>(
 }
 
 export function planCondition(
-  table: Columns<Transaction> & Table,
+  table: TransactionColumns & Table,
   connectionId: string,
   scope?: PlanScope,
 ) {

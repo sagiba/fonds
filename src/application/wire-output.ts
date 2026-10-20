@@ -19,12 +19,14 @@ import {
   walletSchema,
 } from "../domain/model.js";
 import { minorToDecimal } from "../domain/money.js";
+import { canonicalJson } from "../domain/observations.js";
 import type { calculateTotals, TransactionView } from "../domain/read-model.js";
 import type {
   Annotation,
   LedgerEvent,
   Transaction,
 } from "../domain/records.js";
+import { transactionChangedFields } from "../domain/transaction-content.js";
 import type { PublicConnection, SyncRun } from "./financial-store.js";
 import { listCursorSchema } from "./query-inputs.js";
 import {
@@ -500,6 +502,9 @@ export const refreshSummaryOutputSchema = z
     counts: z
       .object({
         captures: versionSchema,
+        observed: versionSchema,
+        unchangedTransactions: versionSchema,
+        unlisted: versionSchema,
         unchanged: versionSchema,
         failures: versionSchema,
         created: versionSchema,
@@ -718,31 +723,7 @@ export function presentWireTotals(result: ReturnType<typeof calculateTotals>) {
   };
 }
 
-const changedFieldMap = {
-  amountMinor: "amount",
-  currency: "amount",
-  originalAmountMinor: "originalAmount",
-  originalCurrency: "originalAmount",
-  amountBasis: "amountBasis",
-  kind: "kind",
-  status: "status",
-  presence: "presence",
-  transactionDate: "transactionDate",
-  bookingDate: "bookingDate",
-  billingDate: "billingDate",
-  installmentCount: "installmentCount",
-  installmentNumber: "installmentNumber",
-  purchaseId: "purchaseId",
-  supersededById: "supersededById",
-  merchantCategoryCode: "merchant.categoryCode",
-  merchantName: "merchant.name",
-  merchantProviderId: "merchant.providerId",
-  description: "description",
-  counterpartyName: "counterpartyName",
-  fxFeeMinor: "fxFee",
-  fxFeeCurrency: "fxFee",
-  currencyExchange: "currencyExchange",
-} as const;
+const changedFieldMap = transactionChangedFields;
 
 const changedFieldNames = [...new Set(Object.values(changedFieldMap))];
 const changedFieldSchema = z.enum(changedFieldNames);
@@ -796,8 +777,8 @@ function changedWireFields(row: LedgerEvent) {
           ([key]) =>
             Object.hasOwn(before, key) &&
             Object.hasOwn(after, key) &&
-            JSON.stringify(Reflect.get(before, key)) !==
-              JSON.stringify(Reflect.get(after, key)),
+            canonicalJson(Reflect.get(before, key)) !==
+              canonicalJson(Reflect.get(after, key)),
         )
         .map(([, field]) => field),
     ),
@@ -856,12 +837,25 @@ export function presentSyncRun(run: SyncRun) {
 }
 
 export function presentRefresh(refresh: Refresh) {
-  const { occurrence: _occurrence, windows: _windows, ...summary } = refresh;
+  const {
+    occurrence: _occurrence,
+    windows: _windows,
+    providerStopReason: _providerStopReason,
+    hasAcceptedEvidence: _hasAcceptedEvidence,
+    ...summary
+  } = refresh;
   return summary;
 }
 
 export function presentRefreshDetail(refresh: Refresh) {
-  return { ...presentRefresh(refresh), windows: refresh.windows };
+  return {
+    ...presentRefresh(refresh),
+    windows: refresh.windows.map(({ from, to, status }) => ({
+      from,
+      to,
+      status,
+    })),
+  };
 }
 
 export function presentRefreshStart(result: RefreshStartResult) {

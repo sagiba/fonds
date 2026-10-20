@@ -1,6 +1,6 @@
 # Database reference
 
-The database holds original financial evidence, current transactions, independent
+The database holds declared financial evidence, current transactions, independent
 owner annotations, the durable event feed and operational state. This page owns
 table ownership, relationships, commit boundaries, the reasons for dialect
 differences, migration compatibility, the installation binding and backup and
@@ -8,19 +8,20 @@ recovery. The [API reference](api.md) owns what clients see.
 
 ## Ownership and physical layout
 
-| Area                 | Tables                                                                                   | Owner                                                  |
-| -------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| Financial data       | `connections`, `accounts`, `cards`, `sync_runs`, `transactions`, `annotations`, `events` | Application migrations and shared financial store      |
-| Events delivery      | `event_subscriptions` (SQLite/libSQL), `operations.event_subscriptions` (PostgreSQL)     | Application Events store                               |
-| Scheduled collection | `scheduled_collections`, `settings`                                                      | Scheduled collection contract in every store           |
-| Provider credentials | `provider_credentials` (SQLite/libSQL), `operations.provider_credentials` (PostgreSQL)   | Credential vault; encrypted rows only                  |
-| Installation binding | `settings` row `installation` (SQLite), `operations.installation` (PostgreSQL)           | [State directory binding](#state-directory-and-backup) |
-| Refreshes            | `refreshes`, `refresh_windows`                                                           | Refresh service; lease-fenced while running            |
-| Collection leases    | `collection_leases`                                                                      | Collection lock on every backend                       |
-| Hosted Google bridge | `identity.fonds_neon_login`, `identity.fonds_neon_identity`                              | Application authentication bridge                      |
-| Hosted identity      | 14 Better Auth tables listed in the [identity inventory](internals/auth-storage.md)      | Pinned Better Auth 1.7.10 and configured plugins       |
-| Migration version    | `PRAGMA user_version` (SQLite/libSQL), `schema_migrations` (PostgreSQL)                  | [Migrations](#migrations)                              |
-| D1 concurrency       | Additional `connections.revision` column                                                 | Experimental D1 migration and adapter                  |
+| Area                 | Tables                                                                                                                        | Owner                                                  |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| Financial data       | `connections`, `accounts`, `cards`, `sync_runs`, `transactions`, `annotations`, `events`                                      | Application migrations and shared financial store      |
+| Evidence and state   | `sync_run_bodies`, `deferred_evidence`, `transaction_observations`, `transaction_reconciliation`, `transaction_posting_links` | Application migrations and shared financial store      |
+| Events delivery      | `event_subscriptions` (SQLite/libSQL), `operations.event_subscriptions` (PostgreSQL)                                          | Application Events store                               |
+| Scheduled collection | `scheduled_collections`, `settings`                                                                                           | Scheduled collection contract in every store           |
+| Provider credentials | `provider_credentials` (SQLite/libSQL), `operations.provider_credentials` (PostgreSQL)                                        | Credential vault; encrypted rows only                  |
+| Installation binding | `settings` row `installation` (SQLite), `operations.installation` (PostgreSQL)                                                | [State directory binding](#state-directory-and-backup) |
+| Refreshes            | `refreshes`, `refresh_windows`                                                                                                | Refresh service; lease-fenced while running            |
+| Collection leases    | `collection_leases`                                                                                                           | Collection lock on every backend                       |
+| Hosted Google bridge | `identity.fonds_neon_login`, `identity.fonds_neon_identity`                                                                   | Application authentication bridge                      |
+| Hosted identity      | 14 Better Auth tables listed in the [identity inventory](internals/auth-storage.md)                                           | Pinned Better Auth 1.7.10 and configured plugins       |
+| Migration version    | `PRAGMA user_version` (SQLite/libSQL), `schema_migrations` (PostgreSQL)                                                       | [Migrations](#migrations)                              |
+| D1 concurrency       | Additional `connections.revision` column                                                                                      | Experimental D1 migration and adapter                  |
 
 PostgreSQL puts the financial tables in `financial`, which every pool selects
 through `search_path`, and operational state in `operations`; a Fonds database
@@ -53,7 +54,13 @@ erDiagram
   cards o|--o{ transactions : "connection_id, card_id"
   connections ||--o{ sync_runs : connection_id
   connections ||--o{ transactions : connection_id
-  sync_runs ||--o{ transactions : last_seen_run_id
+  transactions ||--|| transaction_observations : transaction_id
+  sync_runs ||--o{ transaction_observations : last_seen_run_id
+  transactions ||--|| transaction_reconciliation : transaction_id
+  transactions ||--|| transaction_posting_links : transaction_id
+  sync_runs ||--o| sync_run_bodies : run_id
+  connections ||--o{ deferred_evidence : connection_id
+  sync_runs ||--o{ deferred_evidence : first_seen_run_id
   connections ||--o{ refreshes : connection_id
   refreshes ||--o{ refresh_windows : refresh_id
   refreshes o|--o{ sync_runs : refresh_id
@@ -65,8 +72,7 @@ erDiagram
   transactions o|--o{ transactions : superseded_by_id
 ```
 
-These are stored foreign keys, without cascading deletes except where a migration
-says so. Accounts, cards and transactions each carry `UNIQUE (connection_id, id)`,
+Foreign keys cascade where migrations specify. Accounts, cards and transactions each carry `UNIQUE (connection_id, id)`,
 so a composite foreign key can only reference a row of the same connection. An
 event always has a connection and may have no transaction or run (an owner action
 has no source run). A card's `billing_account_id` is the account that pays its
@@ -76,30 +82,34 @@ Candidate IDs and source references inside JSON are references, not foreign keys
 
 ## What the financial tables hold
 
-- **`connections`** hold provider, label and an open, versioned configuration
-  whose unknown keys survive targeted updates. It holds internal consumer cursors
-  and the last capture's fingerprint, never cards, accounts or credentials.
+- **`connections`** hold provider, label and open, versioned configuration with
+  internal cursors. Unknown configuration keys survive.
 - **`accounts` and `cards`** are unique by connection and private provider key.
   Card attributes are private, allowlisted facts.
-- **`sync_runs`** each archive one collection unit: the exact response text, safe
-  context, extraction partitions, warnings and the applied marker. The snapshot is
-  never replaced under the same run ID.
-- **`transactions`** hold one current logical transaction: private source
-  identity, lifecycle state and one canonical amount whose role is
-  `amount_basis`, not a column per amount role. The source index is deliberately
-  **not unique**, because one native-looking key can identify several
-  occurrences. `status` and `amount_basis` are independent. `details_json` keeps
-  enrichment without a typed column and provider evidence that never becomes
-  public output: source rows kept for identity and matching evidence, not
-  disposable copies of the archive. It also keeps what makes a posting link
-  reversible ([schema](../src/domain/model.ts)). No installment schedule is stored.
+- **`sync_runs`** hold receipts: scope, times, versions, coverage, warnings, input
+  digest and applied marker.
+  **`sync_run_bodies`** holds recovery staging and expiring opt-in debug bodies.
+  Later ingestion prunes expired debug bodies; unfinished recovery is preserved.
+- **`transactions`** hold current transactions, private identity, lifecycle and
+  canonical money/basis. Source identity is not unique. Mapped scalars have named
+  columns; explanatory text, FX steps and source issues have typed JSON columns.
+  `provider_json` holds allowlisted source evidence. `details_json` and schedules
+  are absent.
+- **`transaction_observations`** owns freshness and latest references per
+  account/resource/scope; unchanged refreshes preserve transaction content.
+  **`transaction_reconciliation`** owns identity, interpretation, conflict and
+  rejection state. **`transaction_posting_links`** holds reversible pending
+  snapshots and split receipts, separately from mapped facts.
+- **`deferred_evidence`** holds declared evidence without safe transaction identity.
+  Content-addressed rows retain first and last receipts, deduplicating evidence.
 - **`annotations`** have at most one row per transaction; absence has no row and
   version zero. Earlier documents live in `annotation.updated` events, not version
   tables.
 - **`events`** are append-only financial, annotation, review and health events
   for audit and catch-up, not complete event sourcing. Their type-specific
-  before/after documents are private evidence; public events project metadata, a
-  bounded baseline summary and allowlisted `changedFields`.
+  before/after documents retain changed values. Public events expose metadata,
+  baseline summaries and `changedFields`, never private evidence. Event history
+  remains independently of debug-body expiry.
 
 Perspectives are filters over `transactions`, not views or tables, and totals are
 summed exactly in application code with no stored total column
@@ -114,35 +124,30 @@ summed exactly in application code with no stored total column
 - JSON documents are text, not JSONB, so exact source strings survive: actual NUL
   and a literal backslash-u0000 stay distinct. JSON documents and annotations may
   hold NUL, but canonical scalar text rejects it on every adapter: extraction
-  keeps the evidence, flags the row and marks its partition non-comparable while
-  valid rows still apply. No string is silently truncated or normalized. SQLite
-  checks JSON syntax only; PostgreSQL relies on domain validation.
-- PostgreSQL stores body-free run metadata, committed with the snapshot, because
-  its JSON functions
-  [decode NUL escapes](https://www.postgresql.org/docs/current/datatype-json.html)
-  even while projecting the body away, and to avoid loading every historical body.
-  SQLite derives the same metadata with JSON functions. The full snapshot remains
-  authoritative.
-- PostgreSQL sequences give archives and transactions a deterministic order where
+  keeps declared evidence, flags the row and marks its partition non-comparable
+  while valid rows still apply. SQLite checks JSON syntax; PostgreSQL relies on
+  domain validation.
+- Body-free receipts avoid historical body loads and PostgreSQL JSON decoding of
+  embedded NUL. Merchant contact/location scalars use reversible escaping when
+  needed, preserving NUL and literal escapes across drivers.
+- PostgreSQL sequences give captures and transactions deterministic order where
   SQLite uses rowid.
-- SQL defaults are absent: application code supplies IDs, versions, timestamps and
-  empty documents. SQL checks shapes only; currency precision and canonical dates
-  are domain validation, so direct SQL writes are not a supported import path.
+- Application code supplies IDs, versions, timestamps and empty documents. SQL
+  checks shapes; currency precision and canonical dates are domain validation.
+  Direct SQL writes are not a supported import path.
 - D1 has no interactive transaction: `connections.revision` guards one atomic
   batch, and a stale batch fails ([D1 note](internals/d1-storage.md)).
 
 ## Commit boundaries
 
-Archive insertion commits before reconciliation, so a failed application leaves
-recoverable evidence with `applied_at` unset. Application then writes accounts,
-cards, transactions, annotations, events and the applied marker in one
-transaction (one guarded batch on D1). A purchase is written before its billed
-lines. When a match changes the surviving purchase, its billed lines move in the
-same write, each with a version bump and its own `transaction.updated` event.
-Annotation edits commit owner state and history together. Card discovery merges
-under the connection write lock and commits before the next financial request,
-apart from transaction archives; it keeps known values when new metadata is
-missing or conflicting and creates no event or financial revision.
+Receipts and staged bodies commit together before reconciliation. Failed
+application leaves recoverable evidence with `applied_at` unset. Ledger changes,
+observations, deferred evidence, events, the applied marker and body release commit
+atomically (one guarded D1 batch). A purchase precedes its billed lines; retargeted
+lines move with the survivor and their version/update events. Annotation edits
+commit owner state and history together. Card discovery commits under the connection
+lock before further financial requests, keeps known metadata when new values are
+missing or conflicting, and creates no financial event or revision.
 
 PostgreSQL locks the connection row before reading mutable state and holds a
 transaction-scoped advisory lock before allocating event IDs, with sequences at
@@ -183,8 +188,8 @@ admits one pending or running refresh per connection and one record per
 occurrence, and every update while it runs is lease-fenced. `refresh_windows`
 holds a backfill's month checkpoints, deleted with their refresh; a resumed
 refresh redoes each unfinished window whole, because replaying identical evidence
-is quiet. Deleting a refresh clears `sync_runs.refresh_id`; nothing prunes
-history.
+is quiet. Deleting a refresh clears `sync_runs.refresh_id`; receipt and financial
+history remain independently of debug-body expiry.
 
 ## Scheduled collections and settings tables
 
@@ -222,17 +227,18 @@ modify live auth rows as part of financial API work.
 
 ## Migrations
 
-Every backend reaches its schema through numbered forward migrations from `0001`,
-without gaps, so a ledger upgrades in place: [SQLite](../migrations/) for local
-SQLite and libSQL, and [PostgreSQL](../migrations/postgres/), one version for
-`financial` and `operations`. A released migration is never edited; a change is
-the next file. SQLite migrates when a file opens, and libSQL and PostgreSQL at
-initialization, which every PostgreSQL entry point performs. One transaction,
-under SQLite's write lock or a PostgreSQL advisory lock, reads the version,
-refuses a newer database, applies and records each pending migration, and checks
-the live declarations against the latest generated manifest. An up-to-date
-database runs no migration and writes no version; any failure leaves the previous
-version.
+This pre-release initializes empty storage from one `0001` baseline for
+[SQLite/libSQL](../migrations/) and [PostgreSQL](../migrations/postgres/), covering
+`financial` and `operations`. Earlier pre-release layouts are unsupported: stop Fonds, explicitly recreate the database or volume, then
+initialize it again. This baseline reset is only before the first release;
+after release, published migrations stay immutable and changes append numbered
+forward migrations without gaps.
+
+SQLite initializes on opening, libSQL and PostgreSQL at provisioning. One
+transaction under SQLite's write lock or a PostgreSQL advisory lock checks the
+recorded version and live declarations against the generated manifest. A matching version is insufficient. Unsupported layouts are refused, never erased automatically; failed initialization rolls back. A matching
+database runs no migration SQL or version write. Restore requires this compatible
+schema and its matching installation secrets.
 
 D1 applies [its copies](../migrations/d1/), the SQLite files plus the connection
 revision, with Wrangler and checks neither version nor declarations. Better

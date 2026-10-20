@@ -87,7 +87,6 @@ describe("CAL extraction", () => {
         "posEntryMod",
         "transSafeIndication",
         "srcCurrencyCode",
-        "crdExtIdNumTypeCode",
         "crmIccCurrencyDesc",
         "comments",
         "immediateComments",
@@ -95,6 +94,7 @@ describe("CAL extraction", () => {
       ]) {
         expect(retained[0]![key]).toEqual(original[key]);
       }
+      expect(retained[0]).not.toHaveProperty("crdExtIdNumTypeCode");
       expect(row.details).not.toHaveProperty("exchangeRate");
       expect(row.details).not.toHaveProperty("fees");
       expect(row.wallet ?? null).toBeNull();
@@ -146,7 +146,7 @@ describe("CAL extraction", () => {
     },
   );
 
-  it("preserves a nonempty opaque pending indicator without changing authorization meaning", () => {
+  it("omits an opaque pending indicator without changing authorization meaning", () => {
     const response = baseline();
     response.result.transactions = [];
     response.result.clearanceRequests = [
@@ -162,9 +162,9 @@ describe("CAL extraction", () => {
       amountMinor: -5875,
       currency: "ILS",
     });
-    expect(row.details.provider.cal!.rows).toMatchObject([
-      { j5Indicator: "SYNTHETIC-UNINTERPRETED-INDICATOR" },
-    ]);
+    expect(
+      (row.details.provider.cal!.rows as SyntheticRow[])[0],
+    ).not.toHaveProperty("j5Indicator");
     expect(row).toMatchObject({ cardPresent: false, wallet: null });
   });
 
@@ -581,7 +581,7 @@ describe("CAL extraction", () => {
     }
   });
 
-  it("accepts and retains unknown future fields", () => {
+  it("accepts future fields without retaining undeclared evidence", () => {
     const response = onePosted();
     response.result.transactions[0]!.futureField = {
       anything: [true, "new", 125],
@@ -590,9 +590,9 @@ describe("CAL extraction", () => {
     expect(result.partitions.every((partition) => partition.success)).toBe(
       true,
     );
-    expect(result.transactions[0]!.details.provider.cal!.rows).toMatchObject([
-      { futureField: { anything: [true, "new", "125"] } },
-    ]);
+    expect(
+      (result.transactions[0]!.details.provider.cal!.rows as SyntheticRow[])[0],
+    ).not.toHaveProperty("futureField");
     expect(
       extractCal(fixture("future-field"), context).transactions.length,
     ).toBeGreaterThan(0);
@@ -953,6 +953,6 @@ describe("CAL automatic posting capability", () => {
       pendingAmountBasis: "authorization",
       postedAmountBasis: "purchase_commitment",
     });
-    expect(calAdapter.parserVersion).toBe("cal-v11");
+    expect(calAdapter.parserVersion).toBe("cal-v12");
   });
 });

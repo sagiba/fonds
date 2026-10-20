@@ -1,4 +1,4 @@
-import { isLosslessNumber, parse, stringify } from "lossless-json";
+import { isLosslessNumber, parse } from "lossless-json";
 import { z } from "zod";
 
 import type { FinancialResponse } from "../../domain/records.js";
@@ -85,49 +85,6 @@ export function isracardCardKey(
 
 export function serializeIsracardCapture(capture: IsracardCapture): string {
   return JSON.stringify(isracardCaptureSchema.parse(capture));
-}
-
-/**
- * The capture without its session `cardGuid` values, for identical-capture
- * skipping. Every login returns new GUIDs, so keeping them would make each
- * repeat capture look new. Capture binding compares the envelope GUID with the
- * card list's, so the outcome of that comparison stays in the fingerprint.
- * Every financial response text stays exact.
- */
-export function isracardContentFingerprint(responseText: string): string {
-  try {
-    const capture = isracardCaptureSchema.parse(JSON.parse(responseText));
-    const cardList: unknown = parse(capture.responses.cardList);
-    const object = (value: unknown): value is Record<string, unknown> =>
-      value !== null &&
-      typeof value === "object" &&
-      !Array.isArray(value) &&
-      !isLosslessNumber(value);
-    const cards =
-      object(cardList) &&
-      object(cardList.data) &&
-      Array.isArray(cardList.data.cardsList)
-        ? cardList.data.cardsList
-        : [];
-    for (const card of cards) {
-      if (!object(card) || !("cardGuid" in card)) {
-        continue;
-      }
-      // The binding check's token semantics: a string or a number's lexeme.
-      const guid = isLosslessNumber(card.cardGuid)
-        ? card.cardGuid.value
-        : card.cardGuid;
-      card.cardGuid = guid === capture.card.cardGuid;
-    }
-    // Tagged so that no raw fallback can equal a normalized capture.
-    return `capture:${JSON.stringify({
-      ...capture,
-      card: { ...capture.card, cardGuid: null },
-      responses: { ...capture.responses, cardList: stringify(cardList) },
-    })}`;
-  } catch {
-    return `raw:${responseText}`;
-  }
 }
 
 /** Derive offline ingestion context from the provider's archived capture format. */

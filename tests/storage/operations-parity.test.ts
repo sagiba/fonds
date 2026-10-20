@@ -14,6 +14,10 @@ import type {
 } from "../../src/domain/source-adapter.js";
 import { createRefreshService } from "../../src/runtime/refresh-service.js";
 import * as postgresSchema from "../../src/storage/postgres/schema.js";
+import {
+  prepareRun,
+  runEvidenceDigest,
+} from "../../src/storage/run-evidence.js";
 import * as sqliteSchema from "../../src/storage/sqlite/schema.js";
 import {
   backends,
@@ -84,6 +88,10 @@ describe.each(backends)("operations parity on %s", (backend) => {
       db.driver.kind === "postgres"
         ? postgresSchema.syncRuns
         : sqliteSchema.syncRuns;
+    const bodies =
+      db.driver.kind === "postgres"
+        ? postgresSchema.syncRunBodies
+        : sqliteSchema.syncRunBodies;
     const orm = (db as unknown as { orm?: { insert: Function } }).orm;
     if (!orm) {
       return false;
@@ -107,21 +115,41 @@ describe.each(backends)("operations parity on %s", (backend) => {
         status: "started",
         collectorVersion: "synthetic",
         parserVersion: synthetic.parserVersion,
-        snapshot: { schemaVersion: 1, responses: [response] },
-        ...(db.driver.kind === "postgres" && {
-          metadata: {
-            responses: [
-              {
-                accountKey: "account",
-                endpoint: "synthetic",
-                capturedAt: response.capturedAt,
-              },
-            ],
-            failures: [],
-          },
-        }),
+        evidenceDigest: await runEvidenceDigest(
+          prepareRun(
+            {
+              runId: `archived-${sourceKey}`,
+              connectionId,
+              collectorVersion: "synthetic",
+              responses: [response],
+            },
+            synthetic,
+          ),
+        ),
+        snapshot: {
+          schemaVersion: 1,
+          responses: [
+            {
+              accountKey: response.accountKey,
+              endpoint: response.endpoint,
+              capturedAt: response.capturedAt,
+            },
+          ],
+        },
         coverage: [],
         warnings: [],
+      });
+    await (
+      orm as {
+        insert(table: unknown): { values(value: object): Promise<unknown> };
+      }
+    )
+      .insert(bodies)
+      .values({
+        runId: `archived-${sourceKey}`,
+        snapshot: { schemaVersion: 1, responses: [response] },
+        retention: "staged",
+        expiresAt: null,
       });
     return true;
   }
@@ -315,7 +343,7 @@ describe.each(backends)("operations parity on %s", (backend) => {
       ]);
       expect(result?.refresh).toMatchObject({
         status: "completed",
-        counts: { captures: 1, created: 2, updated: 0 },
+        counts: { captures: 2, observed: 2, created: 2, updated: 0 },
       });
     });
 
@@ -401,6 +429,9 @@ describe.each(backends)("operations parity on %s", (backend) => {
         requiresAttention: false,
         counts: {
           captures: 0,
+          observed: 0,
+          unchangedTransactions: 0,
+          unlisted: 0,
           unchanged: 0,
           failures: 0,
           created: 0,
@@ -485,6 +516,9 @@ describe.each(backends)("operations parity on %s", (backend) => {
           requiresAttention: false,
           counts: {
             captures: 1,
+            observed: 1,
+            unchangedTransactions: 0,
+            unlisted: 0,
             unchanged: 0,
             failures: 0,
             created: 1,

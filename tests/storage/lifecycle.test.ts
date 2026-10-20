@@ -15,6 +15,11 @@ import {
   transactions,
 } from "../../src/storage/sqlite/schema.js";
 import { retained } from "../helpers/provider-evidence.js";
+import {
+  insertTransaction,
+  readTransactions,
+  updateTransaction,
+} from "../helpers/sqlite-transactions.js";
 
 describe("owner-confirmed transaction lifecycle", () => {
   let db: Database;
@@ -33,6 +38,7 @@ describe("owner-confirmed transaction lifecycle", () => {
         collectorVersion: "synthetic",
         parserVersion: "synthetic",
         snapshot: { schemaVersion: 1, responses: [] },
+        evidenceDigest: "0".repeat(64),
         coverage: [],
         warnings: [],
       })
@@ -80,41 +86,33 @@ describe("owner-confirmed transaction lifecycle", () => {
       version: 1,
       supersededById: null,
     };
-    pending = await db.orm
-      .insert(transactions)
-      .values(fields)
-      .returning()
-      .get();
-    posted = await db.orm
-      .insert(transactions)
-      .values({
-        ...fields,
-        id: "posted",
-        sourceKey: "posted-key",
-        sourceAliases: ["old-posted-key"],
-        status: "posted",
-        presence: "seen",
-        amountBasis: "purchase_commitment",
-        description: "Synthetic purchase",
-        bookingDate: "2040-07-02",
-        billingDate: "2040-08-10",
-        originalAmountMinor: -12000,
-        originalCurrency: "ILS",
-        installmentCount: 12,
-        firstSeenAt: "2040-08-02T00:00:00Z",
-        lastSeenAt: "2040-08-02T00:00:00Z",
-        details: {
-          ...emptyDetails(),
-          issues: ["possible_pending_posted_match"],
-          sourceRefs: [{ runId: "synthetic-run", path: "/posted" }],
-          provider: {
-            cal: { retained: { paymentHistory: [{ label: "First" }] } },
-          },
-          pendingPostingCandidates: ["pending"],
+    pending = await insertTransaction(db.orm, fields);
+    posted = await insertTransaction(db.orm, {
+      ...fields,
+      id: "posted",
+      sourceKey: "posted-key",
+      sourceAliases: ["old-posted-key"],
+      status: "posted",
+      presence: "seen",
+      amountBasis: "purchase_commitment",
+      description: "Synthetic purchase",
+      bookingDate: "2040-07-02",
+      billingDate: "2040-08-10",
+      originalAmountMinor: -12000,
+      originalCurrency: "ILS",
+      installmentCount: 12,
+      firstSeenAt: "2040-08-02T00:00:00Z",
+      lastSeenAt: "2040-08-02T00:00:00Z",
+      details: {
+        ...emptyDetails(),
+        issues: ["possible_pending_posted_match"],
+        sourceRefs: [{ runId: "synthetic-run", path: "/posted" }],
+        provider: {
+          cal: { retained: { paymentHistory: [{ label: "First" }] } },
         },
-      })
-      .returning()
-      .get();
+        pendingPostingCandidates: ["pending"],
+      },
+    });
   });
   afterEach(() => db.close());
 
@@ -134,7 +132,7 @@ describe("owner-confirmed transaction lifecycle", () => {
 
   async function state() {
     return {
-      rows: await db.orm.select().from(transactions).all(),
+      rows: await readTransactions(db.orm),
       annotations: await db.orm.select().from(annotations).all(),
       changes: await db.listEvents(),
     };
@@ -147,23 +145,19 @@ describe("owner-confirmed transaction lifecycle", () => {
       notes: "Authorization note",
       category: "Equipment",
     });
-    await db.orm
-      .update(transactions)
-      .set({
-        details: {
-          ...pending.details,
-          provider: {
-            cal: {
-              retained: {
-                paymentHistory: [{ label: "First" }, { label: "Earlier" }],
-              },
+    await updateTransaction(db.orm, pending.id, {
+      details: {
+        ...pending.details,
+        provider: {
+          cal: {
+            retained: {
+              paymentHistory: [{ label: "First" }, { label: "Earlier" }],
             },
           },
-          issues: [...pending.details.issues, "other_financial_issue"],
         },
-      })
-      .where(eq(transactions.id, pending.id))
-      .run();
+        issues: [...pending.details.issues, "other_financial_issue"],
+      },
+    });
     const note = (await db.getTransaction(pending.id))!.annotation;
     const result = await db.linkPendingTransaction(await command());
     expect(result).toMatchObject({
@@ -188,8 +182,8 @@ describe("owner-confirmed transaction lifecycle", () => {
       ...posted.details.sourceRefs,
     ]);
     expect(retained(result.details, "paymentHistory")).toEqual([
-      { label: "First" },
       { label: "Earlier" },
+      { label: "First" },
     ]);
     expect(result.details.issues).toEqual(["other_financial_issue"]);
     expect(result.details.pendingPostingCandidates).toEqual([]);
@@ -425,17 +419,13 @@ describe("owner-confirmed transaction lifecycle", () => {
   );
 
   it("allows a weak singleton but refuses unresolved ambiguous identities", async () => {
-    await db.orm
-      .update(transactions)
-      .set({
-        identityStrength: "weak",
-        details: {
-          ...pending.details,
-          issues: [...pending.details.issues, "weak_source_identity"],
-        },
-      })
-      .where(eq(transactions.id, pending.id))
-      .run();
+    await updateTransaction(db.orm, pending.id, {
+      identityStrength: "weak",
+      details: {
+        ...pending.details,
+        issues: [...pending.details.issues, "weak_source_identity"],
+      },
+    });
     expect(await db.linkPendingTransaction(await command())).toMatchObject({
       id: pending.id,
       identityStrength: "native",
@@ -501,11 +491,11 @@ describe("owner-confirmed transaction lifecycle", () => {
       notes: "Stable purchase note",
     });
     const survivor = await db.linkPendingTransaction(await command());
-    const laterPending = await db.orm
-      .insert(transactions)
-      .values({ ...pending, id: "later-pending", sourceKey: "later-key" })
-      .returning()
-      .get();
+    const laterPending = await insertTransaction(db.orm, {
+      ...pending,
+      id: "later-pending",
+      sourceKey: "later-key",
+    });
     const before = await state();
     await expect(
       db.linkPendingTransaction({
@@ -613,49 +603,40 @@ describe("owner-confirmed transaction lifecycle", () => {
   it.each([false, true])(
     "immediately clears other candidates after linking and preserves remaining review issues: %s",
     async (otherIssue) => {
-      const candidate = await db.orm
-        .insert(transactions)
-        .values({
-          ...pending,
-          id: "other-pending",
-          sourceKey: "other-pending-key",
-          details: {
-            ...pending.details,
-            pendingPostingCandidates: [pending.id, posted.id],
-            issues: [
-              "possible_pending_posted_match",
-              ...(otherIssue ? ["other_financial_issue"] : []),
-            ],
-          },
-        })
-        .returning()
-        .get();
-      const remaining = await db.orm
-        .insert(transactions)
-        .values({
-          ...pending,
-          id: "remaining-pending",
-          sourceKey: "remaining-key",
-          details: {
-            ...pending.details,
-            pendingPostingCandidates: [posted.id, "another-posted"],
-          },
-        })
-        .returning()
-        .get();
-      const unrelated = await db.orm
-        .insert(transactions)
-        .values({
-          ...candidate,
-          id: "unrelated-account",
-          sourceScope: "other-account",
-          sourceKey: "unrelated-key",
-        })
-        .returning()
-        .get();
+      const candidate = await insertTransaction(db.orm, {
+        ...pending,
+        id: "other-pending",
+        sourceKey: "other-pending-key",
+        details: {
+          ...pending.details,
+          pendingPostingCandidates: [pending.id, posted.id],
+          issues: [
+            "possible_pending_posted_match",
+            ...(otherIssue ? ["other_financial_issue"] : []),
+          ],
+        },
+      });
+      const remaining = await insertTransaction(db.orm, {
+        ...pending,
+        id: "remaining-pending",
+        sourceKey: "remaining-key",
+        details: {
+          ...pending.details,
+          pendingPostingCandidates: [posted.id, "another-posted"],
+        },
+      });
+      const unrelated = await insertTransaction(db.orm, {
+        ...candidate,
+        id: "unrelated-account",
+        sourceScope: "other-account",
+        sourceKey: "unrelated-key",
+      });
+      const unrelatedBefore = (await readTransactions(db.orm)).find(
+        (row) => row.id === unrelated.id,
+      );
       await db.linkPendingTransaction(await command());
       expect(await db.getTransaction(candidate.id)).toMatchObject({
-        version: 1,
+        version: 2,
         reviewRequired: otherIssue,
         details: {
           pendingPostingCandidates: [],
@@ -671,12 +652,8 @@ describe("owner-confirmed transaction lifecycle", () => {
         },
       });
       expect(
-        await db.orm
-          .select()
-          .from(transactions)
-          .where(eq(transactions.id, unrelated.id))
-          .get(),
-      ).toEqual(unrelated);
+        (await readTransactions(db.orm)).find((row) => row.id === unrelated.id),
+      ).toEqual(unrelatedBefore);
       const event = (await db.listEvents()).find(
         (change) => change.transactionId === candidate.id,
       )!;
@@ -705,6 +682,20 @@ describe("owner-confirmed transaction lifecycle", () => {
           (change) => change.transactionId === unrelated.id,
         ),
       ).toBe(false);
+      expect(
+        (await db.listEvents()).find(
+          (change) =>
+            change.transactionId === candidate.id &&
+            change.type === "transaction.updated",
+        ),
+      ).toMatchObject({
+        before: {
+          sourceIssues: expect.arrayContaining([
+            "possible_pending_posted_match",
+          ]),
+        },
+        after: { sourceIssues: otherIssue ? ["other_financial_issue"] : [] },
+      });
     },
   );
 
@@ -732,7 +723,7 @@ describe("owner-confirmed transaction lifecycle", () => {
       if (target === "pending" || target === "posted") {
         await setVersion(target === "pending" ? pending.id : posted.id, limit);
       } else if (target === "billed line") {
-        await db.orm.insert(transactions).values({
+        await insertTransaction(db.orm, {
           ...posted,
           id: "line",
           sourceKey: "line-key",
@@ -777,19 +768,15 @@ describe("owner-confirmed transaction lifecycle", () => {
   );
 
   it("immediately removes confirmed removals from other candidate lists and retains removed evidence", async () => {
-    const other = await db.orm
-      .insert(transactions)
-      .values({
-        ...pending,
-        id: "other-pending",
-        sourceKey: "other-key",
-        details: {
-          ...pending.details,
-          issues: [...pending.details.issues, "weak_source_identity"],
-        },
-      })
-      .returning()
-      .get();
+    const other = await insertTransaction(db.orm, {
+      ...pending,
+      id: "other-pending",
+      sourceKey: "other-key",
+      details: {
+        ...pending.details,
+        issues: [...pending.details.issues, "weak_source_identity"],
+      },
+    });
     const result = await db.confirmRemoval({
       transactionId: posted.id,
       expectedVersion: 1,
@@ -799,12 +786,12 @@ describe("owner-confirmed transaction lifecycle", () => {
       details: { pendingPostingCandidates: [pending.id] },
     });
     expect(await db.getTransaction(pending.id)).toMatchObject({
-      version: 1,
+      version: 2,
       reviewRequired: false,
       details: { issues: [], pendingPostingCandidates: [] },
     });
     expect(await db.getTransaction(other.id)).toMatchObject({
-      version: 1,
+      version: 2,
       reviewRequired: true,
       details: {
         issues: ["weak_source_identity"],
@@ -843,10 +830,11 @@ describe("owner-confirmed transaction lifecycle", () => {
   it.each(["link", "removal"])(
     "rolls back %s and candidate cleanup together when cleanup logging fails",
     async (operation) => {
-      await db.orm
-        .insert(transactions)
-        .values({ ...pending, id: "other-pending", sourceKey: "other-key" })
-        .run();
+      await insertTransaction(db.orm, {
+        ...pending,
+        id: "other-pending",
+        sourceKey: "other-key",
+      });
       await db.client.executeMultiple(
         "CREATE TRIGGER synthetic_cleanup_failure BEFORE INSERT ON events WHEN NEW.transaction_id = 'other-pending' BEGIN SELECT RAISE(ABORT, 'synthetic cleanup failure'); END;",
       );

@@ -1571,7 +1571,7 @@ describe("Isracard billing accounts through collection", () => {
       const { options } = setup(source.data.cardsList);
       await collectFromStore(
         db,
-        { connectionId: "synthetic" },
+        { connectionId: "synthetic", debugArchiveDays: 2 },
         {
           provider: "isracard",
           collectorVersion: "synthetic-v1",
@@ -1613,7 +1613,7 @@ describe("Isracard billing accounts through collection", () => {
         ),
       ).toBe(true);
       const archived = (
-        await db.client.execute("SELECT snapshot_json FROM sync_runs")
+        await db.client.execute("SELECT snapshot_json FROM sync_run_bodies")
       ).rows.map((row) => String(row.snapshot_json));
       expect(archived.length).toBeGreaterThan(0);
       for (const snapshot of archived) {

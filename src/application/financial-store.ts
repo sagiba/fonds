@@ -29,6 +29,7 @@ import type {
 } from "./query-inputs.js";
 import type { Refresh, RefreshPageInput, RefreshStore } from "./refreshes.js";
 import type { ScheduledCollectionStore } from "./scheduled-collections.js";
+import type { SyncDiagnosticSink } from "./sync-diagnostics.js";
 
 /** URLs normalize away "." and ".." path segments, so no API could address them. */
 export function isPathAddressable(id: string): boolean {
@@ -146,8 +147,18 @@ export interface InternalStore
     displayName?: string;
   }): Promise<Connection>;
   getStoredConnection(id: string): Promise<Connection | undefined>;
-  ingestRun(input: RunInput, adapter: SourceAdapter): Promise<SyncResult>;
-  applyRun(id: string, adapter: SourceAdapter): Promise<SyncResult>;
+  ingestRun(
+    input: RunInput,
+    adapter: SourceAdapter,
+    onDiagnostic?: SyncDiagnosticSink,
+  ): Promise<SyncResult>;
+  applyRun(
+    id: string,
+    adapter: SourceAdapter,
+    onDiagnostic?: SyncDiagnosticSink,
+    /** Attribute a recovered run's committed results to this executing refresh. */
+    refreshId?: string,
+  ): Promise<SyncResult>;
   updateConfig(
     id: string,
     change: (config: ConnectionConfig) => ConnectionConfig,

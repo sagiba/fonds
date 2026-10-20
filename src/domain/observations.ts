@@ -18,6 +18,10 @@ export function canonicalJson(value: unknown): string {
   });
 }
 
+export function compareEvidence(left: JsonValue, right: JsonValue): number {
+  return compareStrings(canonicalJson(left), canonicalJson(right));
+}
+
 /** Retain the maximum observed multiplicity without inventing a schedule or event identity. */
 export function retainObservations<T>(previous: T[], current: T[]): T[] {
   const unmatchedPreviousCounts = new Map<string, number>();
@@ -68,7 +72,9 @@ export function retainProviderEvidence(
       retained: Object.fromEntries(
         [...keys].map((key) => [
           key,
-          retainObservations(before[key] ?? [], after[key] ?? []),
+          retainObservations(before[key] ?? [], after[key] ?? []).sort(
+            compareEvidence,
+          ),
         ]),
       ),
     };

@@ -2,6 +2,8 @@ import type { ReconciliationFailureCode } from "../domain/model.js";
 import {
   FAILURE_REASONS,
   type FailureReason,
+  PROVIDER_STOP_REASONS,
+  type ProviderStopReason,
   REFRESH_STATUSES,
   REFRESH_TRIGGERS,
   type RefreshStatus,
@@ -17,6 +19,8 @@ import { validateCollectionRange } from "./collection.js";
 export {
   FAILURE_REASONS,
   type FailureReason,
+  PROVIDER_STOP_REASONS,
+  type ProviderStopReason,
   REFRESH_STATUSES,
   REFRESH_TRIGGERS,
   type RefreshStatus,
@@ -39,11 +43,18 @@ export const REFRESH_MAX_AGE_MS = 24 * 60 * 60_000;
 /** A ranged refresh is at most this many calendar months, one window each. */
 export const MAX_REFRESH_MONTHS = 120;
 
+/** Cumulative results across executions, including interrupted attempts. */
 export interface RefreshCounts {
   /** Financial captures accepted, including unchanged ones. */
   captures: number;
-  /** Captures identical to the last archived one; nothing was stored for them. */
+  /** Successful captures that caused no retained transaction content changes. */
   unchanged: number;
+  /** Transaction identities observed once per capture; overlaps can observe them again. */
+  observed: number;
+  /** Observed transaction rows whose retained content did not change. */
+  unchangedTransactions: number;
+  /** Transactions newly marked not returned by comparable evidence. */
+  unlisted: number;
   failures: number;
   created: number;
   updated: number;
@@ -53,6 +64,8 @@ export interface RefreshWindow {
   from: string;
   to: string;
   status: WindowStatus;
+  /** Internal evidence checkpoint, committed with the accepted run. */
+  hasAcceptedEvidence?: boolean;
 }
 
 export interface Refresh {
@@ -69,6 +82,10 @@ export interface Refresh {
   startedAt: string | null;
   finishedAt: string | null;
   requiresAttention: boolean;
+  /** Internal durable provider stop; never part of the public refresh output. */
+  providerStopReason?: ProviderStopReason | null;
+  /** Internal evidence checkpoint, committed with this refresh's accepted run. */
+  hasAcceptedEvidence?: boolean;
   counts: RefreshCounts;
   failureCodes: ReconciliationFailureCode[];
   /** Why it failed without a provider outcome; null otherwise. */
@@ -92,6 +109,9 @@ export const isActive = (refresh: Pick<Refresh, "status">) =>
 export const emptyCounts = (): RefreshCounts => ({
   captures: 0,
   unchanged: 0,
+  observed: 0,
+  unchangedTransactions: 0,
+  unlisted: 0,
   failures: 0,
   created: 0,
   updated: 0,

@@ -115,6 +115,11 @@ export interface Run {
   appliedAt: string | null;
   /** The refresh that archived this run; null for offline ingestion. */
   refreshId: string | null;
+  /** Immutable input identity remains verifiable after a staged body is released. */
+  evidenceDigest: string;
+  bodyAvailable: boolean;
+  bodyRetention: "staged" | "debug" | null;
+  bodyExpiresAt: string | null;
 }
 
 /** Every ledger event type, dotted resource.action names. Stored types stay extensible text. */

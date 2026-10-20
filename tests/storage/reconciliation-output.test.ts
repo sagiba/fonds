@@ -10,6 +10,7 @@ import {
   events,
   transactions,
 } from "../../src/storage/sqlite/schema.js";
+import { transaction } from "../../src/storage/sqlite/statements.js";
 
 afterEach(() => vi.useRealTimers());
 
@@ -52,11 +53,14 @@ it("preserves fixed fixture replay output across reconciliation refactors", asyn
       );
       stages.push({ result, totals: await db.getTotals() });
     }
-    const rows = await db.orm
+    const storedRows = await db.orm
       .select()
       .from(transactions)
       .orderBy(sql`transactions.rowid`)
       .all();
+    const rows = (
+      await Promise.all(storedRows.map((row) => transaction(db.orm, row.id)))
+    ).flat();
     const cardRows = await db.orm
       .select()
       .from(cards)

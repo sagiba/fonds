@@ -12,6 +12,7 @@ import {
 } from "../../src/storage/sqlite/database.js";
 import {
   annotations,
+  syncRunBodies,
   syncRuns,
   transactions,
 } from "../../src/storage/sqlite/schema.js";
@@ -862,6 +863,14 @@ describe("collection and owner lifecycle integration", () => {
       ).toMatchObject({
         status: "started",
         appliedAt: null,
+      });
+      expect(
+        await db.orm
+          .select()
+          .from(syncRunBodies)
+          .where(eq(syncRunBodies.runId, input.runId))
+          .get(),
+      ).toMatchObject({
         snapshot: { responses: input.responses },
       });
       await db.client.executeMultiple("DROP TRIGGER synthetic_event_failure");

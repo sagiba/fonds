@@ -1332,6 +1332,10 @@ describe("offline CLI", () => {
         type: "collection_summary",
         status: partial ? "partial" : "completed",
         captures: 1,
+        unchanged: 0,
+        observed: 21,
+        unchangedTransactions: 0,
+        unlisted: 0,
         failures: partial ? 1 : 0,
         created: 21,
         updated: 0,
@@ -1346,7 +1350,16 @@ describe("offline CLI", () => {
       expect(connection.latestRefresh).toMatchObject({
         status: partial ? "partial" : "completed",
         requiresAttention: false,
-        counts: { captures: 1, failures: partial ? 1 : 0, created: 21 },
+        counts: {
+          captures: 1,
+          unchanged: 0,
+          observed: 21,
+          unchangedTransactions: 0,
+          unlisted: 0,
+          failures: partial ? 1 : 0,
+          created: 21,
+          updated: 0,
+        },
       });
       expect(typeof connection.latestRefresh.finishedAt).toBe("string");
     },

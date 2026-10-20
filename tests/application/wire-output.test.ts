@@ -550,7 +550,7 @@ describe("deliberate financial wire projection", () => {
     }
   });
 
-  it("lists every versioned field of spec section 5 and none of the quiet enrichment", () => {
+  it("names retained content changes while excluding operational observations", () => {
     const event = (before: object, after: object) =>
       presentWireEvent({
         id: 1,
@@ -584,24 +584,45 @@ describe("deliberate financial wire projection", () => {
       "merchant.categoryCode": ["merchantCategoryCode", "5411", "5812"],
       currencyExchange: ["currencyExchange", null, [{ exchangeRate: "3.9" }]],
       fxFee: ["fxFeeMinor", null, -275],
+      cardId: ["cardId", null, "card"],
+      "source.identityStrength": ["identityStrength", "weak", "native"],
+      cardPresent: ["cardPresent", null, true],
+      authorizationMethod: ["authorizationMethod", null, "contactless"],
+      wallet: ["wallet", null, "apple_pay"],
+      threeDSecureUsed: ["threeDSecureUsed", null, true],
+      recurring: ["recurring", null, true],
+      "merchant.city": ["merchantCity", null, "Synthetic City"],
+      "merchant.countryCode": ["merchantCountryCode", null, "ISR"],
+      "merchant.addressLine": [
+        "merchantAddressLine",
+        null,
+        "Synthetic Address",
+      ],
+      "merchant.phone": ["merchantPhone", null, "Synthetic Phone"],
+      transactionDateTime: ["transactionDateTime", null, "2040-01-01T12:30:00"],
+      additionalInformation: [
+        "additionalInformation",
+        [],
+        ["Source explanation"],
+      ],
+      providerTransactionCode: ["providerTransactionCode", null, "5"],
+      "review.sourceIssues": ["sourceIssues", [], ["unknown_amount_basis"]],
+      evidence: [
+        "providerEvidence",
+        [],
+        [{ path: ["rows"], present: true, value: "private" }],
+      ],
     };
     for (const [field, [key, before, after]] of Object.entries(versioned)) {
       expect(event({ [key]: before }, { [key]: after })).toEqual([field]);
     }
-    // Payment context, other merchant members and dates-with-time are quiet.
     for (const key of [
-      "cardPresent",
-      "authorizationMethod",
-      "wallet",
-      "threeDSecureUsed",
-      "recurring",
-      "merchantCity",
-      "merchantCountryCode",
-      "merchantAddressLine",
-      "merchantPhone",
-      "transactionDateTime",
-      "additionalInformation",
-      "providerTransactionCode",
+      "lastSeenAt",
+      "lastSeenRunId",
+      "sourceRefs",
+      "sourceKey",
+      "version",
+      "pendingPostingCandidates",
     ]) {
       expect(event({ [key]: "a" }, { [key]: "b" })).toBeUndefined();
     }

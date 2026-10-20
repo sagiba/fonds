@@ -2,17 +2,18 @@
 
 > For CAL adapter maintainers. Owns source evidence, interpretation rationale and uncertainty; the adapter code owns the mappings and the linked tests own expected outcomes.
 
-CAL's transaction JSON comes from private endpoints with no public contract. These
-observations come from owner-authorized exports and an aggregate-only, value-free
-[structural audit](../../../tests/providers/cal/scripts/audit-cal-db.ts) of archived responses: they
-are maintainer attestations, not publicly reproducible validation. No credentials,
-values or identifiers are published. The [fixtures](../../../tests/providers/cal/fixtures/README.md)
-are invented, and the [observed schema](../../../tests/providers/cal/schemas/cal-observed.schema.json)
-validates structure only. Neither certifies every CAL account or a future shape.
+CAL's private transaction endpoints have no public contract. Observations are
+maintainer attestations from owner-authorized exports and a value-free
+[structural audit](../../../tests/providers/cal/scripts/audit-cal-db.ts), not publicly
+reproducible validation. [Fixtures](../../../tests/providers/cal/fixtures/README.md) are invented; the
+[observed schema](../../../tests/providers/cal/schemas/cal-observed.schema.json) checks
+structure. Neither certifies every account or future shape.
 
-Each record keeps three levels apart: what was **observed**, the **policy** Fonds
-adopts, and issuer semantics that stay **unknown** and raw. **Checks** name test
-cases in the linked suites.
+[Declared retention](evidence.ts) keeps source identity, money, dates, merchant and
+payment facts, explanations and unresolved financial roles described below. It
+excludes unknown fields and nested noise. Interpretation state and capture context
+are separate; exact responses require optional raw archives. Overlapping payments
+keep distinct components; a fresh component replaces its earlier evidence.
 
 ## cal.envelope: response shapes
 

@@ -1,9 +1,5 @@
 import type { ReconciliationFailureCode } from "../domain/model.js";
-import { RECONCILIATION_POLICY_VERSION } from "../domain/plans/sync.js";
-import type {
-  CollectionFailure,
-  FinancialResponse,
-} from "../domain/records.js";
+import type { CollectionFailure } from "../domain/records.js";
 import type {
   CollectionEvent,
   CollectionRange,
@@ -11,6 +7,11 @@ import type {
   SourceAdapter,
 } from "../domain/source-adapter.js";
 import type { InternalStore } from "./financial-store.js";
+import {
+  elapsedMs,
+  syncDiagnostics,
+  type SyncDiagnosticSink,
+} from "./sync-diagnostics.js";
 
 export type {
   CollectionEvent,
@@ -21,45 +22,7 @@ export type {
 export type CollectionStore = Pick<
   InternalStore,
   "identity" | "getConnection" | "ingestRun" | "recordCardDiscovery"
-> &
-  /** These enable skipping identical repeat captures. */
-  Partial<
-    Pick<
-      InternalStore,
-      "getStoredConnection" | "updateConfig" | "ledgerRevision"
-    >
-  >;
-
-/**
- * The connection's last archived capture. `capturedAt` is the newest capture
- * time seen; the other fields are present only while that capture may be reused.
- */
-interface LastCapture {
-  /** Normalized ISO time of the newest capture ingested through collection. */
-  capturedAt: string;
-  key?: string;
-  fingerprint?: string;
-  /** Ledger revision sampled before that capture was ingested. */
-  revision?: string;
-}
-
-function captureKey(capture: FinancialResponse) {
-  return JSON.stringify([
-    capture.accountKey,
-    capture.endpoint,
-    capture.scope ?? null,
-  ]);
-}
-
-async function sha256(text: string) {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(text),
-  );
-  return Array.from(new Uint8Array(digest), (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("");
-}
+>;
 
 export interface CollectionSummary {
   status: "completed" | "partial" | "failed";
@@ -67,10 +30,13 @@ export interface CollectionSummary {
   /** Explicit collection failures plus captures with extraction failures. */
   failures: number;
   failureCodes?: ReconciliationFailureCode[];
+  /** Transaction identities observed once per capture. */
+  observed: number;
+  unchangedTransactions: number;
   created: number;
   updated: number;
   unlisted: number;
-  /** Captures identical to the last archived one; nothing was stored for them. */
+  /** Successful captures that caused no retained transaction content changes. */
   unchanged: number;
   runIds: string[];
   requestedRange?: CollectionRange;
@@ -102,14 +68,6 @@ export function validateCollectionRange(
 }
 
 const activeCollections = new WeakSet<object>();
-const FRESH_CAPTURE_MS = 10 * 60 * 1000;
-
-function isSuccessfulCapture(capture: FinancialResponse): boolean {
-  return (
-    capture.httpStatus === undefined ||
-    (capture.httpStatus >= 200 && capture.httpStatus < 300)
-  );
-}
 
 /** A fatal failure of the whole collection, scoped to the requested range if any. */
 function collectionFailure(
@@ -156,10 +114,22 @@ export async function collectFromStore(
     signal?: AbortSignal;
     /** The refresh whose sync runs these are. */
     refreshId?: string;
+    onDiagnostic?: SyncDiagnosticSink;
+    debugArchiveDays?: number;
   },
   collector: ProviderCollector,
   adapter: SourceAdapter,
 ): Promise<CollectionSummary> {
+  const started = performance.now();
+  const emit = syncDiagnostics(input.onDiagnostic);
+  const diagnose = (
+    entry: Omit<Parameters<typeof emit>[0], "event" | "refreshId">,
+  ) =>
+    emit({
+      event: "fonds_sync",
+      ...(input.refreshId && { refreshId: input.refreshId }),
+      ...entry,
+    });
   const range = input.range && validateCollectionRange(input.range);
   const connection = await store.getConnection(input.connectionId);
   if (
@@ -178,6 +148,8 @@ export async function collectFromStore(
     status: "failed",
     captures: 0,
     failures: 0,
+    observed: 0,
+    unchangedTransactions: 0,
     created: 0,
     updated: 0,
     unlisted: 0,
@@ -185,82 +157,77 @@ export async function collectFromStore(
     runIds: [],
     ...(range ? { requestedRange: range } : {}),
   };
+  diagnose({ stage: "collection", outcome: "started" });
   let acceptedRuns = 0;
-  // Hourly recent rereads usually return identical content. Reconciling it again
-  // would only archive another copy and rewrite every lastSeenAt, so a capture is
-  // skipped only when it matches the connection's last archived capture and the
-  // ledger has not changed since before that capture was ingested. Any other
-  // capture, failure, crash, stale capture, removal or posting confirmation
-  // therefore forces a full ingest. Non-2xx captures are never skipped.
-  // Assumes captures reach collection in capture order, as the single locked
-  // collector guarantees; an out-of-order capture can at worst leave the ledger
-  // one run behind, corrected by the next fresh capture, which is then ingested.
-  const fingerprinting = Boolean(
-    adapter.contentFingerprint &&
-    store.getStoredConnection &&
-    store.updateConfig &&
-    store.ledgerRevision,
-  );
-  let lastCapture: LastCapture | undefined;
-  const saveLastCapture = async (next: LastCapture) => {
-    lastCapture = next;
-    await store.updateConfig!(input.connectionId, (config) => ({
-      ...config,
-      lastCapture: next,
-    }));
-  };
   const recordEvent = async (event: CollectionEvent) => {
+    const captureId = crypto.randomUUID();
+    const captureStarted = performance.now();
     if (event.type === "card_discovery") {
       await store.recordCardDiscovery(input.connectionId, event.discovery);
+      diagnose({
+        captureId,
+        stage: "capture",
+        outcome: "completed",
+        reason: "card_discovery",
+        durationMs: elapsedMs(captureStarted),
+      });
       return;
     }
-    let fingerprint: string | undefined;
     const capture = event.type === "capture" ? event.capture : undefined;
-    const key = capture ? captureKey(capture) : undefined;
-    if (fingerprinting && capture && isSuccessfulCapture(capture)) {
-      fingerprint = await sha256(
-        [
-          adapter.parserVersion,
-          collector.collectorVersion,
-          RECONCILIATION_POLICY_VERSION,
-          adapter.recentComparableDays ?? null,
-          adapter.rejectEmptyRecentPosted ?? false,
-          adapter.contentFingerprint!(capture.responseText),
-        ].join("\n"),
-      );
-      if (
-        lastCapture?.fingerprint === fingerprint &&
-        lastCapture.key === key &&
-        lastCapture.revision ===
-          (await store.ledgerRevision!(input.connectionId))
-      ) {
-        summary.captures++;
-        summary.unchanged++;
-        acceptedRuns++;
-        return;
-      }
-    }
-    let revision: string | undefined;
-    if (fingerprinting) {
-      // Sample first, then forget the previous capture: any later mutation then
-      // invalidates the new record, and an interrupted ingest leaves nothing to reuse.
-      revision = await store.ledgerRevision!(input.connectionId);
-      if (lastCapture?.fingerprint) {
-        await saveLastCapture({ capturedAt: lastCapture.capturedAt });
-      }
-    }
-    const runId = crypto.randomUUID();
+    diagnose({
+      captureId,
+      stage: "capture",
+      outcome: "started",
+      ...(event.type === "failure" && {
+        reason: "collection_failure",
+        failureCategory: event.failure.code,
+      }),
+    });
+    const runId = captureId;
+    diagnose({
+      captureId,
+      stage: "ingest",
+      outcome: "started",
+      reason: "reconciliation_required",
+    });
     const result = await store.ingestRun(
       {
         runId,
         connectionId: input.connectionId,
         collectorVersion: collector.collectorVersion,
         ...(input.refreshId && { refreshId: input.refreshId }),
+        ...(input.debugArchiveDays !== undefined && {
+          debugArchiveDays: input.debugArchiveDays,
+        }),
         responses: capture ? [capture] : [],
         failures: event.type === "failure" ? [event.failure] : [],
       },
       adapter,
+      input.onDiagnostic,
     );
+    diagnose({
+      captureId,
+      stage: "ingest",
+      outcome: result.status,
+      reason: result.replayed
+        ? "capture_replayed"
+        : result.status === "failed"
+          ? "capture_rejected"
+          : "content_applied",
+      ...(result.status !== "completed" && {
+        failureCategory:
+          result.failureCode ??
+          (event.type === "failure" ? event.failure.code : "invalid_response"),
+      }),
+      durationMs: elapsedMs(captureStarted),
+      counts: {
+        observed: result.observed,
+        unchangedTransactions: result.unchanged,
+        created: result.created,
+        changed: result.updated,
+        absent: result.unlisted,
+      },
+    });
     summary.runIds.push(runId);
     if (capture) {
       summary.captures++;
@@ -276,35 +243,47 @@ export async function collectFromStore(
     if (result.status !== "failed") {
       acceptedRuns++;
     }
+    summary.observed += result.observed ?? 0;
+    summary.unchangedTransactions += result.unchanged ?? 0;
     summary.created += result.created;
     summary.updated += result.updated;
     summary.unlisted += result.unlisted;
-    if (!fingerprinting || !capture) {
-      return;
-    }
-    // Only a capture fetched moments ago can be reused or advance the newest
-    // time seen: a delayed or skewed capture may conflict with evidence already
-    // applied, and reconciliation ignores stale data.
-    const capturedMs = Date.parse(capture.capturedAt);
+    // Every observation is reconciled and receives a durable receipt, even when
+    // content is unchanged; freshness and owner decisions still need processing.
     if (
-      !Number.isFinite(capturedMs) ||
-      Math.abs(Date.now() - capturedMs) >= FRESH_CAPTURE_MS ||
-      capturedMs < Date.parse(lastCapture?.capturedAt ?? "")
+      capture &&
+      result.status === "completed" &&
+      result.created === 0 &&
+      result.updated === 0 &&
+      result.unlisted === 0 &&
+      result.observed !== undefined &&
+      result.unchanged === result.observed
     ) {
-      return;
+      summary.unchanged++;
+      diagnose({
+        captureId,
+        stage: "observation",
+        outcome: "completed",
+        reason: "content_unchanged",
+        counts: {
+          observed: result.observed,
+          unchangedTransactions: result.unchanged,
+          captures: 1,
+          unchanged: 1,
+        },
+      });
     }
-    await saveLastCapture({
-      capturedAt: new Date(capturedMs).toISOString(),
-      ...(fingerprint !== undefined && result.status === "completed"
-        ? { key: key!, fingerprint, revision: revision! }
-        : {}),
-    });
   };
   const interruptionEvent = () => collectionFailure("network_error", range);
   let iterator: AsyncIterator<CollectionEvent> | undefined;
   /** Records the collector's events in order until it ends, fails fatally or is interrupted. */
   const recordCollectedEvents = async () => {
     if (input.signal?.aborted) {
+      diagnose({
+        stage: "collection",
+        outcome: "interrupted",
+        reason: "cancelled",
+      });
       await recordEvent(interruptionEvent());
       return;
     }
@@ -316,6 +295,12 @@ export async function collectFromStore(
         })
         [Symbol.asyncIterator]();
     } catch {
+      diagnose({
+        stage: "collection",
+        outcome: "failed",
+        reason: "collector_exception",
+        failureCategory: "collection",
+      });
       // Third-party adapter exceptions can contain credentials or response bodies.
       await recordEvent(interruptionEvent());
     }
@@ -328,6 +313,12 @@ export async function collectFromStore(
       try {
         nextEvent = await iterator.next();
       } catch {
+        diagnose({
+          stage: "collection",
+          outcome: "failed",
+          reason: "collector_exception",
+          failureCategory: "collection",
+        });
         await recordEvent(interruptionEvent());
         return;
       }
@@ -348,12 +339,8 @@ export async function collectFromStore(
     }
   };
   try {
-    if (fingerprinting) {
-      lastCapture = (await store.getStoredConnection!(input.connectionId))
-        ?.config.lastCapture as LastCapture | undefined;
-    }
     await recordCollectedEvents();
-    if (summary.runIds.length === 0 && summary.unchanged === 0) {
+    if (summary.runIds.length === 0) {
       await recordEvent(collectionFailure("invalid_response", range));
     }
     summary.status =
@@ -362,7 +349,31 @@ export async function collectFromStore(
         : summary.failures
           ? "partial"
           : "completed";
+    diagnose({
+      stage: "collection",
+      outcome: summary.status,
+      durationMs: elapsedMs(started),
+      counts: {
+        observed: summary.observed,
+        unchangedTransactions: summary.unchangedTransactions,
+        captures: summary.captures,
+        unchanged: summary.unchanged,
+        created: summary.created,
+        changed: summary.updated,
+        absent: summary.unlisted,
+        failures: summary.failures,
+      },
+    });
     return summary;
+  } catch (error) {
+    diagnose({
+      stage: "collection",
+      outcome: "failed",
+      reason: "persistence_failure",
+      failureCategory: "persistence",
+      durationMs: elapsedMs(started),
+    });
+    throw error;
   } finally {
     try {
       await iterator?.return?.();

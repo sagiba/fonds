@@ -1,11 +1,19 @@
 import type { InternalStore } from "../../src/application/financial-store.js";
 import type { TransactionInput } from "../../src/domain/model.js";
 import type { SourceAdapter } from "../../src/domain/source-adapter.js";
+import {
+  mergeCalEvidence,
+  projectCalState,
+  retainCalEvidence,
+} from "../../src/providers/cal/evidence.js";
 import { compatibleCalPostingGroups } from "../../src/providers/cal/posting-evidence.js";
 import { row, synthetic } from "./storage-harness.js";
 
 export const postingAdapter: SourceAdapter = {
   ...synthetic,
+  retainProviderEvidence: retainCalEvidence,
+  projectProviderState: projectCalState,
+  mergeProviderEvidence: mergeCalEvidence,
   automaticPosting: {
     compatibleGroups: compatibleCalPostingGroups,
     pendingAmountBasis: "authorization",

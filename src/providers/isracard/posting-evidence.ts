@@ -1,5 +1,7 @@
 import type { JsonObject, TransactionFacts } from "../../domain/model.js";
 import { decimalToMinor } from "../../domain/money.js";
+import { currentSourceRows } from "../../domain/provider-evidence.js";
+import { isracardEvidenceGeneration } from "./evidence.js";
 
 function object(value: unknown): value is JsonObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -18,8 +20,8 @@ function merchant(value: unknown): string | null {
 }
 
 function approvalMerchant(row: TransactionFacts): string | null {
-  const rows = row.details.provider.isracard?.rows;
-  if (!Array.isArray(rows) || rows.length !== 1 || !object(rows[0])) {
+  const rows = currentSourceRows(row.details.provider.isracard ?? {});
+  if (rows.length !== 1 || !object(rows[0])) {
     return null;
   }
   const approval = rows[0];
@@ -70,26 +72,64 @@ function approvalMerchant(row: TransactionFacts): string | null {
 }
 
 function postedMerchant(row: TransactionFacts): string | null {
-  const observations = row.details.provider.isracard?.observations;
-  if (!Array.isArray(observations)) {
+  const namespace = row.details.provider.isracard ?? {};
+  const rows = currentSourceRows(namespace);
+  const observations = namespace.observations;
+  if (
+    !Array.isArray(observations) ||
+    observations.length !== rows.length ||
+    observations.some(
+      (item) =>
+        !object(item) ||
+        (item.generation !== "digital" && item.generation !== "legacy"),
+    )
+  ) {
     return null;
   }
-  const digital = observations.filter(
-    (item) => object(item) && item.generation === "digital",
+  if (
+    rows.some(
+      (item) =>
+        !object(item) || isracardEvidenceGeneration(item) === "approval",
+    )
+  ) {
+    return null;
+  }
+  const knownVoucher = (value: unknown) =>
+    typeof value === "string" && value.trim() !== "";
+  if (
+    rows.some(
+      (item) =>
+        object(item) &&
+        (isracardEvidenceGeneration(item) === "digital"
+          ? !knownVoucher(item.seqVoucherNumber)
+          : !knownVoucher(item.voucherNumberRatz) &&
+            !knownVoucher(item.voucherNumberRatzOutbound)),
+    )
+  ) {
+    return null;
+  }
+  const digital = rows.filter(
+    (item) => object(item) && isracardEvidenceGeneration(item) === "digital",
   );
-  if (digital.length === 0) {
+  // A legacy row with digital-looking keys cannot substitute for a digital source observation.
+  if (
+    digital.length === 0 ||
+    digital.length !==
+      observations.filter(
+        (item) => object(item) && item.generation === "digital",
+      ).length
+  ) {
     return null;
   }
   let name: string | null = null;
   for (const observation of digital) {
     if (
       !object(observation) ||
-      !object(observation.row) ||
-      !["1", "7"].includes(String(observation.row.transactionCode))
+      !["1", "7"].includes(String(observation.transactionCode))
     ) {
       return null;
     }
-    const current = merchant(observation.row.businessName);
+    const current = merchant(observation.businessName);
     if (current === null || (name !== null && name !== current)) {
       return null;
     }

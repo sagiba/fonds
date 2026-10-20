@@ -1,7 +1,7 @@
 # Security model
 
-Fonds is a self-hosted, single-owner service. This page states what it protects,
-what it deliberately does not, and what the person running it is responsible for.
+Fonds is self-hosted and single-owner. This page defines its protections,
+limits and operator responsibilities.
 Report suspected vulnerabilities as [SECURITY.md](../SECURITY.md) describes.
 
 ## What Fonds protects
@@ -31,10 +31,10 @@ Report suspected vulnerabilities as [SECURITY.md](../SECURITY.md) describes.
   [client address](guides/hosted-service.md#client-addresses) from the connection
   or a proxy declared with `FONDS_TRUST_PROXY`, never from a header the client
   sets.
-- **Financial records.** Writes are atomic. Defined financial fields and owner
-  annotations are versioned; enrichment fields can update without a version, as
-  the [API reference](api.md) documents. The evidence a record was derived from
-  stays attached to it.
+- **Financial records.** Writes are atomic. Retained transaction content and
+  owner annotations are independently versioned ([API](api.md#versioned-fields)).
+  Sync diagnostics carry stage metadata and counts, never source values,
+  credentials or private provider identifiers.
 
 A way around any of these, from outside the deployment's own host, environment
 and state, is a vulnerability. A copy of the database alone exposes the plaintext
@@ -80,9 +80,10 @@ exploit that uses them still is.
 - **The ledger is not encrypted at rest.** Financial records and archived source
   responses are stored as plain data in your database. Only stored provider
   credentials are encrypted.
-- **Archives can contain personal data.** Financial responses are kept exactly as
-  received, apart from the [documented exceptions](design.md#personal-data), and
-  can include holder data.
+- **Evidence can contain personal data.** Completed ingestion retains allowlisted
+  evidence and receipts. Recovery bodies and optional debug archives can include
+  holder data, subject to the
+  [documented exceptions](design.md#personal-data).
 - **Assistants see what they read.** An authorized client receives the records its
   grant permits; with ChatGPT or Claude, that data goes to the assistant's
   provider.

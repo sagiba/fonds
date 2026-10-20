@@ -81,9 +81,11 @@ for (const backend of backends) {
     const guard = backend === "d1-local" ? 1 : 0;
     // PostgreSQL serializes allocation of the global feed until commit.
     const feedLock = backend === "postgres" ? 1 : 0;
-    // D1: two 44-column transaction rows and eleven 9-column event rows per statement.
+    // D1's bound-parameter limit applies independently to each physical table.
     const [transactionRows, changeRows] =
       backend === "d1-local" ? [2, 11] : [25, 100];
+    const [observationRows, reconciliationRows, postingLinkRows] =
+      backend === "d1-local" ? [25, 11, 50] : [100, 100, 100];
     const capture = (
       rows = [
         row("pending", { status: "pending", amountBasis: "authorization" }),
@@ -193,8 +195,8 @@ for (const backend of backends) {
     });
     it("reads the full capture once per new application", async () => {
       const counts = await measure(() => capture());
-      // Includes the card and account catalog the planner resolves IDs from.
-      expect(counts.reads).toBeLessThanOrEqual(9 + feedLock);
+      // Includes catalog resolution and checking the staged body's retention policy.
+      expect(counts.reads).toBeLessThanOrEqual(10 + feedLock);
       expect(counts.fullSnapshots).toBe(1);
     });
     it("reads nonempty filtered views without an existence round trip", async () => {
@@ -298,8 +300,11 @@ for (const backend of backends) {
       ).transactions.length;
       expect(counts.writes).toBeLessThanOrEqual(
         Math.ceil(transactionCount / transactionRows) +
+          Math.ceil(transactionCount / observationRows) +
+          Math.ceil(transactionCount / reconciliationRows) +
+          Math.ceil(transactionCount / postingLinkRows) +
           Math.ceil(changes / changeRows) +
-          3 + // Retained evidence, card-reference stubs and run application.
+          5 + // Receipt/body staging, run application, staged-body release and expired-body pruning.
           2 * guard,
       );
     });

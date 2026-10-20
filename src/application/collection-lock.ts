@@ -2,6 +2,7 @@ import type { SyncResult } from "../domain/plans/sync.js";
 import type { SourceAdapter } from "../domain/source-adapter.js";
 import type { InternalStore } from "./financial-store.js";
 import type { RefreshWriter } from "./refreshes.js";
+import type { SyncDiagnosticSink } from "./sync-diagnostics.js";
 
 /**
  * What a collection may do while it holds its connection's lock: read the
@@ -25,7 +26,11 @@ export interface LockedCollectionStore
     >,
     RefreshWriter {
   /** Replay at most 100 already archived captures before requesting new data. */
-  recoverPendingRuns(adapter: SourceAdapter): Promise<SyncResult[]>;
+  recoverPendingRuns(
+    adapter: SourceAdapter,
+    onDiagnostic?: SyncDiagnosticSink,
+    refreshId?: string,
+  ): Promise<SyncResult[]>;
 }
 
 export type CollectionLockAttempt<T> =
@@ -42,4 +47,20 @@ export interface CollectionLock {
     connectionId: string,
     work: (store: LockedCollectionStore, signal: AbortSignal) => Promise<T>,
   ): Promise<CollectionLockAttempt<T>>;
+}
+
+/** Recovery needs an operator to select compatible archived evidence. */
+export class ManualRecoveryRequiredError extends Error {
+  constructor(
+    readonly failureCategory: "collection" | "execution" = "collection",
+  ) {
+    super("Archived collection requires manual recovery");
+  }
+}
+
+/** Recovery could not reach storage; retain active progress for the normal retry policy. */
+export class RetryableRecoveryError extends Error {
+  constructor() {
+    super("Archived collection recovery is temporarily unavailable");
+  }
 }

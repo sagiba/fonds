@@ -107,19 +107,22 @@ uses `--db` or the default ledger.
 | `login-link` | PostgreSQL: a one-time owner sign-in link for the hosted service                              |
 | `demo`       | SQLite: a separate ledger of synthetic CAL data                                               |
 
-Exit codes: 0 success, 1 failure or `busy` (such as `collect` while the server
-refreshes the same connection), 2 partial collection, and 3 for a command this
-backend lacks, named in one line. `collect` calls the provider through a
-[refresh](../api.md#refreshes), like the server, and prints one
-`collection_summary` with the status and summed counts; `list-refreshes` keeps
-each result. Without dates it rereads the recent window; `--from`/`--to` request
-a backfill for every collected connection. `--credentials-fd`, `--history-mode`,
+Unavailable commands exit 3; otherwise 0 means success, 1 failure or `busy`, 2 partial
+collection. `collect` calls the provider through a refresh and prints a
+`collection_summary` of status and summed [counts](../api.md#refreshes);
+`list-refreshes` keeps individual results. Without dates it rereads recent data;
+`--from`/`--to` request backfill. `--credentials-fd`, `--history-mode`,
 `--search-window-months` and `--call-budget` need `--connection`. Without stored
-credentials, `collect` asks with hidden input or reads a private file descriptor;
-the [CAL](../providers/cal.md) and [Isracard](../providers/isracard.md) guides
-list the fields. The server keeps serving while collection commits: for a synthetic
-correction, `ingest` `tests/providers/cal/fixtures/recent-02.json` with a new
-run ID and capture timestamp from another terminal, and new reads observe it.
+credentials it prompts secretly or reads the private descriptor; provider guides
+list the fields.
+
+`collect --diagnostics` adds at most 200 structured stage/count entries, with
+`truncated` and `dropped` indicating omitted entries. It contains no financial
+values, provider fields or credentials. `--archive-days <days>` (1–30) opts into
+temporary raw-response retention in the database, subject to provider redactions;
+by default completed ingestion releases bodies. See
+[evidence retention](../database.md#what-the-financial-tables-hold). These are operator flags,
+not API or MCP inputs.
 
 ## Connect an MCP client locally
 
@@ -168,7 +171,7 @@ Over HTTP the server also serves
 [security model](../security-model.md#revocation) says how long a subscription
 outlives a replaced token. Stdio offers no Events, since a stdio host has no
 webhook identity, but a stdio server still delivers subscriptions made over
-HTTP. Operational events (counts only) go to stderr.
+HTTP. Structured operational metadata goes to stderr.
 
 ## Other runtimes
 

@@ -518,6 +518,7 @@ describe("CAL FX versioning", () => {
       )!;
       expect(presentWireEvent(update).changedFields).toEqual([
         "currencyExchange",
+        "evidence",
       ]);
     } finally {
       db.close();
@@ -653,7 +654,10 @@ describe("CAL payment context through ingestion", () => {
       });
       await ingestRows(db, 2, [silent]);
       const retained = (await db.listTransactions())[0]!;
-      expect(retained).toMatchObject({ ...facts, version: original.version });
+      expect(retained).toMatchObject({
+        ...facts,
+        version: original.version + 1,
+      });
     } finally {
       db.close();
     }
@@ -688,7 +692,7 @@ describe("CAL payment context through ingestion", () => {
         authorizationMethod: null,
         threeDSecureUsed: null,
         cardPresent: false,
-        version: original.version,
+        version: original.version + 1,
       });
       expect(stored.details.issues).toContain("conflicting_payment_context");
       // A later read without evidence keeps the stored unknown.
@@ -719,7 +723,7 @@ describe("CAL payment context through ingestion", () => {
       expect(restored).toMatchObject({
         authorizationMethod: "online",
         threeDSecureUsed: true,
-        version: original.version,
+        version: kept.version + 1,
       });
       expect(restored.details.issues).not.toContain(
         "conflicting_payment_context",
