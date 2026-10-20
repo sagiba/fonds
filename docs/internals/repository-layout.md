@@ -53,8 +53,8 @@ kebab-case filenames. Add a provider under `providers/<name>/`, exporting its
 and wiring concrete implementations together. Each operation is defined once in
 `application/operations.ts`; HTTP routes, MCP tools and CLI commands derive from
 it. Within those dependencies, the
-[ESLint configuration](../../eslint.config.mjs) enforces static import
-boundaries, including type-only imports and re-exports, and
+[ESLint configuration](../../eslint.config.mjs) enforces import boundaries in
+every form, including type-only imports, re-exports and `import()`, and
 `tests/tooling/module-boundaries.test.mjs` verifies them:
 
 - Portable domain, application and provider modules may use local contracts, Zod
@@ -73,7 +73,7 @@ The SQLite schema, migration and manifest modules stay free of the native driver
 only the local opener imports `@libsql/client/sqlite3`, and Turso cannot import it.
 
 Target graph checks inspect the compiled graph, and web bundles reject concrete
-provider imports. The static rule does not detect dynamically constructed imports.
+provider imports. Dynamic imports need string-literal specifiers.
 Use direct module imports, `import type` and `.js` relative specifiers: NodeNext
 models the emitted ESM paths, so no path aliases or runtime barrels are needed.
 

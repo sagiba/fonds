@@ -41,6 +41,82 @@ const neonImports = {
     "Only deploy/neon may load Neon SDKs; source modules never import host recipes.",
 };
 
+/**
+ * `no-restricted-imports` checks only import and export declarations. This rule
+ * applies the same patterns to `import()` expressions and `import("…")` types,
+ * and rejects a specifier it cannot read, so a boundary holds for every form.
+ */
+const importExpressions = {
+  meta: {
+    type: "problem",
+    schema: [
+      {
+        type: "object",
+        properties: {
+          patterns: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                regex: { type: "string" },
+                message: { type: "string" },
+              },
+              required: ["regex", "message"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["patterns"],
+        additionalProperties: false,
+      },
+    ],
+    messages: {
+      restricted:
+        "'{{importSource}}' import is restricted from being used by a pattern. {{message}}",
+      computed:
+        "Use a string literal specifier so the import boundary can be checked.",
+    },
+  },
+  create(context) {
+    // no-restricted-imports compiles `regex` case-insensitively by default.
+    const patterns = context.options[0].patterns.map(({ regex, message }) => ({
+      matcher: new RegExp(regex, "iu"),
+      message,
+    }));
+
+    function check(node) {
+      const { source } = node;
+      const specifier =
+        source.type === "Literal" && typeof source.value === "string"
+          ? source.value
+          : source.type === "TemplateLiteral" && source.expressions.length === 0
+            ? source.quasis[0].value.cooked
+            : undefined;
+      if (specifier === undefined) {
+        context.report({ node: source, messageId: "computed" });
+        return;
+      }
+      const match = patterns.find(({ matcher }) => matcher.test(specifier));
+      if (match) {
+        context.report({
+          node: source,
+          messageId: "restricted",
+          data: { importSource: specifier, message: match.message },
+        });
+      }
+    }
+
+    return { ImportExpression: check, TSImportType: check };
+  },
+};
+
+function restrictedImports(patterns) {
+  return {
+    "no-restricted-imports": ["error", { patterns }],
+    "fonds/no-restricted-import-expressions": ["error", { patterns }],
+  };
+}
+
 const nodeGlobals = [
   "error",
   "Buffer",
@@ -72,6 +148,9 @@ export default defineConfig([
     plugins: {
       "@stylistic": stylistic,
       "simple-import-sort": simpleImportSort,
+      fonds: {
+        rules: { "no-restricted-import-expressions": importExpressions },
+      },
     },
     rules: {
       curly: ["error", "all"],
@@ -124,37 +203,26 @@ export default defineConfig([
   {
     files: ["src/domain/**/*.ts"],
     rules: {
-      "no-restricted-imports": [
-        "error",
-        { patterns: [portableImports, parentImports("")] },
-      ],
+      ...restrictedImports([portableImports, parentImports("")]),
       "no-restricted-globals": nodeGlobals,
     },
   },
   {
     files: ["src/domain/plans/*.ts"],
     rules: {
-      "no-restricted-imports": [
-        "error",
+      ...restrictedImports([
+        portableImports,
         {
-          patterns: [
-            portableImports,
-            {
-              regex: "^(?:\\.\\./){2}",
-              message: "Financial planners may import only the domain.",
-            },
-          ],
+          regex: "^(?:\\.\\./){2}",
+          message: "Financial planners may import only the domain.",
         },
-      ],
+      ]),
     },
   },
   {
     files: ["src/application/**/*.ts"],
     rules: {
-      "no-restricted-imports": [
-        "error",
-        { patterns: [portableImports, parentImports("domain/")] },
-      ],
+      ...restrictedImports([portableImports, parentImports("domain/")]),
       "no-restricted-globals": nodeGlobals,
     },
   },
@@ -162,20 +230,15 @@ export default defineConfig([
     files: ["src/providers/**/*.ts"],
     ignores: ["src/providers/**/node-*.ts"],
     rules: {
-      "no-restricted-imports": [
-        "error",
+      ...restrictedImports([
+        portableImports,
+        parentImports("\\.\\./domain/"),
         {
-          patterns: [
-            portableImports,
-            parentImports("\\.\\./domain/"),
-            {
-              regex: "(?:^|/)node-[^/]*\\.js$",
-              message:
-                "Portable provider code never imports a provider's Node module; runtime composes it.",
-            },
-          ],
+          regex: "(?:^|/)node-[^/]*\\.js$",
+          message:
+            "Portable provider code never imports a provider's Node module; runtime composes it.",
         },
-      ],
+      ]),
       "no-restricted-globals": nodeGlobals,
     },
   },
@@ -184,50 +247,40 @@ export default defineConfig([
     // only Node built-ins beyond the portable set.
     files: ["src/providers/**/node-*.ts"],
     rules: {
-      "no-restricted-imports": [
-        "error",
+      ...restrictedImports([
         {
-          patterns: [
-            {
-              regex: "^(?!\\.|node:|(?:zod|lossless-json)(?:/|$)).+",
-              message:
-                "A provider's Node module may import only Node built-ins, local modules, Zod and lossless-json.",
-            },
-            parentImports("\\.\\./domain/"),
-          ],
+          regex: "^(?!\\.|node:|(?:zod|lossless-json)(?:/|$)).+",
+          message:
+            "A provider's Node module may import only Node built-ins, local modules, Zod and lossless-json.",
         },
-      ],
+        parentImports("\\.\\./domain/"),
+      ]),
     },
   },
   {
     files: ["src/storage/**/*.ts"],
     rules: {
-      "no-restricted-imports": [
-        "error",
-        {
-          patterns: [
-            parentImports(
-              "\\.\\./(?:application|domain)/|(?:store|run-evidence|sql|migrations|collection-lease)\\.js$",
-            ),
-            neonImports,
-          ],
-        },
-      ],
+      ...restrictedImports([
+        parentImports(
+          "\\.\\./(?:application|domain)/|(?:store|run-evidence|sql|migrations|collection-lease)\\.js$",
+        ),
+        neonImports,
+      ]),
     },
   },
   {
     files: ["src/storage/*.ts", "src/transport/**/*.ts"],
     rules: {
-      "no-restricted-imports": [
-        "error",
-        { patterns: [parentImports("(?:application|domain)/"), neonImports] },
-      ],
+      ...restrictedImports([
+        parentImports("(?:application|domain)/"),
+        neonImports,
+      ]),
     },
   },
   {
     files: ["src/*.ts", "src/runtime/**/*.ts", "src/targets/**/*.ts"],
     rules: {
-      "no-restricted-imports": ["error", { patterns: [neonImports] }],
+      ...restrictedImports([neonImports]),
     },
   },
   {
@@ -240,24 +293,18 @@ export default defineConfig([
       "src/storage/statements.ts",
     ],
     rules: {
-      "no-restricted-imports": [
-        "error",
+      ...restrictedImports([
+        parentImports("(?:application|domain)/"),
         {
-          patterns: [
-            parentImports("(?:application|domain)/"),
-            {
-              regex: "^\\./(?:sqlite|postgres)/|^\\./(?:turso|d1)\\.js$",
-              message:
-                "Shared storage modules must not import concrete adapters.",
-            },
-            {
-              regex: "^(?!\\.|drizzle-orm$).+",
-              message:
-                "Shared storage code must not load database drivers or runtime modules.",
-            },
-          ],
+          regex: "^\\./(?:sqlite|postgres)/|^\\./(?:turso|d1)\\.js$",
+          message: "Shared storage modules must not import concrete adapters.",
         },
-      ],
+        {
+          regex: "^(?!\\.|drizzle-orm$).+",
+          message:
+            "Shared storage code must not load database drivers or runtime modules.",
+        },
+      ]),
       "no-restricted-globals": nodeGlobals,
     },
   },
@@ -287,26 +334,21 @@ export default defineConfig([
       "src/storage/sqlite/d1-statements.ts",
     ],
     rules: {
-      "no-restricted-imports": [
-        "error",
+      ...restrictedImports([
         {
-          patterns: [
-            {
-              regex: "^(?!\\.|drizzle-orm(?:/sqlite-core)?$).+",
-              message:
-                "SQLite statements must remain independent of native drivers.",
-            },
-            {
-              regex: "^\\./(?!(?:schema|statements)\\.js$)",
-              message:
-                "SQLite statements may import only the driver-free local schema and shared statements.",
-            },
-            parentImports(
-              "\\.\\./(?:application|domain)/|(?:run-evidence|sql)\\.js$",
-            ),
-          ],
+          regex: "^(?!\\.|drizzle-orm(?:/sqlite-core)?$).+",
+          message:
+            "SQLite statements must remain independent of native drivers.",
         },
-      ],
+        {
+          regex: "^\\./(?!(?:schema|statements)\\.js$)",
+          message:
+            "SQLite statements may import only the driver-free local schema and shared statements.",
+        },
+        parentImports(
+          "\\.\\./(?:application|domain)/|(?:run-evidence|sql)\\.js$",
+        ),
+      ]),
       "no-restricted-globals": nodeGlobals,
     },
   },
@@ -314,22 +356,17 @@ export default defineConfig([
     // libSQL reuses this SQLite-dialect schema without loading the native driver.
     files: ["src/storage/sqlite/schema.ts"],
     rules: {
-      "no-restricted-imports": [
-        "error",
+      ...restrictedImports([
         {
-          patterns: [
-            {
-              regex: "^(?!\\.|drizzle-orm/sqlite-core$).+",
-              message:
-                "The shared SQLite schema may import only its dialect and domain types.",
-            },
-            {
-              regex: "^\\.(?!\\./\\.\\./domain/)",
-              message: "Keep native SQLite modules out of the shared schema.",
-            },
-          ],
+          regex: "^(?!\\.|drizzle-orm/sqlite-core$).+",
+          message:
+            "The shared SQLite schema may import only its dialect and domain types.",
         },
-      ],
+        {
+          regex: "^\\.(?!\\./\\.\\./domain/)",
+          message: "Keep native SQLite modules out of the shared schema.",
+        },
+      ]),
       "no-restricted-globals": nodeGlobals,
     },
   },

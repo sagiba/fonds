@@ -2,6 +2,7 @@ import { ESLint } from "eslint";
 import { describe, expect, it } from "vitest";
 
 const eslint = new ESLint();
+const importExpressions = "fonds/no-restricted-import-expressions";
 
 async function ruleIds(filePath, code) {
   const [result] = await eslint.lintText(code, { filePath });
@@ -43,18 +44,22 @@ describe("module ownership", () => {
     ["src/providers/isracard/collect.ts", "node:http2"],
     ["src/providers/isracard/node-http.ts", "pg"],
     ["src/storage/sqlite/database.ts", "@neondatabase/auth/server"],
-  ])(
-    "rejects %s importing %s, including type-only imports",
-    async (file, source) => {
-      for (const code of [
-        `import { value } from "${source}";\n`,
-        `import type { Value } from "${source}";\n`,
-        `export { value } from "${source}";\n`,
-      ]) {
-        expect(await ruleIds(file, code)).toContain("no-restricted-imports");
-      }
-    },
-  );
+  ])("rejects %s importing %s in every import form", async (file, source) => {
+    for (const code of [
+      `import { value } from "${source}";\n`,
+      `import type { Value } from "${source}";\n`,
+      `export { value } from "${source}";\n`,
+    ]) {
+      expect(await ruleIds(file, code)).toContain("no-restricted-imports");
+    }
+    for (const code of [
+      `await import("${source}");\n`,
+      `await import(\`${source}\`);\n`,
+      `type Value = import("${source}").Value;\n`,
+    ]) {
+      expect(await ruleIds(file, code)).toContain(importExpressions);
+    }
+  });
 
   it.each([
     ["src/domain/records.ts", "./model.js"],
@@ -76,9 +81,19 @@ describe("module ownership", () => {
     ["src/providers/isracard/node-http.ts", "node:http2"],
     ["src/providers/isracard/node-http.ts", "./transport.js"],
   ])("allows %s to use its dependency %s", async (file, source) => {
-    expect(await ruleIds(file, `import { value } from "${source}";\n`)).toEqual(
-      [],
-    );
+    for (const code of [
+      `import { value } from "${source}";\n`,
+      `await import("${source}");\n`,
+      `type Value = import("${source}").Value;\n`,
+    ]) {
+      expect(await ruleIds(file, code)).toEqual([]);
+    }
+  });
+
+  it("rejects a dynamic import whose specifier cannot be checked", async () => {
+    expect(
+      await ruleIds("src/application/operations.ts", "await import(name);\n"),
+    ).toContain(importExpressions);
   });
 
   it.each([
