@@ -14,7 +14,7 @@ import {
   retainProviderEvidence,
 } from "../observations.js";
 import { inPerspective } from "../read-model.js";
-import type { Transaction } from "../records.js";
+import { nextVersion, type Transaction } from "../records.js";
 import { canonicalAnnotation, reviewBasis, reviewState } from "./annotation.js";
 import { FinancialPlan } from "./state.js";
 
@@ -69,13 +69,6 @@ export const removalSchema = z
     actor: z.string().trim().min(1).default("user"),
   })
   .strict();
-
-function nextVersion(version: number): number {
-  if (version >= Number.MAX_SAFE_INTEGER) {
-    throw new ConflictError("Version limit reached");
-  }
-  return version + 1;
-}
 
 const matchIssue = "possible_pending_posted_match";
 

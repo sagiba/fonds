@@ -11,9 +11,11 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 import {
   createApplication,
+  type OperationDefinition,
   operationDefinitions,
   type OperationInvoker,
 } from "../../src/application/operations.js";
@@ -25,6 +27,7 @@ import {
 } from "../../src/runtime/checkout.js";
 import { startNodeService } from "../../src/runtime/node-service.js";
 import {
+  operationFields,
   operationForCommand,
   operationInput,
   runOperationCli,
@@ -697,4 +700,124 @@ describe("operation commands", () => {
       expect(() => remoteOrigin(value), value).toThrow();
     }
   });
+});
+
+describe("operation flag schemas", () => {
+  const base = operationForCommand("list-connections")!;
+  const withInput = (shape: z.ZodRawShape): OperationDefinition => ({
+    ...base,
+    inputSchema: z.object(shape),
+  });
+
+  it("derives flags for every supported schema kind", () => {
+    const definition = withInput({
+      text: z.string(),
+      choice: z.enum(["a", "b"]),
+      count: z.number().int(),
+      enabled: z.boolean(),
+      version: z.union([z.number().int().positive(), z.literal(0)]),
+      same: z.union([z.string(), z.enum(["c"])]),
+      mixed: z.union([z.string(), z.number()]),
+      list: z.array(z.string()),
+      nested: z.object({ value: z.string() }),
+      map: z.record(z.string(), z.number()),
+      later: z.string().optional(),
+      fallback: z.number().default(1),
+      cleared: z.string().nullable(),
+      clearedLater: z.boolean().nullable().optional(),
+    });
+    expect(
+      operationFields(definition).map(({ key, kind, required, nullable }) => [
+        key,
+        kind,
+        required,
+        nullable,
+      ]),
+    ).toEqual([
+      ["text", "string", true, false],
+      ["choice", "string", true, false],
+      ["count", "number", true, false],
+      ["enabled", "boolean", true, false],
+      ["version", "number", true, false],
+      ["same", "string", true, false],
+      ["mixed", "json", true, false],
+      ["list", "json", true, false],
+      ["nested", "json", true, false],
+      ["map", "json", true, false],
+      ["later", "string", false, false],
+      ["fallback", "number", false, false],
+      ["cleared", "string", true, true],
+      ["clearedLater", "boolean", false, true],
+    ]);
+    expect(
+      operationInput(definition, {
+        text: "x",
+        choice: "a",
+        count: "-2",
+        enabled: "false",
+        version: "0",
+        same: "c",
+        mixed: "3",
+        list: '["y"]',
+        nested: '{"value":"z"}',
+        map: '{"k":1}',
+        cleared: "",
+        "cleared-later": "true",
+      }),
+    ).toEqual({
+      text: "x",
+      choice: "a",
+      count: -2,
+      enabled: false,
+      version: 0,
+      same: "c",
+      mixed: 3,
+      list: ["y"],
+      nested: { value: "z" },
+      map: { k: 1 },
+      cleared: null,
+      clearedLater: true,
+    });
+  });
+
+  it("derives flags for every operation", () => {
+    for (const definition of operationDefinitions) {
+      expect(() => operationFields(definition), definition.name).not.toThrow();
+    }
+  });
+
+  it.each([
+    ["pipe", z.string().transform((value) => value.length)],
+    ["date", z.date()],
+    ["bigint", z.bigint()],
+    ["unknown", z.unknown()],
+    ["readonly", z.array(z.string()).readonly()],
+    ["catch", z.string().catch("x")],
+    ["lazy", z.lazy(() => z.string())],
+    ["literal", z.literal("x")],
+    ["literal", z.union([z.number(), z.literal("x")])],
+    ["optional", z.union([z.number(), z.string().optional()])],
+  ])(
+    "rejects an unsupported %s schema before reading input",
+    async (kind, schema) => {
+      const definition = withInput({ field: schema });
+      const message = `Input field field uses a schema kind the command line does not support (${kind}).`;
+      expect(() => operationFields(definition)).toThrow(message);
+      expect(() => operationInput(definition, {})).toThrow(message);
+      const connect = vi.fn();
+      vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      try {
+        expect(
+          await runOperationCli({
+            definition,
+            args: ["--field", "1"],
+            connect,
+          }),
+        ).toBe(1);
+      } finally {
+        vi.restoreAllMocks();
+      }
+      expect(connect).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -1,3 +1,4 @@
+import { ConflictError } from "./errors.js";
 import type {
   AnnotationData,
   JsonObject,
@@ -74,6 +75,18 @@ export type Transaction = StoredTransactionFacts & {
   version: number;
   supersededById: string | null;
 };
+
+/**
+ * The version after `version`, for every write that changes a transaction or
+ * annotation version. Versions are exact JSON numbers, so a record at the
+ * largest safe integer cannot change again.
+ */
+export function nextVersion(version: number): number {
+  if (version >= Number.MAX_SAFE_INTEGER) {
+    throw new ConflictError("Version limit reached");
+  }
+  return version + 1;
+}
 
 export interface Annotation {
   transactionId: string;

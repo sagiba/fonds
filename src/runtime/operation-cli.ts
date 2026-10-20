@@ -68,16 +68,21 @@ interface Field {
   nullable: boolean;
 }
 
-function definitionOf(schema: z.ZodType) {
-  return (schema as unknown as { def: Record<string, unknown> }).def;
-}
+/** Zod's published union of its schema kinds, discriminated by `def.type`. */
+type Schema = z.core.$ZodTypes;
 
-function fieldOf(key: string, schema: z.ZodType): Field {
+/**
+ * The schema kinds a flag can carry. A field may wrap its value in `optional`,
+ * `default` or `nullable`; the value kind decides how the flag's text is read.
+ * Any other kind throws while flags are derived, before input is read, so a new
+ * schema shape cannot be parsed the wrong way.
+ */
+function fieldOf(key: string, schema: Schema): Field {
   let required = true;
   let nullable = false;
   let current = schema;
   for (;;) {
-    const def = definitionOf(current);
+    const { def } = current._zod;
     if (def.type === "optional" || def.type === "default") {
       required = false;
     } else if (def.type === "nullable") {
@@ -85,13 +90,19 @@ function fieldOf(key: string, schema: z.ZodType): Field {
     } else {
       break;
     }
-    current = def.innerType as z.ZodType;
+    current = def.innerType as Schema;
   }
-  return { key, flag: kebab(key), kind: kindOf(current), required, nullable };
+  return {
+    key,
+    flag: kebab(key),
+    kind: valueKind(key, current),
+    required,
+    nullable,
+  };
 }
 
-function kindOf(schema: z.ZodType): FieldKind {
-  const def = definitionOf(schema);
+function valueKind(key: string, schema: Schema): FieldKind {
+  const { def } = schema._zod;
   switch (def.type) {
     case "string":
     case "enum":
@@ -101,26 +112,30 @@ function kindOf(schema: z.ZodType): FieldKind {
     case "boolean":
       return "boolean";
     case "literal":
-      return (def.values as unknown[]).every(
-        (value) => typeof value === "number",
-      )
-        ? "number"
-        : "json";
+      if (def.values.every((value) => typeof value === "number")) {
+        return "number";
+      }
+      break;
     case "union": {
       const kinds = new Set(
-        (def.options as z.ZodType[]).map((option) => kindOf(option)),
+        def.options.map((option) => valueKind(key, option as Schema)),
       );
       return kinds.size === 1 ? [...kinds][0]! : "json";
     }
-    default:
+    case "array":
+    case "object":
+    case "record":
       return "json";
   }
+  throw new Error(
+    `Input field ${key} uses a schema kind the command line does not support (${def.type}).`,
+  );
 }
 
 /** Flags are the operation's input fields in kebab case; the schema stays the authority. */
 export function operationFields(definition: OperationDefinition): Field[] {
   return Object.entries(definition.inputSchema.shape).map(([key, schema]) =>
-    fieldOf(key, schema as z.ZodType),
+    fieldOf(key, schema as Schema),
   );
 }
 
@@ -304,13 +319,11 @@ function parseOperationArgs(
   args: string[],
   globalOptions: Readonly<Record<string, { type: "string" | "boolean" }>>,
 ) {
+  // Derived outside the try: an unsupported schema is not an argument error.
+  const options = { ...operationOptions(definition), ...globalOptions };
   try {
-    return parseArgs({
-      args,
-      allowPositionals: false,
-      strict: true,
-      options: { ...operationOptions(definition), ...globalOptions },
-    }).values as Record<string, string | boolean | undefined>;
+    return parseArgs({ args, allowPositionals: false, strict: true, options })
+      .values as Record<string, string | boolean | undefined>;
   } catch {
     throw new CommandInputError(
       `Invalid arguments. Use ${kebab(definition.name)} --help for its flags.`,
