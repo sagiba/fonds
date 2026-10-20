@@ -25,7 +25,7 @@ Report suspected vulnerabilities as [SECURITY.md](../SECURITY.md) describes.
   native schedule, the function routes
   `/internal/triggers/recent` ahead of the Host/Origin guard and accepts it only
   with Neon's reserved platform attestation header, a valid envelope naming the
-  `cal-hourly` trigger, a scheduled timestamp and at most 8 KiB of JSON
+  `scheduled-refresh` trigger, a scheduled timestamp and at most 8 KiB of JSON
   ([Neon runbook](guides/neon-deployment.md)). Webhook delivery refuses non-public
   network addresses. On Node hosts, auth rate limits key on a
   [client address](guides/hosted-service.md#client-addresses) from the connection

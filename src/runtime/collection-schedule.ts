@@ -47,8 +47,7 @@ function scheduleHours(value: string | undefined) {
   if (text === "daily") {
     return "daily";
   }
-  // `enabled` is the legacy Neon value; it keeps its hourly cadence.
-  if (text === "hourly" || text === "enabled") {
+  if (text === "hourly") {
     return "hourly";
   }
   // Anything with a digit or comma is meant as an hour list; other words are off.
@@ -79,7 +78,7 @@ function timeZoneName(value: string | undefined) {
 
 /**
  * The configured schedule, or undefined when scheduled collection is off:
- * absent or any value other than `daily`, `hourly`, `enabled` or an hour list.
+ * absent or any value other than `daily`, `hourly` or an hour list.
  * `missingTime` explains how this host obtains `FONDS_COLLECTION_TIME`.
  */
 export function parseCollectionSchedule(

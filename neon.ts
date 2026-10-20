@@ -111,8 +111,8 @@ export default defineConfig({
   },
   triggers: {
     // The name is the trigger's identity: renaming it adds a second trigger
-    // instead of updating this one. The route and job are provider neutral.
-    "cal-hourly": {
+    // instead of updating this one.
+    "scheduled-refresh": {
       type: "schedule",
       function: "fonds",
       // A disabled trigger keeps the cron it was declared with.
