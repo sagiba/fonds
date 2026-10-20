@@ -58,6 +58,19 @@ describe("fonds serve on PostgreSQL", () => {
       database,
       "The transport is stdio, or omitted for HTTP.",
     ],
+    ["an empty port", ["serve", "--port", ""], database, "Invalid port."],
+    [
+      "an out-of-range port",
+      ["serve", "--hosted", "--port", "65536"],
+      { ...database, FONDS_PUBLIC_ORIGIN: "https://fonds.example" },
+      "Invalid port.",
+    ],
+    [
+      "a port with stdio",
+      ["serve", "--transport", "stdio", "--port", "8787"],
+      database,
+      "--port applies to HTTP",
+    ],
     [
       "an unknown flag",
       ["serve", "--db", "ledger.sqlite"],

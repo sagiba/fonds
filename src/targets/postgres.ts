@@ -92,7 +92,7 @@ FONDS_PUBLIC_ORIGIN for remote clients: OAuth, Events and scheduled collection.
 
 /** Fixed messages for `fonds serve` arguments the PostgreSQL backend rejects. */
 function serveConflict(
-  values: { hosted?: boolean; transport?: string },
+  values: { hosted?: boolean; transport?: string; port?: string },
   env: NodeJS.ProcessEnv,
 ): string | undefined {
   if (values.transport !== undefined && values.transport !== "stdio") {
@@ -100,6 +100,16 @@ function serveConflict(
   }
   if (values.hosted && values.transport) {
     return "--hosted serves HTTP; stdio is always local.";
+  }
+  // The SQLite server's port rules: decimal, in range, and HTTP only.
+  if (
+    values.port !== undefined &&
+    (!/^[0-9]+$/.test(values.port) || Number(values.port) > 65535)
+  ) {
+    return "Invalid port.";
+  }
+  if (values.port !== undefined && values.transport) {
+    return "--port applies to HTTP, not stdio.";
   }
   if (values.hosted && !env.FONDS_PUBLIC_ORIGIN) {
     return "--hosted needs FONDS_PUBLIC_ORIGIN, the service's public origin.";
