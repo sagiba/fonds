@@ -12,6 +12,7 @@ COPY scripts ./scripts
 COPY src ./src
 COPY deploy/sqlite ./deploy/sqlite
 COPY deploy/postgres ./deploy/postgres
+COPY tests/providers/cal/fixtures/recent-01.json tests/providers/cal/fixtures/recent-02.json ./tests/providers/cal/fixtures/
 RUN node scripts/build-targets.mjs sqlite postgres
 
 # The hosted service: OAuth issuer, API/MCP, scheduled collection and Events.
@@ -36,9 +37,9 @@ FROM node:24.22.0-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf745
 ENV NODE_ENV=production FONDS_HOME=/data
 WORKDIR /app
 COPY --from=build /src/dist/targets/sqlite/ ./
-COPY deploy/sqlite/fonds /usr/local/bin/fonds
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
   && npm cache clean --force \
+  && ln -s /app/fonds.mjs /usr/local/bin/fonds \
   && install -d -m 0700 -o node -g node /data
 USER node
 WORKDIR /data

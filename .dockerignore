@@ -10,3 +10,5 @@
 !src/
 !deploy/sqlite/
 !deploy/postgres/
+!tests/providers/cal/fixtures/recent-01.json
+!tests/providers/cal/fixtures/recent-02.json

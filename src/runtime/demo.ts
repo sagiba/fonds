@@ -21,10 +21,12 @@ const DEMO_CAPTURES = [
 
 /**
  * The committed synthetic CAL fixtures, found relative to this module in a
- * checkout, its `dist/` build, or a bundled target.
+ * bundled target, which carries copies in `demo/`, or in a checkout and its
+ * `dist/` build.
  */
 function demoFixtures(moduleUrl: string): URL {
   for (const candidate of [
+    "./demo/",
     "../../tests/providers/cal/fixtures/",
     "../../../tests/providers/cal/fixtures/",
   ]) {
@@ -34,7 +36,7 @@ function demoFixtures(moduleUrl: string): URL {
     }
   }
   throw new CommandInputError(
-    "The demo data is not part of this build; run demo from a source checkout.",
+    "The demo data is not part of this build; run demo from a source checkout or a packaged release.",
   );
 }
 
