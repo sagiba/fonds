@@ -95,7 +95,7 @@ export function encodeTransaction(row: Transaction): StoredRow {
     merchantPhone: details.merchant.phone,
     merchantCity: details.merchant.city ?? null,
     merchantCountryCode: details.merchant.countryCode ?? null,
-    additionalInformation: details.additionalInformation
+    additionalInformation: details.additionalInformation?.length
       ? sortedEvidence(details.additionalInformation)
       : null,
     currencyExchange: details.currencyExchange ?? null,
@@ -176,7 +176,7 @@ export function decodeTransaction(input: {
           ? {}
           : { countryCode: merchantCountryCode }),
       },
-      ...(additionalInformation === null ? {} : { additionalInformation }),
+      ...(additionalInformation?.length ? { additionalInformation } : {}),
       ...(currencyExchange === null ? {} : { currencyExchange }),
       sourceRefs: input.observation.sourceRefs,
       issues: sourceIssues,

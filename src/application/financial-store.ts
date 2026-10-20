@@ -156,6 +156,8 @@ export interface InternalStore
     id: string,
     adapter: SourceAdapter,
     onDiagnostic?: SyncDiagnosticSink,
+    /** Attribute a recovered run's committed results to this executing refresh. */
+    refreshId?: string,
   ): Promise<SyncResult>;
   updateConfig(
     id: string,

@@ -4,7 +4,10 @@ import {
   consumerSchema,
   cursorFor,
 } from "../application/change-delivery.js";
-import type { LockedCollectionStore } from "../application/collection-lock.js";
+import {
+  type LockedCollectionStore,
+  ManualRecoveryRequiredError,
+} from "../application/collection-lock.js";
 import {
   connectionInputSchema,
   type InternalStore,
@@ -229,7 +232,7 @@ export function lockedCollectionStore<Db>(
     updateConfig: store.updateConfig,
     ledgerRevision: store.ledgerRevision,
     updateRefresh: store.updateRefresh,
-    async recoverPendingRuns(adapter, onDiagnostic) {
+    async recoverPendingRuns(adapter, onDiagnostic, refreshId) {
       signal.throwIfAborted();
       const pending = await db.execute(
         statements.pendingRuns(db.root, connectionId, 101),
@@ -238,12 +241,14 @@ export function lockedCollectionStore<Db>(
         pending.length > 100 ||
         pending.some((run) => run.parserVersion !== adapter.parserVersion)
       ) {
-        throw new Error("Archived collection requires manual recovery");
+        throw new ManualRecoveryRequiredError();
       }
       const results: SyncResult[] = [];
       for (const run of pending) {
         signal.throwIfAborted();
-        results.push(await store.applyRun(run.id, adapter, onDiagnostic));
+        results.push(
+          await store.applyRun(run.id, adapter, onDiagnostic, refreshId),
+        );
       }
       return results;
     },
@@ -436,7 +441,15 @@ function buildStore<Db>(
           throw new NotFoundError("Refresh not found");
         }
         const { window, counts, ...fields } = progress;
-        const set = { ...fields, ...counts };
+        const cumulative = counts && { ...counts };
+        if (cumulative) {
+          for (const key of Object.keys(
+            cumulative,
+          ) as (keyof typeof cumulative)[]) {
+            cumulative[key] = Math.max(row[key], cumulative[key]);
+          }
+        }
+        const set = { ...fields, ...cumulative };
         await commit(tx, connection, [
           ...(Object.keys(set).length
             ? [statements.updateRefresh(tx, id, set)]
@@ -657,6 +670,7 @@ function buildStore<Db>(
     id: string,
     adapter: SourceAdapter,
     onDiagnostic?: SyncDiagnosticSink,
+    executionRefreshId?: string,
   ): Promise<SyncResult> {
     const emit = syncDiagnostics(onDiagnostic);
     const ids = syncCorrelationIds({ captureId: id });
@@ -669,7 +683,9 @@ function buildStore<Db>(
     const { run: archived, connection } = stored;
     Object.assign(
       ids,
-      syncCorrelationIds({ refreshId: archived.refreshId ?? undefined }),
+      syncCorrelationIds({
+        refreshId: executionRefreshId ?? archived.refreshId ?? undefined,
+      }),
     );
     if (connection.provider !== adapter.provider) {
       throw new Error("Connection provider mismatch");
@@ -778,7 +794,62 @@ function buildStore<Db>(
           stage: "commit",
           outcome: "started",
         });
+        const refreshId = executionRefreshId ?? run.refreshId;
+        const refresh = refreshId
+          ? (await statements.refresh(tx, refreshId))[0]
+          : undefined;
+        if (refreshId && (!refresh || refresh.connectionId !== connection.id)) {
+          throw new Error("Run refresh does not belong to its connection");
+        }
+        const captures = run.snapshot.responses.length;
+        const delta = {
+          captures,
+          observed: result.observed ?? 0,
+          unchangedTransactions: result.unchanged ?? 0,
+          created: result.created,
+          updated: result.updated,
+          unlisted: result.unlisted,
+          failures: result.status === "completed" ? 0 : 1,
+          unchanged:
+            result.status === "completed" &&
+            result.created === 0 &&
+            result.updated === 0 &&
+            result.unlisted === 0 &&
+            result.observed !== undefined &&
+            result.unchanged === result.observed
+              ? captures
+              : 0,
+        };
+        const refreshCounts = { ...delta };
+        if (refresh) {
+          for (const key of Object.keys(delta) as (keyof typeof delta)[]) {
+            refreshCounts[key] += refresh[key];
+            if (!Number.isSafeInteger(refreshCounts[key])) {
+              throw new Error("Refresh count exhausted");
+            }
+          }
+        }
         await savePlan(tx, plan, id, [
+          ...(refresh
+            ? [
+                statements.updateRefresh(tx, refresh.id, {
+                  ...refreshCounts,
+                  failureCodes: [
+                    ...new Set([
+                      ...refresh.failureCodes,
+                      ...(result.failureCode ? [result.failureCode] : []),
+                    ]),
+                  ].sort(),
+                  requiresAttention:
+                    refresh.requiresAttention ||
+                    (run.snapshot.failures ?? []).some(
+                      (failure) =>
+                        failure.code === "authentication_failed" ||
+                        failure.code === "authentication_challenge",
+                    ),
+                }),
+              ]
+            : []),
           ...[...new Map(deferred.map((row) => [row.id, row])).values()].map(
             (row) => statements.upsertDeferredEvidence(tx, row),
           ),

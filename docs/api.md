@@ -148,7 +148,7 @@ A refresh records one connection's manual or scheduled collection.
 | `range`                                | A backfill's inclusive `{from, to}`, or `null` for the recent window.                                                                              |
 | `scheduledAt`                          | A scheduled refresh's occurrence time, otherwise `null`.                                                                                           |
 | `createdAt`, `startedAt`, `finishedAt` | Acceptance, first execution and finish; the last two `null` until then.                                                                            |
-| `requiresAttention`                    | Provider authentication needs the owner.                                                                                                           |
+| `requiresAttention`                    | Collection needs operator attention.                                                                                                               |
 | `counts`                               | Cumulative observation and change counts, including retries.                                                                                       |
 | `failureCodes`                         | Reconciliation codes met, at most `"implausible_empty"`.                                                                                           |
 | `failureReason`                        | `expired` when it was still unfinished a day after `createdAt`; otherwise `null`.                                                                  |

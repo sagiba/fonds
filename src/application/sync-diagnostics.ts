@@ -46,12 +46,14 @@ export const syncDiagnosticSchema = z.object({
       "cancelled",
       "persistence_failure",
       "pending_runs_recovered",
+      "manual_recovery_required",
       "retry",
       "budget",
       "lease_busy",
       "execution_failed",
     ])
     .optional(),
+  requiresAttention: z.boolean().optional(),
   durationMs: count.optional(),
   counts: z
     .object({

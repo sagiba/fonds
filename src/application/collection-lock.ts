@@ -29,6 +29,7 @@ export interface LockedCollectionStore
   recoverPendingRuns(
     adapter: SourceAdapter,
     onDiagnostic?: SyncDiagnosticSink,
+    refreshId?: string,
   ): Promise<SyncResult[]>;
 }
 
@@ -46,4 +47,11 @@ export interface CollectionLock {
     connectionId: string,
     work: (store: LockedCollectionStore, signal: AbortSignal) => Promise<T>,
   ): Promise<CollectionLockAttempt<T>>;
+}
+
+/** Recovery needs an operator to select compatible archived evidence. */
+export class ManualRecoveryRequiredError extends Error {
+  constructor() {
+    super("Archived collection requires manual recovery");
+  }
 }

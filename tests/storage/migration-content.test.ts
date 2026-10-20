@@ -289,7 +289,7 @@ for (const postgres of [false, true]) {
             const company = generation === "digital" ? "77" : "11";
             const accountKey = `isracard:card:${JSON.stringify([company, "1234"])}`;
             const scope = {
-              kind: "recent",
+              kind: "recent" as const,
               month: "2040-07",
               cardKey: accountKey,
             };

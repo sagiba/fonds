@@ -226,6 +226,16 @@ UPDATE transaction_posting_links SET posting_link_json=pg_temp.fonds_json_restor
   pg_temp.fonds_unique_strings(pg_temp.fonds_project_evidence(
     pg_temp.fonds_json_safe(posting_link_json)#>'{pending,details,issues}','["scalar","set"]'::json)))::text)
   WHERE posting_link_json IS NOT NULL;
+-- No explanatory strings and an absent explanation both mean no additional information.
+UPDATE transactions SET additional_information_json=NULL
+  WHERE CASE WHEN json_typeof(pg_temp.fonds_json_safe(additional_information_json))='array'
+    THEN json_array_length(pg_temp.fonds_json_safe(additional_information_json))=0 ELSE false END;
+UPDATE transaction_posting_links SET posting_link_json=pg_temp.fonds_json_restore(pg_temp.fonds_set_json_path(
+  pg_temp.fonds_json_safe(posting_link_json),ARRAY['pending','details'],
+  (SELECT json_object_agg(key,value) FROM json_each(pg_temp.fonds_json_safe(posting_link_json)#>'{pending,details}')
+    WHERE key<>'additionalInformation'))::text)
+  WHERE CASE WHEN json_typeof(pg_temp.fonds_json_safe(posting_link_json)#>'{pending,details,additionalInformation}')='array'
+    THEN json_array_length(pg_temp.fonds_json_safe(posting_link_json)#>'{pending,details,additionalInformation}')=0 ELSE false END;
 DROP TABLE _fonds_evidence_shapes;
 ALTER TABLE transactions DROP COLUMN details_json;
 ALTER TABLE transactions DROP COLUMN last_seen_at;

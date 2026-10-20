@@ -5,9 +5,10 @@ import {
   collectFromStore,
   type CollectionSummary,
 } from "../application/collection.js";
-import type {
-  CollectionLock,
-  LockedCollectionStore,
+import {
+  type CollectionLock,
+  type LockedCollectionStore,
+  ManualRecoveryRequiredError,
 } from "../application/collection-lock.js";
 import type { InternalStore } from "../application/financial-store.js";
 import {
@@ -16,7 +17,6 @@ import {
   monthWindows,
   type Refresh,
   REFRESH_MAX_AGE_MS,
-  type RefreshCounts,
   type RefreshStartResult,
   type RefreshTrigger,
   skippedRefresh,
@@ -62,11 +62,6 @@ const STOPPING_CODES: ReadonlySet<CollectionFailure["code"]> = new Set([
   "rate_limited",
   "budget_exhausted",
 ]);
-/** The provider needs the owner: ordinary refreshes stop until an operator retry. */
-const ATTENTION_CODES: ReadonlySet<CollectionFailure["code"]> = new Set([
-  "authentication_failed",
-  "authentication_challenge",
-]);
 
 export interface RefreshStart {
   trigger: RefreshTrigger;
@@ -100,20 +95,6 @@ export interface RefreshServiceOptions {
 }
 
 type Outcome = "done" | "yielded" | "busy" | "interrupted";
-
-function add(counts: RefreshCounts, summary: CollectionSummary) {
-  return {
-    captures: counts.captures + summary.captures,
-    observed: counts.observed + summary.observed,
-    unchangedTransactions:
-      counts.unchangedTransactions + summary.unchangedTransactions,
-    unlisted: counts.unlisted + summary.unlisted,
-    unchanged: counts.unchanged + summary.unchanged,
-    failures: counts.failures + summary.failures,
-    created: counts.created + summary.created,
-    updated: counts.updated + summary.updated,
-  };
-}
 
 /** Completed when every window completed; failed when none yielded evidence. */
 function rangeStatus(statuses: readonly WindowStatus[]) {
@@ -280,7 +261,18 @@ export function createRefreshService(options: RefreshServiceOptions) {
     }
     let counts = current.counts;
     let failureCodes = current.failureCodes;
-    let requiresAttention = false;
+    let requiresAttention: boolean = current.requiresAttention;
+    const reloadProgress = async () => {
+      const persisted = await locked.getRefresh(id);
+      if (!persisted) {
+        throw new Error("Refresh progress disappeared");
+      }
+      counts = persisted.counts;
+      failureCodes = persisted.failureCodes;
+      requiresAttention = persisted.requiresAttention;
+    };
+    let recovering = false;
+    let recoveryStarted = 0;
     await locked.updateRefresh(id, {
       status: "running",
       startedAt: current.startedAt ?? now,
@@ -295,14 +287,17 @@ export function createRefreshService(options: RefreshServiceOptions) {
       if (collector.provider !== target.adapter.provider) {
         throw new Error("Collector does not match the adapter");
       }
-      const recoveryStarted = performance.now();
+      recoveryStarted = performance.now();
+      recovering = true;
       emit({
         event: "fonds_sync",
         refreshId: id,
         stage: "recovery",
         outcome: "started",
       });
-      const replayed = await locked.recoverPendingRuns(target.adapter, log);
+      const replayed = await locked.recoverPendingRuns(target.adapter, log, id);
+      await reloadProgress();
+      recovering = false;
       emit({
         event: "fonds_sync",
         refreshId: id,
@@ -312,20 +307,17 @@ export function createRefreshService(options: RefreshServiceOptions) {
         durationMs: elapsedMs(recoveryStarted),
         counts: { recoveredRuns: replayed.length },
       });
-      if (replayed.length) {
-        counts = replayed.reduce(
-          (total, result) => ({
-            ...total,
-            observed: total.observed + (result.observed ?? 0),
-            unchangedTransactions:
-              total.unchangedTransactions + (result.unchanged ?? 0),
-            unlisted: total.unlisted + result.unlisted,
-            created: total.created + result.created,
-            updated: total.updated + result.updated,
-          }),
+      if (requiresAttention) {
+        await locked.updateRefresh(id, {
+          status: current.range
+            ? rangeStatus(current.windows.map((window) => window.status))
+            : "failed",
+          finishedAt: new Date().toISOString(),
           counts,
-        );
-        await locked.updateRefresh(id, { counts });
+          failureCodes,
+          requiresAttention,
+        });
+        return "done";
       }
       const statuses = new Map(
         current.windows.map((window) => [window.from, window.status]),
@@ -365,22 +357,13 @@ export function createRefreshService(options: RefreshServiceOptions) {
           },
           watched(collector, (code) => {
             stop ||= STOPPING_CODES.has(code);
-            requiresAttention ||= ATTENTION_CODES.has(code);
           }),
           target.adapter,
         );
-        counts = add(counts, summary);
-        failureCodes = [
-          ...new Set([...failureCodes, ...(summary.failureCodes ?? [])]),
-        ].sort();
-        // Retried units add new observations, but committed financial writes must
-        // remain counted even when their window still needs to be completed.
+        await reloadProgress();
+        // Financial commits already own these counts; a retried unit creates new
+        // observations without charging its previous application twice.
         if (signal.aborted) {
-          await locked.updateRefresh(id, {
-            counts,
-            failureCodes,
-            requiresAttention,
-          });
           return "interrupted";
         }
         if (window) {
@@ -411,8 +394,35 @@ export function createRefreshService(options: RefreshServiceOptions) {
         }
       }
       status = current.range ? rangeStatus([...statuses.values()]) : recent;
-    } catch {
-      if (signal.aborted) {
+    } catch (error) {
+      // Some captures may have committed before a later capture or recovery failed.
+      await reloadProgress();
+      const manualRecovery = error instanceof ManualRecoveryRequiredError;
+      if (manualRecovery) {
+        requiresAttention = true;
+      }
+      const interrupted = signal.aborted && !manualRecovery;
+      if (recovering) {
+        emit({
+          event: "fonds_sync",
+          refreshId: id,
+          stage: "recovery",
+          outcome: interrupted ? "interrupted" : "failed",
+          reason: manualRecovery
+            ? "manual_recovery_required"
+            : interrupted
+              ? "cancelled"
+              : "persistence_failure",
+          requiresAttention,
+          failureCategory: manualRecovery
+            ? "collection"
+            : interrupted
+              ? "execution"
+              : "persistence",
+          durationMs: elapsedMs(recoveryStarted),
+        });
+      }
+      if (interrupted) {
         return "interrupted";
       }
       // Raw provider and driver errors can hold financial data or credentials.

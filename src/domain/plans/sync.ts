@@ -1419,7 +1419,10 @@ export function finishTransactionContent(
     }
     if (changed) {
       changedIds.add(id);
-      current.version = Math.max(current.version, nextVersion(previous.version));
+      current.version = Math.max(
+        current.version,
+        nextVersion(previous.version),
+      );
       if (!posting) {
         plan.event({
           transactionId: id,

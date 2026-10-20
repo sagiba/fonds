@@ -591,6 +591,7 @@ describe("local SQLite service integration", () => {
       });
       await insertTransaction(db.orm, {
         ...input,
+        counterpartyName: input.counterpartyName ?? null,
         ...parsedLedgerFacts(input),
         ...storedPaymentContext(input, undefined),
         cardId: null,

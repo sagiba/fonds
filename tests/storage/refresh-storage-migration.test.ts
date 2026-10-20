@@ -898,6 +898,7 @@ for (const backend of [
           };
           const reversed = Object.fromEntries(Object.entries(source).reverse());
           const row = transaction("origins", "ordinary");
+          row.details.additionalInformation = [];
           row.details.provider = {
             isracard: {
               rows: [source, reversed, source, reversed],
@@ -970,6 +971,37 @@ for (const backend of [
           ];
           const migrated = (await db.read(row.id))[0]!;
           expect(migrated.details.provider.isracard!.rows).toEqual(expected);
+          expect(migrated.details.additionalInformation).toBeUndefined();
+          expect(
+            migrated.details.postingLink!.pending.details.additionalInformation,
+          ).toBeUndefined();
+          expect(
+            (
+              await db.query(
+                "SELECT additional_information_json FROM transactions WHERE id=?",
+                [row.id],
+              )
+            )[0]!.additional_information_json,
+          ).toBeNull();
+          const fresh = {
+            ...migrated,
+            id: "empty-new",
+            sourceKey: "empty-new",
+            details: { ...migrated.details, additionalInformation: [] },
+          };
+          await db.write(fresh);
+          expect(
+            (await db.read(fresh.id))[0]!.details.additionalInformation,
+          ).toBeUndefined();
+          expect(
+            (
+              await db.query(
+                "SELECT additional_information_json FROM transactions WHERE id=?",
+                [fresh.id],
+              )
+            )[0]!.additional_information_json,
+          ).toBeNull();
+
           expect(
             migrated.details.postingLink!.pending.details.provider.isracard!
               .rows,

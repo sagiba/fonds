@@ -72,7 +72,7 @@ erDiagram
   transactions o|--o{ transactions : superseded_by_id
 ```
 
-Foreign keys cascade only where migrations specify. Accounts, cards and transactions each carry `UNIQUE (connection_id, id)`,
+Foreign keys cascade where migrations specify. Accounts, cards and transactions each carry `UNIQUE (connection_id, id)`,
 so a composite foreign key can only reference a row of the same connection. An
 event always has a connection and may have no transaction or run (an owner action
 has no source run). A card's `billing_account_id` is the account that pays its

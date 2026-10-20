@@ -243,6 +243,12 @@ UPDATE transaction_posting_links SET posting_link_json=json_set(posting_link_jso
   SELECT r.document FROM _fonds_evidence_results r JOIN _fonds_evidence_inputs i ON i.id=r.input_id
   WHERE i.target='posting_source_issues' AND i.row_id=transaction_posting_links.transaction_id)))
   WHERE posting_link_json IS NOT NULL;
+-- No explanatory strings and an absent explanation both mean no additional information.
+UPDATE transactions SET additional_information_json=NULL
+  WHERE json_type(additional_information_json)='array' AND json_array_length(additional_information_json)=0;
+UPDATE transaction_posting_links SET posting_link_json=json_remove(posting_link_json,'$.pending.details.additionalInformation')
+  WHERE json_type(posting_link_json,'$.pending.details.additionalInformation')='array'
+    AND json_array_length(posting_link_json,'$.pending.details.additionalInformation')=0;
 DROP TABLE _fonds_isracard_pairs;
 DROP TABLE _fonds_isracard_origin_nodes;
 DROP TABLE _fonds_isracard_row_nodes;

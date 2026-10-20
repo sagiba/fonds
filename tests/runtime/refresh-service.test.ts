@@ -28,14 +28,14 @@ import { row, synthetic } from "../helpers/storage-harness.js";
 const connectionId = "refresh-connection";
 const range = { from: "2040-01-15", to: "2040-03-10" };
 
-function capture(sourceKey: string): CollectionEvent {
+function capture(sourceKey: string, amountMinor = -100): CollectionEvent {
   return {
     type: "capture",
     capture: {
       accountKey: "account",
       endpoint: "synthetic",
       capturedAt: new Date().toISOString(),
-      responseText: JSON.stringify([row(sourceKey)]),
+      responseText: JSON.stringify([row(sourceKey, { amountMinor })]),
     },
   };
 }
@@ -399,6 +399,222 @@ describe("refresh service", () => {
         (event) => event.type === "transaction.imported",
       ),
     ).toHaveLength(1);
+  });
+
+  it("keeps committed counts when a later capture fails and charges recovery to its executing refresh once", async () => {
+    await db.client.execute(
+      "CREATE TRIGGER interrupt_second_capture BEFORE INSERT ON transactions WHEN NEW.amount_minor = -200 BEGIN SELECT RAISE(ABORT, 'private-second-capture-failure'); END",
+    );
+    const first = service(async () =>
+      source(async function* () {
+        yield capture("committed-first");
+        yield capture("pending-second", -200);
+      }),
+    );
+    const [failed] = await first.wait([
+      await first.start(connectionId, { trigger: "manual", operator: true }),
+    ]);
+    expect(failed!.refresh).toMatchObject({
+      status: "failed",
+      counts: { captures: 1, observed: 1, created: 1, failures: 1 },
+    });
+    const pending = (await db.listSyncRuns(connectionId, { limit: 10 })).find(
+      (run) => run.status === "started",
+    )!;
+    await db.client.execute("DROP TRIGGER interrupt_second_capture");
+    const report = createSyncDiagnosticReport();
+    const resumed = service(
+      async () =>
+        source(async function* () {
+          yield capture("pending-second", -200);
+        }),
+      { log: report.log },
+    );
+    const [finished] = await resumed.wait([
+      await resumed.start(connectionId, { trigger: "manual", operator: true }),
+    ]);
+    expect(finished!.refresh).toMatchObject({
+      status: "completed",
+      counts: {
+        captures: 2,
+        observed: 2,
+        created: 1,
+        updated: 0,
+        unchanged: 1,
+        unchangedTransactions: 1,
+        failures: 0,
+      },
+    });
+    expect((await db.getRefresh(failed!.refresh!.id))!.counts).toEqual(
+      failed!.refresh!.counts,
+    );
+    expect(report.report().entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          refreshId: finished!.refresh!.id,
+          captureId: pending.id,
+          stage: "commit",
+          outcome: "completed",
+        }),
+      ]),
+    );
+    await db.applyRun(pending.id, synthetic, undefined, finished!.refresh!.id);
+    expect((await db.getRefresh(finished!.refresh!.id))!.counts).toEqual(
+      finished!.refresh!.counts,
+    );
+  });
+
+  it("preserves counts from earlier recovered runs when a later recovery throws", async () => {
+    await db.client.execute(
+      "CREATE TRIGGER stage_recovery_runs BEFORE INSERT ON transactions BEGIN SELECT RAISE(ABORT, 'synthetic-stage-recovery'); END",
+    );
+    for (const [key, amount] of [
+      ["recover-first", -100],
+      ["recover-second", -200],
+    ] as const) {
+      const event = capture(key, amount) as Extract<
+        CollectionEvent,
+        { type: "capture" }
+      >;
+      await expect(
+        db.ingestRun(
+          {
+            runId: crypto.randomUUID(),
+            connectionId,
+            responses: [event.capture],
+          },
+          synthetic,
+        ),
+      ).rejects.toThrow();
+    }
+    await db.client.execute("DROP TRIGGER stage_recovery_runs");
+    await db.client.execute(
+      "CREATE TRIGGER interrupt_second_recovery BEFORE INSERT ON transactions WHEN NEW.amount_minor = -200 BEGIN SELECT RAISE(ABORT, 'private-second-recovery-failure'); END",
+    );
+    const collect = vi.fn(async function* () {
+      yield capture("never-collected");
+    });
+    const report = createSyncDiagnosticReport();
+    const refreshes = service(async () => source(collect), { log: report.log });
+    const [result] = await refreshes.wait([
+      await refreshes.start(connectionId, {
+        trigger: "manual",
+        operator: true,
+      }),
+    ]);
+    expect(result!.refresh).toMatchObject({
+      status: "failed",
+      counts: { captures: 1, observed: 1, created: 1, failures: 1 },
+    });
+    expect(collect).not.toHaveBeenCalled();
+    expect(
+      (await db.listTransactions()).map((transaction) => transaction.sourceKey),
+    ).toEqual(["recover-first"]);
+    expect(report.report().entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          stage: "recovery",
+          outcome: "failed",
+          reason: "persistence_failure",
+          requiresAttention: false,
+        }),
+      ]),
+    );
+    expect(JSON.stringify(report.report())).not.toContain("private-");
+  });
+
+  it("finishes recovered authentication failures without requesting further provider data", async () => {
+    await db.client.execute(
+      "CREATE TRIGGER stage_authentication_failure BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT, 'synthetic-stage-authentication'); END",
+    );
+    await expect(
+      db.ingestRun(
+        {
+          runId: crypto.randomUUID(),
+          connectionId,
+          responses: [],
+          failures: [
+            {
+              accountKey: null,
+              endpoint: "collection",
+              code: "authentication_failed",
+            },
+          ],
+        },
+        synthetic,
+      ),
+    ).rejects.toThrow();
+    await db.client.execute("DROP TRIGGER stage_authentication_failure");
+    const collect = vi.fn(async function* () {
+      yield capture("must-not-request-after-auth-failure");
+    });
+    const refreshes = service(async () => source(collect));
+    const [result] = await refreshes.wait([
+      await refreshes.start(connectionId, {
+        trigger: "manual",
+        operator: true,
+      }),
+    ]);
+    expect(result!.refresh).toMatchObject({
+      status: "failed",
+      requiresAttention: true,
+      counts: { failures: 1, captures: 0, created: 0, observed: 0 },
+    });
+    expect(collect).not.toHaveBeenCalled();
+  });
+
+  it("reports parser-incompatible pending evidence as a bounded manual recovery block", async () => {
+    await db.client.execute(
+      "CREATE TRIGGER stage_incompatible_capture BEFORE INSERT ON transactions BEGIN SELECT RAISE(ABORT, 'synthetic-stage-incompatible'); END",
+    );
+    const event = capture("incompatible") as Extract<
+      CollectionEvent,
+      { type: "capture" }
+    >;
+    await expect(
+      db.ingestRun(
+        {
+          runId: crypto.randomUUID(),
+          connectionId,
+          responses: [event.capture],
+        },
+        { ...synthetic, parserVersion: "private-incompatible-parser-version" },
+      ),
+    ).rejects.toThrow();
+    await db.client.execute("DROP TRIGGER stage_incompatible_capture");
+    const collect = vi.fn(async function* () {
+      yield capture("never-requested");
+    });
+    const report = createSyncDiagnosticReport();
+    const refreshes = service(async () => source(collect), { log: report.log });
+    const [result] = await refreshes.wait([
+      await refreshes.start(connectionId, {
+        trigger: "manual",
+        operator: true,
+      }),
+    ]);
+    expect(result!.refresh).toMatchObject({
+      status: "failed",
+      requiresAttention: true,
+      counts: { captures: 0, created: 0, observed: 0, failures: 1 },
+    });
+    expect(report.report().entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          refreshId: result!.refresh!.id,
+          stage: "recovery",
+          outcome: "failed",
+          reason: "manual_recovery_required",
+          requiresAttention: true,
+          failureCategory: "collection",
+        }),
+      ]),
+    );
+    expect(collect).not.toHaveBeenCalled();
+    expect(
+      (await refreshes.start(connectionId, { trigger: "manual" })).reason,
+    ).toBe("requires_attention");
+    expect(JSON.stringify(report.report())).not.toContain("private-");
   });
 
   it("answers a start that meets an active refresh at once, ahead of the cooldown", async () => {

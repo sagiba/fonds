@@ -74,7 +74,7 @@ describe.each(backends)("%s optional collection failures", (backend) => {
   async function saved(runId: string) {
     const result = (
       await db.raw(
-        "SELECT snapshot_json AS snapshot, coverage_json AS coverage, warnings_json AS warnings, status FROM sync_runs WHERE id = ?",
+        "SELECT metadata_json AS snapshot, coverage_json AS coverage, warnings_json AS warnings, status FROM sync_runs WHERE id = ?",
         [runId],
       )
     )[0]!;
@@ -161,6 +161,85 @@ describe.each(backends)("%s optional collection failures", (backend) => {
     expect(await db.listTransactions()).toHaveLength(1);
   });
 
+  it("keeps annotated financial content quiet when only an optional detail fetch fails", async () => {
+    await db.ingestRun(
+      { connectionId, runId: "baseline", responses: [response(1)] },
+      synthetic,
+    );
+    const original = (await db.listTransactions())[0]!;
+    const annotation = await db.editAnnotation({
+      transactionId: original.id,
+      expectedVersion: 0,
+      notes: "Keep the financial owner note",
+    });
+    const cursor = await db.latestEventId();
+    const input = {
+      connectionId,
+      runId: "optional-only-change",
+      responses: [response(2)],
+      failures: [optionalFailure()],
+    };
+    expect(await db.ingestRun(input, synthetic)).toMatchObject({
+      status: "partial",
+      observed: 1,
+      unchanged: 1,
+      created: 0,
+      updated: 0,
+      unlisted: 0,
+    });
+    expect(await db.getTransaction(original.id)).toMatchObject({
+      id: original.id,
+      amountMinor: original.amountMinor,
+      currency: original.currency,
+      version: original.version,
+      presence: "seen",
+      annotation,
+      lastSeenRunId: input.runId,
+    });
+    expect(await saved(input.runId)).toMatchObject({
+      coverage: [
+        expect.objectContaining({
+          status: "posted",
+          success: true,
+          comparable: true,
+        }),
+        expect.objectContaining({
+          status: "pending",
+          success: true,
+          comparable: true,
+        }),
+      ],
+      warnings: ["network_error"],
+      snapshot: { failures: [optionalFailure()] },
+    });
+    const events = await db.listEvents({ after: cursor });
+    expect(events.map((event) => event.type)).toEqual(["sync.partial"]);
+    expect(await db.ingestRun(input, synthetic)).toMatchObject({
+      replayed: true,
+    });
+    expect(await db.listEvents({ after: cursor })).toEqual(events);
+    expect(
+      await db.ingestRun(
+        { connectionId, runId: "healthy-repeat", responses: [response(3)] },
+        synthetic,
+      ),
+    ).toMatchObject({
+      status: "completed",
+      created: 0,
+      updated: 0,
+      unlisted: 0,
+      unchanged: 1,
+    });
+    expect(
+      (await db.listEvents({ after: cursor })).filter(
+        (event) =>
+          event.type.startsWith("transaction.") ||
+          event.type === "sync.failed" ||
+          event.type === "sync.recovered",
+      ),
+    ).toEqual([]);
+  });
+
   it("keeps mandatory failed scopes until real recovery and never adds an optional account-null health failure", async () => {
     await db.ingestRun(
       {
@@ -232,7 +311,7 @@ describe.each(backends)("%s optional collection failures", (backend) => {
     ).toMatchObject({ status: "failed", failures: 2 });
     expect(continued).toBe(false);
     const runs = await db.raw(
-      "SELECT snapshot_json AS snapshot, coverage_json AS coverage, warnings_json AS warnings FROM sync_runs",
+      "SELECT metadata_json AS snapshot, coverage_json AS coverage, warnings_json AS warnings FROM sync_runs",
     );
     const optional = runs.map((run) => ({
       snapshot: decode(run.snapshot),
