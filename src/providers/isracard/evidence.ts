@@ -1,6 +1,7 @@
 import type { JsonObject, JsonValue } from "../../domain/model.js";
 import { canonicalJson } from "../../domain/observations.js";
 import {
+  evidenceList,
   evidenceObject,
   type EvidenceShape,
   mergeDeclaredEvidence,
@@ -127,14 +128,44 @@ export function projectIsracardState(value: JsonObject): JsonObject {
 
 export function retainIsracardEvidence(value: JsonObject): JsonObject {
   const result: JsonObject = {};
+  // Older records copied each raw row into an observation with its extraction origin.
+  // Match those complete copies before dropping them; source keys alone cannot prove origin.
+  const origins = new Map<
+    string,
+    { generations: ("digital" | "legacy")[]; used: number }
+  >();
+  for (const observation of evidenceList(value.observations)) {
+    if (
+      !observation ||
+      typeof observation !== "object" ||
+      Array.isArray(observation) ||
+      (observation.generation !== "digital" &&
+        observation.generation !== "legacy") ||
+      !observation.row ||
+      typeof observation.row !== "object" ||
+      Array.isArray(observation.row)
+    ) {
+      continue;
+    }
+    const key = canonicalJson(observation.row);
+    const entry = origins.get(key) ?? { generations: [], used: 0 };
+    entry.generations.push(observation.generation);
+    origins.set(key, entry);
+  }
+  for (const entry of origins.values()) {
+    entry.generations.sort();
+  }
   if (Object.hasOwn(value, "rows")) {
     result.rows = Array.isArray(value.rows)
       ? sortedEvidence(
-          value.rows.map((row) =>
-            row && typeof row === "object" && !Array.isArray(row)
-              ? isracardRowEvidence(row)
-              : projectEvidence(row, {}),
-          ),
+          value.rows.map((row) => {
+            if (!row || typeof row !== "object" || Array.isArray(row)) {
+              return projectEvidence(row, {});
+            }
+            const entry = origins.get(canonicalJson(row));
+            const generation = entry?.generations[entry.used++];
+            return isracardRowEvidence(row, generation);
+          }),
         )
       : projectEvidence(value.rows, [{}]);
   }

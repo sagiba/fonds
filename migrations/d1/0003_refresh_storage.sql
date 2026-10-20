@@ -95,26 +95,80 @@ INSERT INTO _fonds_evidence_inputs(target,row_id,document,shape)
   SELECT 'posting_source_issues',transaction_id,
     json_extract(posting_link_json,'$.pending.details.issues'),'["scalar","set"]'
   FROM transaction_posting_links WHERE posting_link_json IS NOT NULL;
+-- Pair saved row copies to source rows before dropping the copies. Upstream row
+-- properties never supply an origin; only Fonds-created observation wrappers do.
+CREATE TABLE _fonds_isracard_rows AS
+  SELECT i.id AS input_id,c.key AS row_index,c.json -> c.fullkey AS document
+  FROM _fonds_evidence_inputs i JOIN json_each(i.document,'$.isracard.rows') c
+  WHERE i.target IN ('source','posting') AND json_type(i.document,'$.isracard.rows')='array';
+CREATE TABLE _fonds_isracard_origins AS
+  SELECT i.id AS input_id,o.key AS wrapper_index,json_extract(o.json -> o.fullkey,'$.generation') AS generation,
+    (o.json -> o.fullkey) -> '$.row' AS document
+  FROM _fonds_evidence_inputs i JOIN transactions t ON i.target='source' AND i.row_id=t.id
+    JOIN json_each(t.details_json,'$.provider.isracard.observations') o
+  WHERE json_type(t.details_json,'$.provider.isracard.observations')='array' AND
+    json_extract(o.json -> o.fullkey,'$.generation') IN ('digital','legacy') AND json_type(o.json -> o.fullkey,'$.row')='object'
+  UNION ALL
+  SELECT i.id,o.key,json_extract(o.json -> o.fullkey,'$.generation'),(o.json -> o.fullkey) -> '$.row'
+  FROM _fonds_evidence_inputs i JOIN transaction_posting_links t ON i.target='posting' AND i.row_id=t.transaction_id
+    JOIN json_each(t.posting_link_json,'$.pending.details.provider.isracard.observations') o
+  WHERE json_type(t.posting_link_json,'$.pending.details.provider.isracard.observations')='array' AND
+    json_extract(o.json -> o.fullkey,'$.generation') IN ('digital','legacy') AND json_type(o.json -> o.fullkey,'$.row')='object';
+CREATE TABLE _fonds_isracard_row_nodes AS
+  SELECT r.input_id,r.row_index,n.fullkey,n.type,
+    CASE WHEN n.type IN ('object','array') THEN NULL ELSE n.json -> n.fullkey END AS atom
+  FROM _fonds_isracard_rows r JOIN json_tree(r.document) n;
+CREATE TABLE _fonds_isracard_origin_nodes AS
+  SELECT r.input_id,r.wrapper_index,n.fullkey,n.type,
+    CASE WHEN n.type IN ('object','array') THEN NULL ELSE n.json -> n.fullkey END AS atom
+  FROM _fonds_isracard_origins r JOIN json_tree(r.document) n;
+CREATE INDEX _fonds_isracard_row_node_keys ON _fonds_isracard_row_nodes(input_id,row_index);
+CREATE INDEX _fonds_isracard_origin_node_keys ON _fonds_isracard_origin_nodes(input_id,wrapper_index);
+CREATE TABLE _fonds_isracard_pairs AS
+SELECT r.input_id,r.row_index,(SELECT generation FROM (
+  SELECT o.generation,row_number() OVER (ORDER BY o.generation COLLATE BINARY,o.wrapper_index) AS occurrence
+  FROM _fonds_isracard_origins o WHERE o.input_id=r.input_id AND
+      NOT EXISTS (SELECT fullkey,type,atom FROM _fonds_isracard_origin_nodes WHERE input_id=o.input_id AND wrapper_index=o.wrapper_index EXCEPT SELECT fullkey,type,atom FROM _fonds_isracard_row_nodes WHERE input_id=r.input_id AND row_index=r.row_index)
+      AND NOT EXISTS (SELECT fullkey,type,atom FROM _fonds_isracard_row_nodes WHERE input_id=r.input_id AND row_index=r.row_index EXCEPT SELECT fullkey,type,atom FROM _fonds_isracard_origin_nodes WHERE input_id=o.input_id AND wrapper_index=o.wrapper_index)
+) WHERE occurrence=(SELECT count(*) FROM _fonds_isracard_rows e
+  WHERE e.input_id=r.input_id AND e.row_index<=r.row_index AND
+      NOT EXISTS (SELECT fullkey,type,atom FROM _fonds_isracard_row_nodes WHERE input_id=e.input_id AND row_index=e.row_index EXCEPT SELECT fullkey,type,atom FROM _fonds_isracard_row_nodes WHERE input_id=r.input_id AND row_index=r.row_index)
+      AND NOT EXISTS (SELECT fullkey,type,atom FROM _fonds_isracard_row_nodes WHERE input_id=r.input_id AND row_index=r.row_index EXCEPT SELECT fullkey,type,atom FROM _fonds_isracard_row_nodes WHERE input_id=e.input_id AND row_index=e.row_index))) AS generation
+FROM _fonds_isracard_rows r;
+UPDATE _fonds_evidence_inputs SET document=json_set(document,'$.isracard.rows',json((
+  SELECT json_group_array(json(value)) FROM (
+    SELECT json_object('row',json(r.document),'generation',p.generation) AS value
+    FROM _fonds_isracard_rows r JOIN _fonds_isracard_pairs p
+      ON p.input_id=r.input_id AND p.row_index=r.row_index
+    WHERE r.input_id=_fonds_evidence_inputs.id ORDER BY r.row_index))))
+  WHERE target IN ('source','posting') AND json_type(document,'$.isracard.rows')='array';
 CREATE TABLE _fonds_evidence_nodes AS
 WITH RECURSIVE nodes(input_id,path,parent,key,depth,document,shape) AS (
   SELECT id,'$',NULL,NULL,0,document,shape FROM _fonds_evidence_inputs
   UNION ALL
   SELECT n.input_id,n.path||substr(c.fullkey,2),n.path,c.key,n.depth+1,
-    c.json -> c.fullkey,
     CASE WHEN s.type='text' AND s.value='@isracard_row' THEN
-      (SELECT shape FROM _fonds_evidence_shapes WHERE name=CASE WHEN
-        json_type(c.json -> c.fullkey,'$.confirmationLocation') IS NOT NULL OR
-        json_type(c.json -> c.fullkey,'$.seqConfirmationNumber') IS NOT NULL OR
-        json_type(c.json -> c.fullkey,'$.confirmationTimeStamp') IS NOT NULL OR
-        json_type(c.json -> c.fullkey,'$.confirmationNumber') IS NOT NULL OR
-        json_type(c.json -> c.fullkey,'$.currencyIso') IS NOT NULL OR
-        json_type(c.json -> c.fullkey,'$.currencySimbol') IS NOT NULL OR
-        json_type(c.json -> c.fullkey,'$.israelTransactionTime') IS NOT NULL
+      (c.json -> c.fullkey) -> '$.row' ELSE c.json -> c.fullkey END,
+    CASE WHEN s.type='text' AND s.value='@isracard_row' THEN
+      (SELECT shape FROM _fonds_evidence_shapes WHERE name=CASE
+        WHEN json_extract(c.json -> c.fullkey,'$.generation') IN ('digital','legacy')
+          THEN json_extract(c.json -> c.fullkey,'$.generation') WHEN
+        json_type((c.json -> c.fullkey) -> '$.row','$.voucherNumberRatz') IS NOT NULL OR
+        json_type((c.json -> c.fullkey) -> '$.row','$.voucherNumberRatzOutbound') IS NOT NULL THEN 'legacy' WHEN
+        json_type((c.json -> c.fullkey) -> '$.row','$.seqVoucherNumber') IS NOT NULL OR
+        json_type((c.json -> c.fullkey) -> '$.row','$.billingAmount') IS NOT NULL THEN 'digital' WHEN
+        json_type((c.json -> c.fullkey) -> '$.row','$.confirmationLocation') IS NOT NULL OR
+        json_type((c.json -> c.fullkey) -> '$.row','$.seqConfirmationNumber') IS NOT NULL OR
+        json_type((c.json -> c.fullkey) -> '$.row','$.confirmationTimeStamp') IS NOT NULL OR
+        json_type((c.json -> c.fullkey) -> '$.row','$.confirmationNumber') IS NOT NULL OR
+        json_type((c.json -> c.fullkey) -> '$.row','$.currencyIso') IS NOT NULL OR
+        json_type((c.json -> c.fullkey) -> '$.row','$.currencySimbol') IS NOT NULL OR
+        json_type((c.json -> c.fullkey) -> '$.row','$.israelTransactionTime') IS NOT NULL
         THEN 'approval' WHEN
-        json_type(c.json -> c.fullkey,'$.seqVoucherNumber') IS NOT NULL OR
-        json_type(c.json -> c.fullkey,'$.billingAmount') IS NOT NULL OR
-        json_type(c.json -> c.fullkey,'$.businessName') IS NOT NULL OR
-        json_type(c.json -> c.fullkey,'$.transactionCode') IS NOT NULL
+        json_type((c.json -> c.fullkey) -> '$.row','$.seqVoucherNumber') IS NOT NULL OR
+        json_type((c.json -> c.fullkey) -> '$.row','$.billingAmount') IS NOT NULL OR
+        json_type((c.json -> c.fullkey) -> '$.row','$.businessName') IS NOT NULL OR
+        json_type((c.json -> c.fullkey) -> '$.row','$.transactionCode') IS NOT NULL
         THEN 'digital' ELSE 'legacy' END)
       ELSE s.json -> s.fullkey END
   FROM nodes n JOIN json_each(n.document) c JOIN json_each(n.shape) s ON
@@ -189,6 +243,11 @@ UPDATE transaction_posting_links SET posting_link_json=json_set(posting_link_jso
   SELECT r.document FROM _fonds_evidence_results r JOIN _fonds_evidence_inputs i ON i.id=r.input_id
   WHERE i.target='posting_source_issues' AND i.row_id=transaction_posting_links.transaction_id)))
   WHERE posting_link_json IS NOT NULL;
+DROP TABLE _fonds_isracard_pairs;
+DROP TABLE _fonds_isracard_origin_nodes;
+DROP TABLE _fonds_isracard_row_nodes;
+DROP TABLE _fonds_isracard_origins;
+DROP TABLE _fonds_isracard_rows;
 DROP TABLE _fonds_evidence_results;
 DROP TABLE _fonds_evidence_nodes;
 DROP TABLE _fonds_evidence_inputs;

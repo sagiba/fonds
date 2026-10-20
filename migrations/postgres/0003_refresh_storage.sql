@@ -91,10 +91,17 @@ LANGUAGE sql AS $function$
 $function$;
 CREATE FUNCTION pg_temp.fonds_project_evidence(document json, declaration json) RETURNS json
 LANGUAGE plpgsql AS $function$
-DECLARE projected text;
+DECLARE projected text; paired_generation text;
 BEGIN
   IF json_typeof(declaration)='string' AND declaration #>> '{}'='@isracard_row' THEN
+    paired_generation := document->>'generation';
+    document := document->'row';
+    IF paired_generation IN ('digital','legacy') THEN
+      SELECT shape INTO declaration FROM pg_temp._fonds_evidence_shapes WHERE name=paired_generation;
+    ELSE
     SELECT shape INTO declaration FROM pg_temp._fonds_evidence_shapes WHERE name=CASE WHEN
+      document->'voucherNumberRatz' IS NOT NULL OR document->'voucherNumberRatzOutbound' IS NOT NULL THEN 'legacy' WHEN
+      document->'seqVoucherNumber' IS NOT NULL OR document->'billingAmount' IS NOT NULL THEN 'digital' WHEN
       document->'confirmationLocation' IS NOT NULL OR
       document->'seqConfirmationNumber' IS NOT NULL OR
       document->'confirmationTimeStamp' IS NOT NULL OR
@@ -106,6 +113,7 @@ BEGIN
       document->'seqVoucherNumber' IS NOT NULL OR document->'billingAmount' IS NOT NULL OR
       document->'businessName' IS NOT NULL OR document->'transactionCode' IS NOT NULL
       THEN 'digital' ELSE 'legacy' END;
+    END IF;
   END IF;
   CASE json_typeof(document)
   WHEN 'object' THEN
@@ -134,6 +142,47 @@ LANGUAGE sql AS $function$
       ELSE pg_temp.fonds_set_json_path(value,path[2:],replacement) END ELSE value END)
   FROM json_each(document)
 $function$;
+-- Compare complete saved source statements independently of object property order.
+CREATE FUNCTION pg_temp.fonds_raw_json_key(document json) RETURNS text
+LANGUAGE plpgsql AS $function$
+DECLARE result text;
+BEGIN
+  CASE json_typeof(document)
+  WHEN 'object' THEN
+    SELECT '{'||coalesce(string_agg(to_json(key)::text||':'||pg_temp.fonds_raw_json_key(value),
+      ',' ORDER BY key COLLATE "C"),'')||'}' INTO result FROM json_each(document);
+    RETURN result;
+  WHEN 'array' THEN
+    SELECT '['||coalesce(string_agg(pg_temp.fonds_raw_json_key(value),',' ORDER BY ordinal),'')||']'
+      INTO result FROM json_array_elements(document) WITH ORDINALITY entries(value,ordinal);
+    RETURN result;
+  ELSE RETURN document::text;
+  END CASE;
+END $function$;
+-- Generated wrappers are migration state, never upstream properties of a row.
+CREATE FUNCTION pg_temp.fonds_pair_isracard_rows(document json, origin_copies json) RETURNS json
+LANGUAGE plpgsql AS $function$
+DECLARE source_row record; row_key text; occurrence bigint; paired_generation text; wrapped text := '';
+BEGIN
+  IF json_typeof(document->'isracard'->'rows') IS DISTINCT FROM 'array' THEN RETURN document; END IF;
+  IF json_typeof(origin_copies) IS DISTINCT FROM 'array' THEN origin_copies := '[]'::json; END IF;
+  FOR source_row IN SELECT value,ordinal FROM json_array_elements(document->'isracard'->'rows') WITH ORDINALITY entries(value,ordinal)
+  LOOP
+    paired_generation := NULL;
+    IF json_array_length(origin_copies)>0 THEN
+      row_key := pg_temp.fonds_raw_json_key(source_row.value);
+      SELECT count(*) INTO occurrence FROM json_array_elements(document->'isracard'->'rows') WITH ORDINALITY entries(value,ordinal)
+        WHERE ordinal<=source_row.ordinal AND pg_temp.fonds_raw_json_key(value)=row_key;
+      SELECT value->>'generation' INTO paired_generation FROM json_array_elements(origin_copies) WITH ORDINALITY entries(value,ordinal)
+        WHERE value->>'generation' IN ('digital','legacy') AND json_typeof(value->'row')='object'
+          AND pg_temp.fonds_raw_json_key(value->'row')=row_key
+        ORDER BY (value->>'generation') COLLATE "C",ordinal OFFSET occurrence-1 LIMIT 1;
+    END IF;
+    IF wrapped<>'' THEN wrapped := wrapped||','; END IF;
+    wrapped := wrapped||json_build_object('row',source_row.value,'generation',paired_generation)::text;
+  END LOOP;
+  RETURN pg_temp.fonds_set_json_path(document,ARRAY['isracard','rows'],('['||wrapped||']')::json);
+END $function$;
 -- Issue codes are a set; keep their canonical order while removing repeated strings.
 CREATE FUNCTION pg_temp.fonds_unique_strings(document json) RETURNS json
 LANGUAGE sql AS $function$
@@ -143,10 +192,14 @@ LANGUAGE sql AS $function$
     GROUP BY value::text) distinct_codes
 $function$;
 UPDATE transactions SET provider_json=pg_temp.fonds_json_restore(pg_temp.fonds_project_evidence(
-  pg_temp.fonds_json_safe(provider_json),(SELECT shape FROM _fonds_evidence_shapes WHERE name='source'))::text);
+  pg_temp.fonds_pair_isracard_rows(pg_temp.fonds_json_safe(provider_json),
+    pg_temp.fonds_json_safe(details_json)#>'{provider,isracard,observations}'),
+  (SELECT shape FROM _fonds_evidence_shapes WHERE name='source'))::text);
 UPDATE transaction_posting_links SET posting_link_json=pg_temp.fonds_json_restore(pg_temp.fonds_set_json_path(
   pg_temp.fonds_json_safe(posting_link_json),ARRAY['pending','details','provider'],
-  pg_temp.fonds_project_evidence(pg_temp.fonds_json_safe(posting_link_json)#>'{pending,details,provider}',
+  pg_temp.fonds_project_evidence(pg_temp.fonds_pair_isracard_rows(
+    pg_temp.fonds_json_safe(posting_link_json)#>'{pending,details,provider}',
+    pg_temp.fonds_json_safe(posting_link_json)#>'{pending,details,provider,isracard,observations}'),
     (SELECT shape FROM _fonds_evidence_shapes WHERE name='combined')))::text) WHERE posting_link_json IS NOT NULL;
 UPDATE transaction_reconciliation SET provider_identity_json=pg_temp.fonds_json_restore(pg_temp.fonds_project_evidence(
   pg_temp.fonds_json_safe(provider_identity_json),(SELECT shape FROM _fonds_evidence_shapes WHERE name='identity'))::text) WHERE provider_identity_json IS NOT NULL;

@@ -561,6 +561,25 @@ for (const backend of [
             currencyMapping: "convention",
             undeclared: "discard",
           };
+          const legacySourceRow: JsonObject = {
+            voucherNumberRatz: "legacy-2",
+            dealSum: "2",
+            currentPaymentCurrency: { undeclared: "discard" },
+            seqVoucherNumber: "discard",
+            currencyIso: "discard",
+            undeclared: "discard",
+            origin: "digital",
+            generation: "digital",
+          };
+          const digitalSourceRow: JsonObject = {
+            seqVoucherNumber: "digital-2",
+            billingAmount: "1",
+            voucherNumberRatz: "discard",
+            currencyIso: "discard",
+            undeclared: "discard",
+            origin: "legacy",
+            generation: "legacy",
+          };
           const rawIsracard: JsonObject = {
             rows: [
               {
@@ -574,23 +593,9 @@ for (const backend of [
                 confirmationNumber: "SYNTHETIC-DISPLAY",
                 undeclared: "discard",
               },
-              {
-                voucherNumberRatz: "legacy-2",
-                dealSum: "2",
-                currentPaymentCurrency: { undeclared: "discard" },
-                undeclared: "discard",
-              },
-              {
-                seqVoucherNumber: "digital-2",
-                billingAmount: "1",
-                voucherNumberRatz: "discard",
-                undeclared: "discard",
-              },
-              {
-                voucherNumberRatz: "discard",
-                dealSum: "discard",
-                businessName: "digital-detection",
-              },
+              legacySourceRow,
+              digitalSourceRow,
+              { businessName: "digital-detection" },
             ],
             detail: {
               address: "nul\u0000literal\\u0000",
@@ -610,12 +615,14 @@ for (const backend of [
               {
                 generation: "digital",
                 path: "$.second",
-                row: { undeclared: "discard" },
+                row: Object.fromEntries(
+                  Object.entries(digitalSourceRow).reverse(),
+                ),
               },
               {
                 generation: "legacy",
                 path: "$.first",
-                row: { undeclared: "discard" },
+                row: legacySourceRow,
               },
             ],
             monetaryEvidence: {
@@ -846,6 +853,127 @@ for (const backend of [
           expect(
             String(operational[0]!.provider_observations_json),
           ).not.toContain('"row"');
+        } finally {
+          await db.close();
+        }
+      });
+      it("pairs complete saved copies by value and consumes origin occurrences without merging statements", async () => {
+        const db = await subject(postgres, d1);
+        try {
+          await db.query(
+            "INSERT INTO connections(id,provider,display_name,config_json,created_at) VALUES (?,?,?,?,?)",
+            [
+              "synthetic",
+              "isracard",
+              "Synthetic",
+              '{"schemaVersion":1}',
+              instant,
+            ],
+          );
+          await db.query(
+            `INSERT INTO sync_runs(id,connection_id,started_at,status,collector_version,parser_version,snapshot_json,${postgres ? "metadata_json," : ""}coverage_json,warnings_json) VALUES (?,?,?,?,?,?,?${postgres ? ",?" : ""},?,?)`,
+            [
+              "run",
+              "synthetic",
+              instant,
+              "completed",
+              "synthetic",
+              "synthetic",
+              '{"schemaVersion":1,"responses":[]}',
+              ...(postgres ? ['{"responses":[],"failures":[]}'] : []),
+              "[]",
+              "[]",
+            ],
+          );
+          const source = {
+            seqVoucherNumber: "DIGITAL",
+            voucherNumberRatz: "LEGACY",
+            billingAmount: "1",
+            paymentSum: "2",
+            businessName: "Digital\u0000literal\\u0000",
+            fullSupplierNameHeb: "Legacy",
+            origin: "legacy",
+            generation: "legacy",
+            undeclared: { noise: true },
+          };
+          const reversed = Object.fromEntries(Object.entries(source).reverse());
+          const row = transaction("origins", "ordinary");
+          row.details.provider = {
+            isracard: {
+              rows: [source, reversed, source, reversed],
+              observations: [
+                { generation: "legacy", row: reversed, path: "$.legacy" },
+                { generation: "digital", row: source, path: "$.digital-1" },
+                { generation: "unsupported", row: source, path: "$.ignored" },
+                { generation: "digital", row: reversed, path: "$.digital-2" },
+                null,
+                "ignored",
+                { generation: "legacy", row: [] },
+                { generation: "legacy", row: { unmatched: true } },
+              ],
+            },
+          };
+          const pending = structuredClone(row);
+          pending.id = "origin-pending";
+          row.details.postingLink = {
+            schemaVersion: 1,
+            policyVersion: "synthetic",
+            automatic: false,
+            postedId: "retired",
+            pending: { ...pending, status: "pending", supersededById: null },
+            pendingKeys: ["origin-pending"],
+            postedKeys: ["retired"],
+            evidence: { runId: "run", capturedAt: instant },
+          };
+          await db.query(
+            "INSERT INTO transactions(id,connection_id,source_scope,source_key,source_aliases_json,identity_strength,status,presence,kind,amount_basis,details_json,first_seen_at,last_seen_at,last_seen_run_id,version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [
+              row.id,
+              row.connectionId,
+              row.sourceScope,
+              row.sourceKey,
+              "[]",
+              row.identityStrength,
+              row.status,
+              row.presence,
+              row.kind,
+              row.amountBasis,
+              JSON.stringify(row.details),
+              instant,
+              instant,
+              "run",
+              1,
+            ],
+          );
+          await db.migrate();
+          const expected = [
+            {
+              seqVoucherNumber: "DIGITAL",
+              billingAmount: "1",
+              businessName: "Digital\u0000literal\\u0000",
+            },
+            {
+              seqVoucherNumber: "DIGITAL",
+              billingAmount: "1",
+              businessName: "Digital\u0000literal\\u0000",
+            },
+            {
+              voucherNumberRatz: "LEGACY",
+              paymentSum: "2",
+              fullSupplierNameHeb: "Legacy",
+            },
+            {
+              voucherNumberRatz: "LEGACY",
+              paymentSum: "2",
+              fullSupplierNameHeb: "Legacy",
+            },
+          ];
+          const migrated = (await db.read(row.id))[0]!;
+          expect(migrated.details.provider.isracard!.rows).toEqual(expected);
+          expect(
+            migrated.details.postingLink!.pending.details.provider.isracard!
+              .rows,
+          ).toEqual(expected);
         } finally {
           await db.close();
         }

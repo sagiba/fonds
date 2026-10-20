@@ -15,6 +15,128 @@ import {
 import { extractIsracard } from "../../../src/providers/isracard/extract.js";
 
 describe("Isracard retained evidence", () => {
+  it("uses matching legacy row copies to preserve recorded origins despite opposite-family source noise", () => {
+    const digital = {
+      seqVoucherNumber: "DIGITAL-ID",
+      billingAmount: "10.00",
+      billingAmountCurrency: "0",
+      transactionCode: "1",
+      businessName: "Synthetic digital",
+      voucherNumberRatz: "UPSTREAM-NOISE",
+      generation: "legacy",
+      nestedNoise: { origin: "legacy" },
+    };
+    const legacy = {
+      voucherNumberRatz: "LEGACY-ID",
+      paymentSum: "11.00",
+      currencyId: "ILS",
+      fullSupplierNameHeb: "Synthetic legacy",
+      seqVoucherNumber: "UPSTREAM-NOISE",
+      generation: "digital",
+    };
+    const namespace = {
+      rows: [digital, legacy, digital],
+      observations: [
+        { generation: "legacy", path: "legacy-source", row: legacy },
+        {
+          generation: "digital",
+          path: "digital-source-2",
+          row: Object.fromEntries(Object.entries(digital).reverse()),
+        },
+        { generation: "digital", path: "digital-source-1", row: digital },
+      ],
+    };
+    const evidence = retainIsracardEvidence(namespace);
+    expect(evidence.rows).toEqual([
+      {
+        seqVoucherNumber: "DIGITAL-ID",
+        billingAmount: "10.00",
+        billingAmountCurrency: "0",
+        transactionCode: "1",
+        businessName: "Synthetic digital",
+      },
+      {
+        seqVoucherNumber: "DIGITAL-ID",
+        billingAmount: "10.00",
+        billingAmountCurrency: "0",
+        transactionCode: "1",
+        businessName: "Synthetic digital",
+      },
+      {
+        voucherNumberRatz: "LEGACY-ID",
+        paymentSum: "11.00",
+        currencyId: "ILS",
+        fullSupplierNameHeb: "Synthetic legacy",
+      },
+    ]);
+    expect(
+      retainIsracardEvidence({
+        ...namespace,
+        rows: [...namespace.rows].reverse(),
+        observations: [...namespace.observations].reverse(),
+      }),
+    ).toEqual(evidence);
+    expect(JSON.stringify(evidence)).not.toContain("UPSTREAM-NOISE");
+    expect(JSON.stringify(projectIsracardState(namespace))).not.toContain(
+      "DIGITAL-ID",
+    );
+  });
+
+  it("pairs identical legacy occurrences once each across different recorded origins", () => {
+    const source = {
+      seqVoucherNumber: "DUAL-ID",
+      voucherNumberRatz: "DUAL-ID",
+      billingAmount: "10.00",
+      paymentSum: "10.00",
+      businessName: "Synthetic digital",
+      fullSupplierNameHeb: "Synthetic legacy",
+    };
+    const namespace = {
+      rows: [source, source, source],
+      observations: [
+        { generation: "legacy", row: source },
+        { generation: "digital", row: source },
+        { generation: "digital", row: source },
+      ],
+    };
+    expect(retainIsracardEvidence(namespace).rows).toEqual([
+      {
+        seqVoucherNumber: "DUAL-ID",
+        billingAmount: "10.00",
+        businessName: "Synthetic digital",
+      },
+      {
+        seqVoucherNumber: "DUAL-ID",
+        billingAmount: "10.00",
+        businessName: "Synthetic digital",
+      },
+      {
+        voucherNumberRatz: "DUAL-ID",
+        paymentSum: "10.00",
+        fullSupplierNameHeb: "Synthetic legacy",
+      },
+    ]);
+  });
+
+  it("does not zip sorted v3 rows with observation metadata that has no copied source statements", () => {
+    const digital = {
+      seqVoucherNumber: "DIGITAL-ID",
+      billingAmount: "10.00",
+      transactionCode: "1",
+      businessName: "Synthetic digital",
+    };
+    const legacy = {
+      voucherNumberRatz: "LEGACY-ID",
+      paymentSum: "11.00",
+      fullSupplierNameHeb: "Synthetic legacy",
+    };
+    expect(
+      retainIsracardEvidence({
+        rows: [digital, legacy],
+        observations: [{ generation: "legacy" }, { generation: "digital" }],
+      }),
+    ).toEqual({ rows: [digital, legacy] });
+  });
   it("keeps voucher layouts when old raw rows contain unrelated approval-looking fields", () => {
     expect(
       retainIsracardEvidence({

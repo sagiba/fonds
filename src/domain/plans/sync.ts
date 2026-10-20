@@ -1419,10 +1419,7 @@ export function finishTransactionContent(
     }
     if (changed) {
       changedIds.add(id);
-      if (!Number.isSafeInteger(previous.version + 1)) {
-        throw new Error("Transaction version exhausted");
-      }
-      current.version = Math.max(current.version, previous.version + 1);
+      current.version = Math.max(current.version, nextVersion(previous.version));
       if (!posting) {
         plan.event({
           transactionId: id,
