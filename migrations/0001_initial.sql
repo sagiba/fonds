@@ -55,11 +55,11 @@ CREATE TABLE refreshes (
   failure_reason TEXT CHECK (failure_reason IN ('expired')),
   missed_through TEXT,
   missed_count INTEGER CHECK (missed_count BETWEEN 1 AND 9007199254740991),
-  observed INTEGER NOT NULL DEFAULT 0 CHECK (observed BETWEEN 0 AND 9007199254740991),
-  unchanged_transactions INTEGER NOT NULL DEFAULT 0 CHECK (unchanged_transactions BETWEEN 0 AND 9007199254740991),
-  unlisted INTEGER NOT NULL DEFAULT 0 CHECK (unlisted BETWEEN 0 AND 9007199254740991),
+  observed INTEGER NOT NULL CHECK (observed BETWEEN 0 AND 9007199254740991),
+  unchanged_transactions INTEGER NOT NULL CHECK (unchanged_transactions BETWEEN 0 AND 9007199254740991),
+  unlisted INTEGER NOT NULL CHECK (unlisted BETWEEN 0 AND 9007199254740991),
   provider_stop_reason TEXT CHECK (provider_stop_reason IN ('authentication_failed','authentication_challenge','rate_limited','budget_exhausted')),
-  has_accepted_evidence INTEGER NOT NULL DEFAULT 0 CHECK (has_accepted_evidence IN (0,1)),
+  has_accepted_evidence INTEGER NOT NULL CHECK (has_accepted_evidence IN (0,1)),
   CHECK ((skip_reason IS NULL) = (status <> 'skipped')),
   CHECK (status <> 'skipped' OR trigger = 'scheduled'),
   CHECK ((range_from IS NULL) = (range_to IS NULL)),
@@ -79,7 +79,7 @@ CREATE TABLE refresh_windows (
   range_from TEXT NOT NULL,
   range_to TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('pending','running','completed','partial','failed')),
-  has_accepted_evidence INTEGER NOT NULL DEFAULT 0 CHECK (has_accepted_evidence IN (0,1)),
+  has_accepted_evidence INTEGER NOT NULL CHECK (has_accepted_evidence IN (0,1)),
   PRIMARY KEY (refresh_id, range_from),
   CHECK (range_from <= range_to)
 ) STRICT;
@@ -96,7 +96,7 @@ CREATE TABLE sync_runs (
   applied_at TEXT,
   refresh_id TEXT REFERENCES refreshes(id) ON DELETE SET NULL,
   evidence_digest TEXT NOT NULL,
-  metadata_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json))
+  metadata_json TEXT NOT NULL CHECK (json_valid(metadata_json))
 ) STRICT;
 CREATE INDEX sync_runs_refresh ON sync_runs(refresh_id);
 CREATE TABLE transactions (
@@ -144,8 +144,8 @@ CREATE TABLE transactions (
   merchant_country_code TEXT,
   additional_information_json TEXT CHECK (additional_information_json IS NULL OR json_valid(additional_information_json)),
   currency_exchange_json TEXT CHECK (currency_exchange_json IS NULL OR json_valid(currency_exchange_json)),
-  source_issues_json TEXT NOT NULL CHECK (source_issues_json IS NULL OR json_valid(source_issues_json)) DEFAULT '[]',
-  provider_json TEXT NOT NULL CHECK (provider_json IS NULL OR json_valid(provider_json)) DEFAULT '{}',
+  source_issues_json TEXT NOT NULL CHECK (json_valid(source_issues_json)),
+  provider_json TEXT NOT NULL CHECK (json_valid(provider_json)),
   UNIQUE (connection_id, id),
   FOREIGN KEY (connection_id, card_id) REFERENCES cards(connection_id, id),
   FOREIGN KEY (connection_id, purchase_id) REFERENCES transactions(connection_id, id) ON DELETE RESTRICT,
@@ -163,7 +163,7 @@ CREATE TABLE transaction_observations (
   transaction_id TEXT PRIMARY KEY NOT NULL REFERENCES transactions(id),
   last_seen_at TEXT NOT NULL,
   last_seen_run_id TEXT NOT NULL REFERENCES sync_runs(id),
-  source_refs_json TEXT NOT NULL CHECK (source_refs_json IS NULL OR json_valid(source_refs_json))
+  source_refs_json TEXT NOT NULL CHECK (json_valid(source_refs_json))
 ) STRICT;
 CREATE TABLE transaction_reconciliation (
   transaction_id TEXT PRIMARY KEY NOT NULL REFERENCES transactions(id),
