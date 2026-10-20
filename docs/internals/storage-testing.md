@@ -4,31 +4,32 @@ Use disposable synthetic databases only. The isolated Turso child-process smoke 
 
 ## PostgreSQL
 
-The implementation was exercised against PostgreSQL 18.6 using a disposable Docker container. A local PostgreSQL installation is also suitable. Create an isolated test container, for example:
+Tests target PostgreSQL 18.6; a local installation is suitable, or an isolated test container, for example:
 
 ```sh
 docker run --rm -d --name fonds-storage-postgres-test \
   -e POSTGRES_PASSWORD=synthetic-test-only \
-  -p 127.0.0.1::5432 postgres:18.6
+  -p 127.0.0.1::5432 postgres:18.6 \
+  -c jit=off -c synchronous_commit=off -c fsync=off -c full_page_writes=off
 docker port fonds-storage-postgres-test 5432
 ```
 
-Set `FONDS_TEST_POSTGRES_URL` to that synthetic database’s published address. In a Docker-backed devcontainer, the published host may be `host.docker.internal`; outside it, use `127.0.0.1`. The password above is an invented test value, never a production credential. Fonds owns every schema of its database, so the PostgreSQL storage tests and the isolated deployment verifier create and drop a unique database per case; the test role needs `CREATEDB`, and the migration tests install an event trigger, which needs a superuser. The deployment verifier rejects nonlocal database hosts. The PostgreSQL superuser in this disposable container meets both requirements; a production role should not inherit these test privileges.
+The flags (no JIT, no durability) suit only a throwaway server. Set `FONDS_TEST_POSTGRES_URL` to that synthetic database’s published address. In a Docker-backed devcontainer, the published host may be `host.docker.internal`; outside it, use `127.0.0.1`. The password above is an invented test value, never a production credential. Fonds owns every schema of its database, so the PostgreSQL storage tests and the isolated deployment verifier create and drop a unique database per case; the test role needs `CREATEDB`, and the migration tests install an event trigger, which needs a superuser. The deployment verifier rejects nonlocal database hosts. The PostgreSQL superuser in this disposable container meets both requirements; a production role should not inherit these test privileges.
 
 `FONDS_TEST_REQUIRE_POSTGRES=1` enables `tests/storage/postgres-required.test.ts`: an absent/blank `FONDS_TEST_POSTGRES_URL` or a host other than `localhost`, `127.0.0.1`, `[::1]` or `host.docker.internal` fails, and a real `SELECT 1` must succeed with a three-second connection timeout. Without the require flag, this guard skips and local `npm run check` retains its optional PostgreSQL behavior. Setting a URL still enables the existing real-driver tests, which create and drop schemas and databases on it; the host check fails the run but does not stop other suites, so only ever export a disposable URL. The flag does not supply a default database.
 
-The `Check` workflow's `postgres` job runs the storage suites against a health-checked `postgres:18.6` service container with an invented password, a loopback test URL and only committed synthetic fixtures, and the `package` job runs the installed npm package's PostgreSQL modes (`npm run check:npm`). To reproduce its storage run after setting the disposable test URL:
+The `Check` workflow's `postgres` job runs the storage suites against a `postgres:18.6` container like the one above (invented password, loopback URL, committed synthetic fixtures), and the `package` job runs the installed package's PostgreSQL modes (`npm run check:npm`). To reproduce its storage run after setting the disposable test URL:
 
 ```sh
 export FONDS_TEST_REQUIRE_POSTGRES=1
-npm test -- tests/storage --no-file-parallelism \
+npx vitest run tests/storage --maxWorkers=2 \
   --reporter=default --reporter=json \
   --outputFile=/tmp/fonds-postgres-results.json
 node scripts/check-postgres-tests.mjs /tmp/fonds-postgres-results.json
 unset FONDS_TEST_REQUIRE_POSTGRES
 ```
 
-The report verifier ([`check-postgres-tests.mjs`](../../scripts/check-postgres-tests.mjs), using [`storage-coverage.mjs`](../../scripts/storage-coverage.mjs)) lists the required PostgreSQL groups and their minimum case counts. It rejects a missing group, any skipped or failed PostgreSQL case and other unexpected skips; in this run only the libSQL HTTP groups and the local D1 group may skip. New passing cases need no update; intentional coverage removals require reviewing its floors. File serialization keeps this run aligned with the full matrix below; individual tests still exercise independent sessions and concurrent writers.
+The report verifier ([`check-postgres-tests.mjs`](../../scripts/check-postgres-tests.mjs), using [`storage-coverage.mjs`](../../scripts/storage-coverage.mjs)) lists the required PostgreSQL groups and their minimum case counts. It rejects a missing group, any skipped or failed PostgreSQL case and other unexpected skips; in this run only the libSQL HTTP groups and the local D1 group may skip. New passing cases need no update; intentional coverage removals require reviewing its floors. Each case has its own database, so files run two at a time; individual tests still exercise independent sessions and concurrent writers.
 
 ## libSQL HTTP
 
