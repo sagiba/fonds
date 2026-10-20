@@ -250,6 +250,65 @@ export async function thirdPartyNotices(metafile, base = root) {
   };
 }
 
+/** Compiled modules may come only from the native driver's own packages. */
+const nativePackage = /\/node_modules\/(?:@libsql\/[^/]+|libsql)\//;
+
+/**
+ * The installed package's dependencies: only packages the recipe's lockfile
+ * lists, never another database driver, and compiled code only from libSQL.
+ */
+async function checkInstalledTree(installed) {
+  const recipe = new Set(
+    Object.keys(
+      JSON.parse(
+        await readFile(resolve(root, "deploy/npm/package-lock.json"), "utf8"),
+      ).packages,
+    )
+      .filter(Boolean)
+      .map(packageNameIn),
+  );
+  const { stdout } = await run("npm", ["ls", "--all", "--json"], {
+    cwd: installed,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const names = new Set();
+  const visit = (node) => {
+    for (const [name, dependency] of Object.entries(node.dependencies ?? {})) {
+      if (dependency.version) {
+        names.add(name);
+      }
+      visit(dependency);
+    }
+  };
+  visit(JSON.parse(stdout));
+  for (const name of names) {
+    assert(
+      !/^(?:better-sqlite3|pg|pg-.*)$/.test(name),
+      `unrelated driver ${name} installed`,
+    );
+    assert(
+      recipe.has(name),
+      `${name} installed but not in the recipe lockfile`,
+    );
+  }
+  const native = [];
+  const find = async (directory) => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const child = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await find(child);
+      } else if (entry.name.endsWith(".node")) {
+        native.push(child);
+      }
+    }
+  };
+  await find(join(installed, "node_modules"));
+  for (const path of native) {
+    assert(nativePackage.test(path), `unexpected native module ${path}`);
+  }
+  return [...names].sort();
+}
+
 async function directorySize(path) {
   let total = 0;
   for (const entry of await readdir(path, { withFileTypes: true })) {
@@ -731,9 +790,9 @@ async function checkInstalled(packed, scratch) {
     { cwd: scratch },
   );
   const fonds = join(prefix, "bin", "fonds");
-  const installedBytes = await directorySize(
-    join(prefix, "lib", "node_modules", packed.name),
-  );
+  const installedPath = join(prefix, "lib", "node_modules", packed.name);
+  const installedBytes = await directorySize(installedPath);
+  const installedPackages = await checkInstalledTree(installedPath);
   const env = isolatedEnv(home);
   const fondsOutput = async (...args) =>
     (await run(fonds, args, { cwd: scratch, env })).stdout;
@@ -821,6 +880,7 @@ async function checkInstalled(packed, scratch) {
   return {
     installed: true,
     installedBytes,
+    installedPackages,
     demo: true,
     stdioMcp: true,
     http: true,
