@@ -1,6 +1,7 @@
-// Idempotent Neon setup: private env file, financial/operational/auth schemas,
-// the configured connection row and the Better Auth owner. Never calls providers and never
-// prints secrets, connection strings or driver diagnostics. Deployment itself is
+// Idempotent Neon setup: private env file and its refresh schedule,
+// financial/operational/auth schemas, the configured connection row and the
+// Better Auth owner. Never calls providers and never prints secrets,
+// connection strings or driver diagnostics. Deployment itself is
 // `npm run neon:deploy` (see docs/guides/neon-deployment.md).
 import { execFile } from "node:child_process";
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
@@ -15,11 +16,23 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs, parseEnv, promisify } from "node:util";
 
+import {
+  CollectionScheduleError,
+  parseCollectionSchedule,
+} from "../../src/runtime/collection-schedule.js";
+
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const NEON_CLI = "neon@8.4.3";
+/** The env file's schedule settings, named once here; the runtime reads them too. */
+const SCHEDULE = {
+  schedule: "FONDS_COLLECTION_SCHEDULE",
+  timeZone: "FONDS_COLLECTION_TIMEZONE",
+  time: "FONDS_COLLECTION_TIME",
+};
 const REQUIRED = [
   "FONDS_PUBLIC_ORIGIN",
   "FONDS_NEON_GOOGLE_AUTH_URL",
@@ -33,21 +46,236 @@ const GENERATED = {
   // Decrypts the credentials `connect` stores; part of the installation's binding.
   FONDS_CREDENTIALS_KEY: () => randomBytes(32).toString("base64url"),
   FONDS_COLLECTION_SECRET: () => randomBytes(48).toString("base64url"),
-  // This installation's random collection time (UTC unless
-  // FONDS_COLLECTION_TIMEZONE says otherwise), so installations do not all
-  // reach a provider at the same minute.
-  FONDS_COLLECTION_TIME: () =>
+  // This installation's random collection time (UTC unless the time zone
+  // setting says otherwise), so installations do not all reach a provider at
+  // the same minute.
+  [SCHEDULE.time]: () =>
     [randomInt(24), randomInt(60)]
       .map((value) => String(value).padStart(2, "0"))
       .join(":"),
 };
+/** Values the env file holds unquoted: single-line and comment-free. */
+const UNQUOTED = /^[A-Za-z0-9_.:/@+=,-]+$/;
 /** Generated settings a login link does not need. */
-const SETTINGS = new Set(["FONDS_COLLECTION_TIME"]);
+const SETTINGS = new Set([SCHEDULE.time]);
 
 export class SetupError extends Error {}
 
 function fail(message) {
   throw new SetupError(message);
+}
+
+/** The runtime's own parser, so setup accepts exactly what a deploy accepts. */
+function parsedSchedule(settings) {
+  try {
+    return parseCollectionSchedule(
+      { [SCHEDULE.time]: "00:00", ...settings },
+      `${SCHEDULE.time} must be a 24-hour HH:MM time`,
+    );
+  } catch (error) {
+    if (error instanceof CollectionScheduleError) {
+      fail(`${error.message}.`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Each schedule answer's canonical, env-safe value. `off` is the one word
+ * accepted for off: the runtime reads any other word as off too, so a typo
+ * such as `dialy` is refused here rather than silently disabling refreshes.
+ */
+const ANSWERS = {
+  schedule(text) {
+    if (text === "off") {
+      return "off";
+    }
+    const schedule = parsedSchedule({ [SCHEDULE.schedule]: text });
+    if (!schedule) {
+      fail(
+        `${SCHEDULE.schedule} must be off, daily, hourly or hours 0-23 such as 9,13,18.`,
+      );
+    }
+    return schedule.mode === "hours" ? schedule.hours.join(",") : schedule.mode;
+  },
+  timeZone(text) {
+    return parsedSchedule({
+      [SCHEDULE.schedule]: "daily",
+      [SCHEDULE.timeZone]: text,
+    }).timeZone;
+  },
+  time(text) {
+    parsedSchedule({ [SCHEDULE.schedule]: "daily", [SCHEDULE.time]: text });
+    return text;
+  },
+};
+
+/** The canonical value of one schedule answer; flags and prompts share it. */
+export function scheduleAnswer(kind, text) {
+  return ANSWERS[kind](text.trim());
+}
+
+/**
+ * The canonical value the runtime reads from a setting's stored text, which
+ * is parsed exactly as stored; text the runtime refuses is returned as is,
+ * so no valid answer equals it.
+ */
+function effectiveSetting(kind, values) {
+  const stored = values[SCHEDULE[kind]];
+  try {
+    if (kind === "schedule") {
+      const schedule =
+        stored === undefined
+          ? undefined
+          : parsedSchedule({ [SCHEDULE.schedule]: stored });
+      if (!schedule) {
+        return "off";
+      }
+      return schedule.mode === "hours"
+        ? schedule.hours.join(",")
+        : schedule.mode;
+    }
+    if (kind === "timeZone") {
+      return ANSWERS.timeZone(stored ?? "");
+    }
+    return ANSWERS.time(stored ?? "");
+  } catch (error) {
+    if (error instanceof SetupError) {
+      return stored ?? "";
+    }
+    throw error;
+  }
+}
+
+/**
+ * Sets each answer the file does not already hold and returns the changed
+ * names. Stored text is kept only when the runtime reads it as the answer and
+ * the file can hold it unquoted, so an unchanged rerun writes nothing.
+ */
+function applySchedule(values, answers) {
+  const changed = [];
+  for (const [kind, text] of Object.entries(answers)) {
+    const answer = scheduleAnswer(kind, text);
+    const stored = values[SCHEDULE[kind]];
+    if (
+      answer !== effectiveSetting(kind, values) ||
+      (stored !== undefined && !UNQUOTED.test(stored))
+    ) {
+      values[SCHEDULE[kind]] = answer;
+      changed.push(SCHEDULE[kind]);
+    }
+  }
+  return changed;
+}
+
+/** Asks for the schedule on a terminal, re-asking until an answer is valid. */
+async function askSchedule(values, { input, output }) {
+  const lines = createInterface({ input, output });
+  const stop = new AbortController();
+  lines.on("SIGINT", () => stop.abort());
+  lines.on("close", () => stop.abort());
+
+  async function ask(question, fallback, kind) {
+    for (;;) {
+      let text;
+      try {
+        text = await lines.question(`${question} [${fallback}]: `, {
+          signal: stop.signal,
+        });
+      } catch {
+        fail("Setup stopped; the env file was not changed.");
+      }
+      try {
+        return scheduleAnswer(kind, text.trim() || fallback);
+      } catch (error) {
+        if (!(error instanceof SetupError)) {
+          throw error;
+        }
+        output.write(`${error.message}\n`);
+      }
+    }
+  }
+
+  try {
+    const current = effectiveSetting("schedule", values);
+    const schedule = await ask(
+      "Scheduled refreshes: off, daily (recommended once a manual refresh works), hourly, or hours such as 9,13,18",
+      current,
+      "schedule",
+    );
+    const answers = { schedule };
+    if (schedule !== "off" && schedule !== "hourly") {
+      // A named zone, or an active schedule (which runs in UTC when none is
+      // named), is kept on Enter; only a fresh choice suggests this machine's.
+      answers.timeZone = await ask(
+        "Time zone (IANA)",
+        values[SCHEDULE.timeZone]?.trim() || current !== "off"
+          ? effectiveSetting("timeZone", values)
+          : (Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC"),
+        "timeZone",
+      );
+    }
+    if (schedule !== "off") {
+      answers.time = await ask(
+        "Collection time, HH:MM (Enter keeps this installation's random time)",
+        values[SCHEDULE.time],
+        "time",
+      );
+    }
+    return answers;
+  } finally {
+    lines.close();
+  }
+}
+
+/**
+ * How setup obtains schedule answers: from flags when any is given (blank
+ * keeps the file's value), from prompts when stdin and stdout are a terminal,
+ * and otherwise none. Flags are validated before the env file is touched.
+ */
+export function scheduleSource(flags, io) {
+  const given = Object.entries(flags).filter(([, text]) => text !== undefined);
+  if (given.length) {
+    const answers = Object.fromEntries(
+      given
+        .filter(([, text]) => text.trim())
+        .map(([kind, text]) => [kind, scheduleAnswer(kind, text)]),
+    );
+    return () => answers;
+  }
+  if (io.input?.isTTY && io.output?.isTTY) {
+    return (values) => askSchedule(values, io);
+  }
+  return () => ({});
+}
+
+/** A secret-free line describing the schedule the env file declares. */
+export function scheduleSummary(values) {
+  let schedule;
+  try {
+    schedule = parsedSchedule({
+      [SCHEDULE.schedule]: values[SCHEDULE.schedule],
+      [SCHEDULE.timeZone]: values[SCHEDULE.timeZone],
+      [SCHEDULE.time]: values[SCHEDULE.time],
+    });
+  } catch (error) {
+    if (error instanceof SetupError) {
+      return `Scheduled refreshes cannot deploy: ${error.message}`;
+    }
+    throw error;
+  }
+  if (!schedule) {
+    return "Scheduled refreshes: off.";
+  }
+  const pad = (value) => String(value).padStart(2, "0");
+  const minute = pad(schedule.minute);
+  const when =
+    schedule.mode === "hourly"
+      ? `hourly at minute ${minute}`
+      : `${schedule.mode === "daily" ? "daily" : "every day"} at ${schedule.hours
+          .map((hour) => `${pad(hour)}:${minute}`)
+          .join(", ")}`;
+  return `Scheduled refreshes: ${when} (${schedule.timeZone}).`;
 }
 
 /** Canonical env file path in an owned private directory outside the repository. */
@@ -93,10 +321,14 @@ async function withSetupLock(path, run) {
   }
 }
 
-/** Reads the private env file, adds missing generated secrets and saves it 0600. */
+/**
+ * Reads the private env file, adds missing generated secrets, applies the
+ * answers `schedule` returns for the values so far, and saves it 0600 only
+ * when something changed.
+ */
 export async function prepareEnvironmentFile(
   requestedPath,
-  { generate = true } = {},
+  { generate = true, schedule } = {},
 ) {
   const path = await privateEnvironmentPath(requestedPath);
   let values = {};
@@ -133,13 +365,13 @@ export async function prepareEnvironmentFile(
   for (const name of generated) {
     values[name] = GENERATED[name]();
   }
+  const changed = schedule ? applySchedule(values, await schedule(values)) : [];
   for (const [name, value] of Object.entries(values)) {
-    // Unquoted dotenv values must stay single-line and comment-free.
-    if (!/^[A-Za-z0-9_.:/@+=,-]+$/.test(value)) {
+    if (!UNQUOTED.test(value)) {
       fail(`${name} contains characters the env file cannot hold unquoted.`);
     }
   }
-  if (generated.length) {
+  if (generated.length || changed.length) {
     const temporary = resolve(dirname(path), `.neon-setup-${process.pid}.tmp`);
     try {
       await writeFile(
@@ -154,7 +386,7 @@ export async function prepareEnvironmentFile(
       await rm(temporary, { force: true });
     }
   }
-  return { values, generated };
+  return { values, generated, changed };
 }
 
 async function directConnectionString(projectId, branchId, profile) {
@@ -279,8 +511,21 @@ export async function issueLoginLink(connectionString, values) {
   }
 }
 
-/** `setup` initializes the deployment; `setup login-link` prints a sign-in link. */
-export async function setup(args) {
+/** A POSIX shell word for a path. */
+function shellWord(text) {
+  return /^[A-Za-z0-9_./-]+$/.test(text)
+    ? text
+    : `'${text.replaceAll("'", "'\\''")}'`;
+}
+
+/**
+ * `setup` initializes the deployment and its refresh schedule; `setup
+ * login-link` prints a sign-in link and never asks anything.
+ */
+export async function setup(
+  args,
+  io = { input: process.stdin, output: process.stdout },
+) {
   let values;
   let positionals;
   try {
@@ -292,6 +537,9 @@ export async function setup(args) {
         "project-id": { type: "string" },
         "branch-id": { type: "string" },
         profile: { type: "string" },
+        schedule: { type: "string" },
+        timezone: { type: "string" },
+        time: { type: "string" },
       },
     }));
   } catch {
@@ -306,6 +554,18 @@ export async function setup(args) {
       fail(`--${name} is required.`);
     }
   }
+  const flags = {
+    schedule: values.schedule,
+    timeZone: values.timezone,
+    time: values.time,
+  };
+  if (
+    action === "login-link" &&
+    Object.values(flags).some((text) => text !== undefined)
+  ) {
+    fail("--schedule, --timezone and --time apply only to setup.");
+  }
+  const schedule = scheduleSource(flags, io);
   const path = await privateEnvironmentPath(resolve(values["env-file"] ?? ""));
   if (action === "login-link") {
     const environment = await prepareEnvironmentFile(path, {
@@ -332,7 +592,7 @@ export async function setup(args) {
     }
   }
   return withSetupLock(path, async () => {
-    const environment = await prepareEnvironmentFile(path);
+    const environment = await prepareEnvironmentFile(path, { schedule });
     try {
       await initializeDatabase(
         await directConnectionString(
@@ -350,8 +610,35 @@ export async function setup(args) {
           : "Database setup failed; the env file was kept. Credentials and driver diagnostics were suppressed.",
       );
     }
-    return { generated: environment.generated };
+    return {
+      generated: environment.generated,
+      changed: environment.changed,
+      schedule: scheduleSummary(environment.values),
+      deploy: [
+        "npm run neon:deploy -- --env",
+        shellWord(path),
+        `--project-id ${values["project-id"]}`,
+        `--branch ${values["branch-id"]}`,
+        `--profile ${values.profile}`,
+      ].join(" "),
+    };
   });
+}
+
+/** What setup prints: setting names and the schedule, never a value of a secret. */
+export function setupReport({ generated, changed, schedule, deploy }) {
+  return [
+    "Neon schemas, configured connection and owner are ready.",
+    generated.length ? `Generated ${generated.join(", ")}.` : "",
+    changed.length ? `Updated ${changed.join(", ")}.` : "",
+    schedule,
+    `Deploy to apply the env file:\n  ${deploy}`,
+    generated.includes("FONDS_COLLECTION_SECRET")
+      ? "A new installation's first deploy also names its provider credentials file (FONDS_COLLECTION_CREDENTIALS_FILE)."
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 if (
@@ -366,13 +653,7 @@ if (
         `Open this one-time owner sign-in link within ten minutes:\n${result.loginLink}`,
       );
     } else {
-      console.log(
-        `Neon schemas, configured connection and owner are ready.${
-          result.generated.length
-            ? ` Generated ${result.generated.join(", ")}.`
-            : ""
-        }`,
-      );
+      console.log(setupReport(result));
     }
   } catch (error) {
     console.error(

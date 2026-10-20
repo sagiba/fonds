@@ -204,7 +204,8 @@ the Fonds exact-owner check.
 ## Set up schemas and the owner
 
 One idempotent command prepares everything the Function needs in the database,
-and adds any missing generated values to the env file:
+adds any missing generated values to the env file and, in a terminal, asks how
+scheduled refreshes should run:
 
 ```sh
 npm ci
@@ -212,9 +213,14 @@ npm run neon:setup -- --env-file "$FONDS_ENV" \
   --project-id PROJECT_ID --branch-id BRANCH_ID --profile PROFILE
 ```
 
-Setup ([setup.mjs](../../deploy/neon/setup.mjs)) needs no build, never calls the
-provider and prints neither secrets nor driver diagnostics. Rerunning changes
-nothing.
+The [schedule](hosted-service.md#scheduling) prompt defaults to `off`, or the
+file's current value; choose `daily` once a manual refresh works. Daily and
+hour-list schedules also ask for the time zone; any schedule can keep or pin the
+random time. Scripts pass `--schedule`, `--timezone` and `--time`, which accept
+the same values and never prompt; without them or a terminal, the file's
+schedule stays. Setup ([setup.mjs](../../deploy/neon/setup.mjs)) needs no build,
+never calls the provider, prints neither secrets nor driver diagnostics, and
+ends with the deploy command. Rerunning with the same answers changes nothing.
 
 ## Deploy
 
@@ -282,13 +288,12 @@ A Function has no long-lived process, so Neon's native cron trigger runs the
 [schedule](hosted-service.md#scheduling) instead of the Node host's embedded
 scheduler, at the installation's random `FONDS_COLLECTION_TIME`. If the schedule
 is on but the env file has no `FONDS_COLLECTION_TIME`, `neon.ts` stops the
-deploy and asks you to rerun setup, which adds it. To turn collection on, add
-the setting, rerun setup (it adds a missing time, and the schedule tables to a
-database created before them) and deploy:
+deploy and asks you to rerun setup, which adds it. To turn collection on, rerun
+setup, answering its prompt or passing `--schedule daily` (it also adds the
+schedule tables to a database created before them), and deploy:
 
 ```sh
-echo FONDS_COLLECTION_SCHEDULE=daily >> "$FONDS_ENV"
-npm run neon:setup -- --env-file "$FONDS_ENV" \
+npm run neon:setup -- --env-file "$FONDS_ENV" --schedule daily \
   --project-id PROJECT_ID --branch-id BRANCH_ID --profile PROFILE
 npm run neon:deploy -- --env "$FONDS_ENV" \
   --project-id PROJECT_ID --branch BRANCH_ID --profile PROFILE
@@ -313,10 +318,10 @@ that trigger
 
 Schedule state is declared: `neon.ts` enables `scheduled-refresh` only when
 `FONDS_COLLECTION_SCHEDULE` turns a schedule on, so a new installation deploys
-it disabled and never collects before validation. To pause collection, change
-that value and deploy. The CLI can inspect the trigger, or pause it immediately,
-but the next deploy re-enables it, and a queued occurrence can still arrive
-after disabling:
+it disabled and never collects before validation. To pause collection, rerun
+setup with `--schedule off` and deploy. The CLI can inspect the trigger, or
+pause it immediately, but the next deploy re-enables it, and a queued occurrence
+can still arrive after disabling:
 
 ```sh
 npx --yes neon@8.4.3 triggers list --project-id PROJECT_ID \
