@@ -341,9 +341,9 @@ export function createEmbeddedScheduler(options: EmbeddedSchedulerOptions) {
         stopping.signal.aborted
           ? options.claims.releaseOccurrence(occurrence, claim)
           : options.claims.finishOccurrence(occurrence, claim)
-      ).catch(() => log("fonds_scheduled_collection_unrecorded", {}));
+      ).catch(() => log("fonds_scheduled_refresh_unrecorded", {}));
     }
-    log("fonds_scheduled_collection", {
+    log("fonds_scheduled_refresh", {
       occurrence: occurrence.key,
       started: result?.filter((entry) => entry.reason === null).length ?? 0,
       skipped: result?.filter((entry) => entry.reason !== null).length ?? 0,

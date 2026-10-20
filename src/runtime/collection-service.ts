@@ -152,7 +152,7 @@ export function collectionTargets(sources: CollectionTargetSources) {
     try {
       key = sources.credentialsKey();
     } catch {
-      log({ event: "fonds_collection_discovery_failed", stage: "key" });
+      log({ event: "fonds_refresh_discovery_failed", stage: "key" });
       return { targets, failures: failures + 1 };
     }
     if (!key) {
@@ -165,7 +165,7 @@ export function collectionTargets(sources: CollectionTargetSources) {
     try {
       connections = await sources.store.listConnections();
     } catch {
-      log({ event: "fonds_collection_discovery_failed", stage: "connections" });
+      log({ event: "fonds_refresh_discovery_failed", stage: "connections" });
       return { targets, failures: failures + 1 };
     }
     for (const connection of connections) {
@@ -192,7 +192,7 @@ export function collectionTargets(sources: CollectionTargetSources) {
       } catch {
         // An unsupported provider has no adapter to record a job with.
         log({
-          event: "fonds_collection_target_skipped",
+          event: "fonds_refresh_target_skipped",
           provider: connection.provider,
         });
         failures += 1;

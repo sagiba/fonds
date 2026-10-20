@@ -77,7 +77,7 @@ docker compose up -d
 
 `.env` also takes `FONDS_REFRESH_TIMEZONE`; to pin `FONDS_REFRESH_TIME`, set
 it under the `fonds` service's `environment` in `compose.override.yaml`. No
-scheduler container is needed; each run is logged as `fonds_scheduled_collection`
+scheduler container is needed; each run is logged as `fonds_scheduled_refresh`
 (`docker compose logs fonds`). Operation commands such as
 `docker compose exec fonds node /app/server.js list-connections` use the same
 database.

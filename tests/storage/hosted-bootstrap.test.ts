@@ -231,7 +231,7 @@ describe.skipIf(!postgresUrl)(
         vi
           .mocked(console.info)
           .mock.calls.filter(([line]) =>
-            String(line).includes('"event":"fonds_scheduled_collection"'),
+            String(line).includes('"event":"fonds_scheduled_refresh"'),
           ).length;
       const trigger = async () => {
         const state = parseEnv(await readFile(`${stateDir}/fonds.env`, "utf8"));

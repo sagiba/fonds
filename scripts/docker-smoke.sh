@@ -104,7 +104,7 @@ const { refreshes } = await response.json();
 if (response.status !== status || !Array.isArray(refreshes) || refreshes.length !== count) process.exit(1);'
 # The trigger's expected HTTP status and number of refreshes, such as [200, 0].
 trigger_expects() { in_fonds "${trigger//EXPECTED/$1}"; }
-runs() { "$1" logs fonds 2>/dev/null | grep -c '"event":"fonds_scheduled_collection"' || true; }
+runs() { "$1" logs fonds 2>/dev/null | grep -c '"event":"fonds_scheduled_refresh"' || true; }
 
 echo "== schedule off by default"
 trigger_expects '[200, 0]' || fail "external trigger"
