@@ -609,16 +609,24 @@ describe("embedded scheduler", () => {
   });
 
   it("does not keep the process alive", async () => {
-    const before = process
-      .getActiveResourcesInfo()
-      .filter((name) => name === "Timeout").length;
+    // The scheduler's own timers, not a process-wide count that the test
+    // runner's timers also change.
+    const timeouts = vi.spyOn(globalThis, "setTimeout");
+    const intervals = vi.spyOn(globalThis, "setInterval");
     const target = harness({ start: "2026-10-20T04:00:00Z" });
-    target.scheduler.start();
-    await settle();
-    expect(
-      process.getActiveResourcesInfo().filter((name) => name === "Timeout"),
-    ).toHaveLength(before);
-    target.scheduler.stop();
+    try {
+      target.scheduler.start();
+      await settle();
+      const timers = [...timeouts.mock.results, ...intervals.mock.results].map(
+        ({ value }) => value as NodeJS.Timeout,
+      );
+      expect(timers).not.toHaveLength(0);
+      expect(timers.filter((timer) => timer.hasRef())).toEqual([]);
+    } finally {
+      target.scheduler.stop();
+      timeouts.mockRestore();
+      intervals.mockRestore();
+    }
   });
 
   it("delivers Events without a schedule", async () => {
