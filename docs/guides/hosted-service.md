@@ -134,7 +134,8 @@ refreshes run one after another under the connection's
 scheduled and CLI collection never run at once across processes. Each month, or
 the recent window, is bounded at ten minutes. Starting any launcher never
 collects by itself, apart from resuming refreshes a stopped process left active:
-every long-running server does so from startup and each minute, with or without a
+the SQLite server (HTTP or stdio), the PostgreSQL loopback launcher and the
+service on a Node host do so from startup and each minute, with or without a
 schedule.
 A lost or expired client request is not proof the provider work did not run;
 list the connection's refreshes before retrying.
