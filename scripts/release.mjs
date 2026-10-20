@@ -69,6 +69,11 @@ export function highest(versions) {
  * or undefined before the first publication.
  */
 export function assertChannelForward(version, current) {
+  // npm's staged publishing points a new package's channel at a 0.0.0-*
+  // placeholder, below every release.
+  if (current !== undefined && /^0\.0\.0-[a-z]+$/.test(current)) {
+    return;
+  }
   if (current !== undefined && compareVersions(version, current) < 0) {
     throw new Error(
       `${version} is older than its channel's ${current}; publishing it would move the channel back`,

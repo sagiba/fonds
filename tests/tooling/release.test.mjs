@@ -59,6 +59,10 @@ describe("npm channels", () => {
     expect(() => assertChannelForward("0.2.0", "0.2.0")).not.toThrow();
     expect(() => assertChannelForward("0.2.1", "0.2.0")).not.toThrow();
     expect(() => assertChannelForward("0.1.0", undefined)).not.toThrow();
+    expect(() => assertChannelForward("0.1.0", "0.0.0-stage")).not.toThrow();
+    expect(() => assertChannelForward("0.1.0", "garbage")).toThrow(
+      /Not a release version/,
+    );
   });
 
   it("finds the highest version", () => {
