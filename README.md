@@ -37,13 +37,11 @@ Fonds is for people comfortable running their own software. It is pre-release:
 the API may still change, and databases upgrade in place through numbered
 [migrations](docs/database.md#migrations). There is no ready-made budgeting UI,
 payment processing or bank-account integration; you bring your own assistant or
-client. Each provider guide says what is collected and what totals count:
-
-- **CAL:** local and hosted refresh, including opt-in schedules.
-  [Provider guide](docs/providers/cal.md).
-- **Isracard:** local refresh through the CLI; hosted refresh is unverified, and
-  totals exclude amounts whose meaning is not yet verified.
-  [Provider guide](docs/providers/isracard.md).
+client. CAL supports local and hosted refresh, including opt-in schedules;
+Isracard supports local refresh through the CLI, and its hosted refresh is
+unverified. Each provider guide ([CAL](docs/providers/cal.md),
+[Isracard](docs/providers/isracard.md)) says what is collected and what totals
+count.
 
 ## Get started
 
@@ -113,10 +111,9 @@ for one local refresh. Encryption doesn't hide them from the host running Fonds,
 and your hosting and database providers can access what you put on their systems.
 
 Only saved credentials are encrypted. Financial records and archived responses
-are stored as plain data; login bodies are not stored and initialization and
-card-list responses are minimized, but archives can still contain holder data.
-That data and provider account keys are never returned, apart from a
-counterparty name a provider guide maps. See the
+are stored as plain data; login bodies are not stored, but archives can still
+contain holder data. Provider account keys are never returned, and holder data
+only where a provider guide maps it. See the
 [security limitations](docs/security-model.md#known-limitations) and
 [personal-data handling](docs/design.md#personal-data).
 
@@ -148,15 +145,10 @@ hosting services or AI products named here.
 Fonds is one TypeScript service with a provider-neutral core. SQLite and
 PostgreSQL are the supported backends; Turso/libSQL and D1 are experimental
 ([storage guide](docs/guides/storage-backends.md)). The
-[documentation index](docs/README.md) leads to every guide and reference:
-
-- [Design](docs/design.md): product boundaries, data flow, and how pending
-  charges, corrections, installments and source evidence are handled.
-- [API reference](docs/api.md): MCP tools, HTTP operations, money, perspectives,
-  annotations, pagination, write receipts and events.
-- [Database reference](docs/database.md): tables, constraints and atomicity.
-- [CONTRIBUTING.md](CONTRIBUTING.md): setup, `npm run check`, synthetic data and
-  contribution conventions.
+[documentation index](docs/README.md) leads to every guide and reference,
+including the [design](docs/design.md), [API](docs/api.md) and
+[database](docs/database.md) references; [CONTRIBUTING.md](CONTRIBUTING.md)
+covers setup, checks and contribution conventions.
 
 ## Why the name?
 
