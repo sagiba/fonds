@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
+import { ConflictError } from "../../../src/domain/errors.js";
 import { isracardAdapter } from "../../../src/providers/isracard/adapter.js";
 import {
   type IsracardCapture,
@@ -924,6 +925,34 @@ describe("Isracard installment plans", () => {
       )!;
       expect(a.amountMinor).toBe(-3400);
       expect(a.details.issues).not.toContain("duplicate_installment_ordinal");
+    });
+  });
+
+  it("refuses to hold a duplicate ordinal's line at the version limit", async () => {
+    const onlyB = fixture();
+    updateDigital(onlyB, (rows) => [
+      { ...rows[0], seqVoucherNumber: "700000109" },
+      rows[1]!,
+    ]);
+    updateLegacy(onlyB, (rows) => rows.slice(1));
+    delete onlyB.responses.details;
+    await withDatabase(async (db, ingest) => {
+      await ingest(fixture());
+      const a = (await db.listTransactions()).find(
+        (row) => row.sourceKey === paymentKey("2040-03-15", "700000101"),
+      )!;
+      await db.client.execute({
+        sql: "UPDATE transactions SET version = ? WHERE id = ?",
+        args: [Number.MAX_SAFE_INTEGER, a.id],
+      });
+      const before = await db.listTransactions();
+      const error = await ingest(onlyB).then(
+        () => undefined,
+        (reason: unknown) => reason,
+      );
+      expect(error).toBeInstanceOf(ConflictError);
+      expect((error as Error).message).toBe("Version limit reached");
+      expect(await db.listTransactions()).toEqual(before);
     });
   });
 

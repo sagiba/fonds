@@ -18,13 +18,14 @@ import {
   retainProviderEvidence,
 } from "../observations.js";
 import { inPerspective } from "../read-model.js";
-import type {
-  CollectionFailure,
-  CollectionScope,
-  EventType,
-  FinancialResponse,
-  Run,
-  Transaction,
+import {
+  type CollectionFailure,
+  type CollectionScope,
+  type EventType,
+  type FinancialResponse,
+  nextVersion,
+  type Run,
+  type Transaction,
 } from "../records.js";
 import type { ExtractionResult, SourceAdapter } from "../source-adapter.js";
 import { reviewState } from "./annotation.js";
@@ -1722,8 +1723,9 @@ export function planRun(
           lastSeenAt: response.capturedAt,
           lastSeenRunId: runId,
           version:
-            previous.version +
-            (changed || previous.presence !== "seen" ? 1 : 0),
+            changed || previous.presence !== "seen"
+              ? nextVersion(previous.version)
+              : previous.version,
         });
         if (changed) {
           updated++;
@@ -1762,7 +1764,10 @@ export function planRun(
           }
           continue;
         }
-        const held = { ...heldLine(previous), version: previous.version + 1 };
+        const held = {
+          ...heldLine(previous),
+          version: nextVersion(previous.version),
+        };
         plan.updateTransaction(previous.id, held);
         updated++;
         event("transaction.updated", previous.id, financialState(previous), {
@@ -1815,7 +1820,7 @@ export function planRun(
       }
       plan.updateTransaction(previous.id, {
         presence: "not_returned",
-        version: previous.version + 1,
+        version: nextVersion(previous.version),
       });
       event(
         "transaction.unlisted",
