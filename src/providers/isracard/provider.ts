@@ -57,6 +57,9 @@ export function createIsracardProvider(
             ...(options.callBudget !== undefined && {
               callBudget: options.callBudget,
             }),
+            ...(options.maxDetails !== undefined && {
+              maxDetails: options.maxDetails,
+            }),
             httpClient: createHttpClient(),
           }),
       };

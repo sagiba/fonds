@@ -1097,7 +1097,7 @@ describe("Isracard extraction", () => {
       { code: 20, name: party, bound: true, expected: party },
       { code: 23, name: `  ${party}\n`, bound: true, expected: party },
       { code: 1, bit: true, name: party, bound: true, expected: party },
-      { code: 20, name: party, bound: false, expected: null },
+      { code: 20, name: party, bound: false, expected: undefined },
       { code: 20, name: " \t ", bound: true, expected: null },
       { code: 20, name: "", bound: true, expected: null },
       { code: 20, name: null, bound: true, expected: null },
@@ -1129,16 +1129,74 @@ describe("Isracard extraction", () => {
       const row = extract(capture).transactions[0]!;
       expect(row.counterpartyName, JSON.stringify(item)).toBe(item.expected);
     }
-    // Without any detail a transfer keeps a null counterparty.
+    // No optional lookup supplies no observation, rather than an explicit clear.
     const capture = baseline();
     delete capture.responses.details;
     updateDigital(capture, (rows) =>
       Object.assign(rows[0]!, { transactionCode: 20 }),
     );
-    expect(extract(capture).transactions[0]).toMatchObject({
+    expect(extractRaw(capture).transactions[0]).toMatchObject({
       kind: "transfer",
-      counterpartyName: null,
+      counterpartyName: undefined,
     });
+  });
+
+  it("does not treat absent or unbound optional details as an observed transfer counterparty clear", () => {
+    for (const variant of [
+      "empty",
+      "unrelated-request",
+      "malformed",
+      "failed",
+      "wrong-voucher",
+      "duplicate",
+    ] as const) {
+      const capture = baseline();
+      updateDigital(capture, (rows) =>
+        Object.assign(rows[0]!, { transactionCode: 20 }),
+      );
+      const entry = capture.responses.details![0]!;
+      entry.responseText = JSON.stringify({
+        Header: { Status: "1" },
+        PirteyIska_204Bean: {
+          voucherNumberRatz: entry.voucherNumber,
+          motavName: "Synthetic party",
+        },
+      });
+      if (variant === "empty") {
+        capture.responses.details = [];
+      }
+      if (variant === "unrelated-request") {
+        entry.voucherNumber = "UNRELATED-REQUEST";
+      }
+      if (variant === "malformed") {
+        entry.responseText = "{";
+      }
+      if (variant === "failed") {
+        entry.responseText = '{"Header":{"Status":"2"}}';
+      }
+      if (variant === "wrong-voucher") {
+        entry.responseText = JSON.stringify({
+          Header: { Status: "1" },
+          PirteyIska_204Bean: {
+            voucherNumberRatz: "UNRELATED-RESPONSE",
+            motavName: "Synthetic party",
+          },
+        });
+      }
+      if (variant === "duplicate") {
+        capture.responses.details!.push({ ...entry });
+      }
+      const row = extractRaw(capture).transactions.find(
+        (row) => row.kind === "transfer",
+      )!;
+      expect(row.counterpartyName, variant).toBeUndefined();
+      if (["malformed", "failed", "wrong-voucher"].includes(variant)) {
+        expect(row.details.issues).toContain("invalid_transaction_detail");
+      }
+      if (variant === "duplicate") {
+        expect(row.details.issues).toContain("ambiguous_transaction_detail");
+      }
+    }
   });
 
   it("leaves unmapped, padded and malformed transaction codes unknown", () => {

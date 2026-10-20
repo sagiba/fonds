@@ -1388,7 +1388,8 @@ function extractGroup(
   // card presence; the security and wallet flags stay raw evidence.
   const codeType = digitalRow ? token(digitalRow.tranzacCodeType) : null;
   const wallets: TransactionInput["wallet"][] = [];
-  let counterpartyName: string | null = null;
+  let counterpartyName: TransactionInput["counterpartyName"] =
+    kind === "transfer" ? undefined : null;
   // A detail projects facts only when its own voucher is the requested one;
   // an unbound detail stays in the archive alone.
   if (binding !== null) {

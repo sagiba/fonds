@@ -12,6 +12,7 @@ import {
   isracardHistoryMonths,
   type IsracardSession,
 } from "../../../src/providers/isracard/collect.js";
+import { extractIsracard } from "../../../src/providers/isracard/extract.js";
 import {
   ISRACARD_ENDPOINTS,
   type IsracardResponse,
@@ -49,42 +50,48 @@ function financial(
 }
 
 function setup(cards: Record<string, unknown>[] = [firstCard]) {
-  const request = vi.fn(async (endpoint: string, _body?: object) => {
-    if (endpoint === ISRACARD_ENDPOINTS.login) {
-      return financial({ status: "1" });
-    }
-    if (endpoint === ISRACARD_ENDPOINTS.cards) {
-      return financial({ isSuccess: true, data: { cardsList: cards } });
-    }
-    if (endpoint === ISRACARD_ENDPOINTS.transactions) {
-      return financial(JSON.parse(digitalText) as object, digitalText);
-    }
-    if (endpoint === ISRACARD_ENDPOINTS.details) {
+  const request = vi.fn(
+    async (
+      endpoint: string,
+      _body?: object,
+      _query?: Record<string, string>,
+    ) => {
+      if (endpoint === ISRACARD_ENDPOINTS.login) {
+        return financial({ status: "1" });
+      }
+      if (endpoint === ISRACARD_ENDPOINTS.cards) {
+        return financial({ isSuccess: true, data: { cardsList: cards } });
+      }
+      if (endpoint === ISRACARD_ENDPOINTS.transactions) {
+        return financial(JSON.parse(digitalText) as object, digitalText);
+      }
+      if (endpoint === ISRACARD_ENDPOINTS.details) {
+        return financial({
+          Header: { Status: "1" },
+          PirteyIska_204Bean: { address: "Synthetic street" },
+        });
+      }
       return financial({
         Header: { Status: "1" },
-        PirteyIska_204Bean: { address: "Synthetic street" },
+        CardsTransactionsListBean: {
+          cardNumberList: cards.map((card) => `Synthetic ${card.cardSuffix}`),
+          ...Object.fromEntries(
+            cards.map((_, index) => [
+              `Index${index}`,
+              {
+                CurrentCardTransactions: [
+                  {
+                    txnIsrael: [{ voucherNumberRatz: "123456789" }],
+                    txnAbroad: [],
+                  },
+                ],
+              },
+            ]),
+          ),
+        },
       });
-    }
-    return financial({
-      Header: { Status: "1" },
-      CardsTransactionsListBean: {
-        cardNumberList: cards.map((card) => `Synthetic ${card.cardSuffix}`),
-        ...Object.fromEntries(
-          cards.map((_, index) => [
-            `Index${index}`,
-            {
-              CurrentCardTransactions: [
-                {
-                  txnIsrael: [{ voucherNumberRatz: "123456789" }],
-                  txnAbroad: [],
-                },
-              ],
-            },
-          ]),
-        ),
-      },
-    });
-  });
+    },
+  );
   const transport: IsracardTransport = {
     request,
     containsAuthMaterial: () => false,
@@ -720,6 +727,15 @@ describe("Isracard conservative bounded collection", () => {
       fatal: true,
       failure: { code: "authentication_challenge" },
     });
+    const detailFailure = result.find(
+      (event) =>
+        event.type === "failure" &&
+        event.failure.endpoint === ISRACARD_ENDPOINTS.details,
+    )!;
+    expect(detailFailure).toMatchObject({
+      failure: { affectsCoverage: false },
+    });
+    expect(result.at(-1)).not.toHaveProperty("failure.affectsCoverage");
     for (const event of result) {
       if (event.type === "capture") {
         expect(event.capture.responseText).toContain(
@@ -735,6 +751,127 @@ describe("Isracard conservative bounded collection", () => {
       ),
     ).toHaveLength(1);
   });
+
+  it("collects opt-in voucher-bound details into useful enrichment without changing purchase money", async () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        new URL("./fixtures/card-month-numeric.json", import.meta.url),
+        "utf8",
+      ),
+    ) as { responses: { digital: string; legacy: string } };
+    const { options, request } = setup();
+    const original = request.getMockImplementation()!;
+    request.mockImplementation(async (endpoint, body, query) => {
+      if (endpoint === ISRACARD_ENDPOINTS.transactions) {
+        return financial(
+          JSON.parse(fixture.responses.digital),
+          fixture.responses.digital,
+        );
+      }
+      if (endpoint === ISRACARD_ENDPOINTS.legacy) {
+        return financial(
+          JSON.parse(fixture.responses.legacy),
+          fixture.responses.legacy,
+        );
+      }
+      if (endpoint === ISRACARD_ENDPOINTS.details) {
+        return financial({
+          Header: { Status: "1" },
+          PirteyIska_204Bean: {
+            voucherNumberRatz: query!.shovarRatz,
+            transactionType: "Apple Pay",
+            address: "Synthetic collected street",
+            phoneNumber: "SYNTHETIC-COLLECTED-PHONE",
+          },
+        });
+      }
+      return original(endpoint, body, query);
+    });
+    const [event] = await events({
+      ...options,
+      maxDetails: 1,
+      range: { from: "2040-07-01", to: "2040-07-31" },
+    });
+    expect(event?.type).toBe("capture");
+    if (event?.type !== "capture") {
+      return;
+    }
+    const result = extractIsracard(event.capture.responseText, {
+      accountKey: event.capture.accountKey,
+      runId: "synthetic-detail-run",
+      scope: event.capture.scope!,
+    });
+    const purchase = result.transactions.find((row) =>
+      row.sourceKey.includes("000123456"),
+    )!;
+    expect(purchase).toMatchObject({
+      kind: "purchase",
+      amountBasis: "purchase_commitment",
+      amountMinor: -8640,
+      currency: "ILS",
+      wallet: "apple_pay",
+      details: {
+        merchant: {
+          address: "Synthetic collected street",
+          phone: "SYNTHETIC-COLLECTED-PHONE",
+        },
+      },
+    });
+    expect(purchase.details.sourceRefs).toContainEqual({
+      runId: "synthetic-detail-run",
+      path: "$.responses.details[0].responseText.PirteyIska_204Bean",
+    });
+    expect(
+      request.mock.calls.find(
+        ([endpoint]) => endpoint === ISRACARD_ENDPOINTS.details,
+      )?.[2],
+    ).toEqual({ CardIndex: "0", shovarRatz: "000123456", moedChiuv: "072040" });
+  });
+
+  it.each([false, true])(
+    "keeps optional reauthentication failures separate from coverage (unfinished=%s)",
+    async (unfinished) => {
+      const { options, request } = setup();
+      const session: IsracardSession = {};
+      await events({ ...options, session });
+      request.mockClear();
+      const original = request.getMockImplementation()!;
+      request.mockImplementation(async (endpoint, body, query) => {
+        if (endpoint === ISRACARD_ENDPOINTS.details) {
+          throw new IsracardTransportError("authentication_failed");
+        }
+        if (endpoint === ISRACARD_ENDPOINTS.login) {
+          throw new IsracardTransportError("authentication_challenge");
+        }
+        return original(endpoint, body, query);
+      });
+      const result = await events({
+        ...options,
+        session,
+        maxDetails: 1,
+        ...(!unfinished
+          ? { range: { from: "2040-07-01", to: "2040-07-31" } }
+          : {}),
+      });
+      const failures = result.filter((event) => event.type === "failure");
+      expect(failures[0]).toMatchObject({
+        failure: {
+          endpoint: ISRACARD_ENDPOINTS.login,
+          code: "authentication_challenge",
+          affectsCoverage: false,
+        },
+      });
+      expect(failures).toHaveLength(unfinished ? 2 : 1);
+      if (unfinished) {
+        expect(failures[1]).not.toHaveProperty("failure.affectsCoverage");
+      }
+      expect(
+        request.mock.calls.filter(
+          ([endpoint]) => endpoint === ISRACARD_ENDPOINTS.login,
+        ),
+      ).toHaveLength(1);
+    },
+  );
 
   it("stops after three consecutive backend failures rather than spending the full call budget", async () => {
     const { options, request } = setup();
@@ -972,6 +1109,149 @@ describe("Isracard conservative bounded collection", () => {
       ),
     ).toHaveLength(1);
   });
+
+  it("skips statement artifacts and ambiguous legacy vouchers before spending detail calls", async () => {
+    const { options, request } = setup();
+    const original = request.getMockImplementation()!;
+    request.mockImplementation(async (endpoint, body, query) => {
+      if (endpoint !== ISRACARD_ENDPOINTS.legacy) {
+        return original(endpoint, body, query);
+      }
+      const result = await original(endpoint, body, query);
+      const bean = result.payload.CardsTransactionsListBean as {
+        Index0: { CurrentCardTransactions: unknown[] };
+      };
+      bean.Index0.CurrentCardTransactions = [
+        {
+          txnIsrael: [
+            { voucherNumberRatz: "111", dealSumType: "T" },
+            { voucherNumberRatz: "222", dealSumType: 1 },
+            { voucherNumberRatz: "000" },
+            { voucherNumberRatz: "333" },
+            { voucherNumberRatz: "444" },
+            { voucherNumberRatz: "555", dealSumType: "01" },
+          ],
+          txnAbroad: [
+            { voucherNumberRatzOutbound: "333" },
+            { voucherNumberRatzOutbound: "666", dealSumType: "T" },
+          ],
+          txnInfo: [{ voucherNumberRatz: "777" }],
+        },
+      ];
+      return financial(result.payload);
+    });
+    await events({
+      ...options,
+      maxDetails: 20,
+      range: { from: "2040-07-01", to: "2040-07-31" },
+    });
+    expect(
+      request.mock.calls
+        .filter(([endpoint]) => endpoint === ISRACARD_ENDPOINTS.details)
+        .map(([, , query]) => query),
+    ).toEqual([
+      { CardIndex: "0", shovarRatz: "444", moedChiuv: "072040" },
+      { CardIndex: "0", shovarRatz: "555", moedChiuv: "072040" },
+      { CardIndex: "0", shovarRatz: "666", moedChiuv: "072040" },
+    ]);
+  });
+
+  it("continues bounded optional detail attempts after nonfatal failures without failing mandatory coverage", async () => {
+    const { options, request } = setup();
+    const original = request.getMockImplementation()!;
+    let attempts = 0;
+    request.mockImplementation(async (endpoint, body, query) => {
+      if (endpoint === ISRACARD_ENDPOINTS.details) {
+        attempts++;
+        if (attempts <= 3) {
+          throw new IsracardTransportError("network_error", false);
+        }
+      }
+      if (endpoint === ISRACARD_ENDPOINTS.legacy) {
+        const result = await original(endpoint, body, query);
+        const bean = result.payload.CardsTransactionsListBean as {
+          Index0: { CurrentCardTransactions: unknown[] };
+        };
+        bean.Index0.CurrentCardTransactions = [
+          {
+            txnIsrael: ["111", "222", "333", "444"].map(
+              (voucherNumberRatz) => ({ voucherNumberRatz }),
+            ),
+            txnAbroad: [],
+          },
+        ];
+        return financial(result.payload);
+      }
+      return original(endpoint, body, query);
+    });
+    const result = await events({ ...options, maxDetails: 4 });
+    expect(attempts).toBe(4);
+    expect(result.filter((event) => event.type === "capture")).toHaveLength(2);
+    expect(result.filter((event) => event.type === "failure")).toEqual(
+      Array.from({ length: 3 }, () =>
+        expect.objectContaining({
+          failure: expect.objectContaining({
+            endpoint: ISRACARD_ENDPOINTS.details,
+            affectsCoverage: false,
+          }),
+          fatal: false,
+        }),
+      ),
+    );
+    const captures = result.filter((event) => event.type === "capture");
+    expect(
+      captures.map(
+        (event) =>
+          JSON.parse(event.capture.responseText).responses.details?.length ?? 0,
+      ),
+    ).toEqual([1, 0]);
+  });
+
+  it.each([
+    [8, 0],
+    [9, 1],
+  ])(
+    "reserves reused-session reauthentication while detail cap uses budget %s",
+    async (callBudget, expectedDetails) => {
+      const { options, request } = setup();
+      const session: IsracardSession = {};
+      await events({ ...options, session });
+      request.mockClear();
+      const original = request.getMockImplementation()!;
+      let rejected = false;
+      request.mockImplementation(async (endpoint, body, query) => {
+        if (
+          endpoint === ISRACARD_ENDPOINTS.transactions &&
+          (body as { billingMonth: string }).billingMonth === "01/08/2040" &&
+          !rejected
+        ) {
+          rejected = true;
+          throw new IsracardTransportError("authentication_failed");
+        }
+        return original(endpoint, body, query);
+      });
+      const result = await events({
+        ...options,
+        session,
+        callBudget,
+        maxDetails: 20,
+      });
+      expect(result.every((event) => event.type === "capture")).toBe(true);
+      expect(result).toHaveLength(2);
+      expect(request.mock.calls).toHaveLength(callBudget);
+      expect(
+        request.mock.calls.filter(
+          ([endpoint]) => endpoint === ISRACARD_ENDPOINTS.details,
+        ),
+      ).toHaveLength(expectedDetails);
+      expect(
+        request.mock.calls.filter(
+          ([endpoint]) => endpoint === ISRACARD_ENDPOINTS.login,
+        ),
+      ).toHaveLength(1);
+      expect(session.logins).toBe(2);
+    },
+  );
 
   it("keeps the default 24-call ceiling even for a valid twelve-month backfill", async () => {
     const { options, request } = setup();

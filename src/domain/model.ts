@@ -408,6 +408,8 @@ export function emptyDetails(): TransactionDetails {
 export const transactionInputSchema = z
   .object({
     ...sourceFactsShape,
+    /** Omitted optional evidence may preserve a resolved native transfer's name. */
+    counterpartyName: nullableCanonicalText.optional(),
     cardKey: canonicalTextSchema.min(1).max(RESOURCE_ID_MAX_LENGTH).nullable(),
     purchaseKey: canonicalTextSchema.min(1).nullable().optional(),
     ...parsedLedgerFactsShape,
@@ -461,9 +463,15 @@ export type TransactionInput = z.infer<typeof transactionInputSchema>;
 /** A resolved ledger row's facts: adapter facts plus service references. */
 export type TransactionFacts = Omit<
   TransactionInput,
-  "cardKey" | "purchaseKey" | "installmentNumber" | PaymentContextField
-> &
-  Omit<LedgerFacts, PaymentContextField> &
+  | "cardKey"
+  | "purchaseKey"
+  | "installmentNumber"
+  | "counterpartyName"
+  | PaymentContextField
+> & { counterpartyName: string | null } & Omit<
+    LedgerFacts,
+    PaymentContextField
+  > &
   ReadPaymentContext;
 
 /** A stored ledger row's facts: payment context is a value or null. */

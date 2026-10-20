@@ -302,7 +302,9 @@ and every code had one label. That label is the evidence for a kind:
   standing-order flags and a transfer's bound `motavName` become typed facts; the
   name carries no role beyond the transfer. `presentCard` and the security and
   wallet flags stay raw. DigitalV3 `countryCode` is used only as a valid ISO
-  3166-1 alpha-3 code.
+  3166-1 alpha-3 code. An absent optional detail preserves an unambiguously matched
+  native transfer's prior counterparty name; a valid bound detail with an empty
+  counterparty clears it.
 - **Checks:** [extraction] "maps DigitalV3 tranzacCodeType %j to %j / 3-D
   Secure %j", "leaves conflicting explicit wallet names null…",
   "does not infer a wallet from flags…", "names a transfer's counterparty only
@@ -324,6 +326,15 @@ and every code had one label. That label is the evidence for a kind:
 - **Policy:** a detail supplies facts only when exactly one detail's own voucher
   matches the transaction's; any other detail stays in the archive alone. Its
   money fields and payment table stay raw and never create a schedule or total.
+- **Public lead:** the issuer's [modern detail client][issuer-posted-details]
+  and [public content][issuer-detail-content], inspected on 2026-10-20, name
+  explicit conversion-rate/date fields and fee amounts such as `netFee`.
+  Their SHA-256 hashes are
+  `1bed198c385487b5d1c734003d4f076abca5dc0fab8e257f8e2f244929da77bd` and
+  `2f130aa2a44a8629e45f54603c5b9ccaf1abc28f8041d9cd73e9326f3bcfa238`.
+  `GetTransactionDetails` uses the posted sequence and card context; no accepted
+  local response establishes its binding, types or financial extraction. This
+  route is not collected, and existing FX uncertainty remains.
 - **Checks:** [extraction] "projects no address, phone, wallet or detail copy
   from a detail bound to another voucher", "keeps independent foreign source
   amounts, payment tables and null fee placeholders…".
@@ -392,5 +403,7 @@ and every code had one label. That label is the evidence for a kind:
 [upstream-1159]: https://github.com/eshaham/israeli-bank-scrapers/pull/1159
 [issuer-transactions]: https://web.isracard.co.il/ocp/transactions/DigitalV3.Transactions/DigitalV3.Transactions.Frontend/prod/assets/index-Dt-M-_KF.js
 [issuer-approval-details]: https://web.isracard.co.il/DigitalV3.ApprovalDetails/DigitalV3.ApprovalDetails.Frontend/prod/assets/index-udjkD_jr.js
+[issuer-posted-details]: https://web.isracard.co.il/ocp/transactiondetails/DigitalV3.TransactionDetails/DigitalV3.TransactionDetails.Frontend/prod/assets/index-CpuNtMGa.js
+[issuer-detail-content]: https://web.isracard.co.il/ocp/transactiondetails/DigitalV3.TransactionDetails/GetContent
 [upstream-constants]: https://github.com/eshaham/israeli-bank-scrapers/blob/5170a65ffaf8df2d22f32b0fa1656350a8337590/src/constants.ts
 [upstream-amex]: https://github.com/eshaham/israeli-bank-scrapers/blob/5170a65ffaf8df2d22f32b0fa1656350a8337590/src/scrapers/base-isracard-amex.ts

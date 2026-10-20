@@ -330,7 +330,7 @@ export const operatorCommands: readonly OperatorCommand[] = [
     name: "collect",
     synopsis:
       "[--connection <id>] [--from YYYY-MM-DD --to YYYY-MM-DD] [--credentials-fd <number>]\n" +
-      "            [--history-mode monthly|search] [--search-window-months 1|3|6|12] [--call-budget 1-100]",
+      "            [--history-mode monthly|search] [--search-window-months 1|3|6|12] [--call-budget 1-100] [--max-details 0-20]",
     description: [
       "Collect from the provider now, as a refresh under the same lease as the server's.",
       "Without --connection, every connection with stored credentials, in turn; the provider",
@@ -348,6 +348,7 @@ export const operatorCommands: readonly OperatorCommand[] = [
       "history-mode": { type: "string" },
       "search-window-months": { type: "string" },
       "call-budget": { type: "string" },
+      "max-details": { type: "string" },
     },
     async run(context) {
       const { values } = context;
@@ -358,6 +359,7 @@ export const operatorCommands: readonly OperatorCommand[] = [
         "history-mode": text(values, "history-mode"),
         "search-window-months": text(values, "search-window-months"),
         "call-budget": text(values, "call-budget"),
+        "max-details": text(values, "max-details"),
         "credentials-fd": text(values, "credentials-fd"),
       });
       if (
