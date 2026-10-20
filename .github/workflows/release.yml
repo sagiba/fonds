@@ -382,21 +382,35 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
-      # Only a pushed release tag's run whose checks, builds and approved
-      # stage all succeeded can be finalized, from that tag's own code.
+      # Only this workflow's run for a release tag on main, whose every job
+      # succeeded and whose `release` environment was approved, can be
+      # finalized, and only then does the tag's own code run here.
       - name: Verify the release run
         run: |
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ && "$RUN_ID" =~ ^[0-9]+$ ]] ||
             { echo "finalize needs a release tag and a numeric run ID"; exit 1; }
+          fail() { echo "Run $RUN_ID is not an approved Release run for $TAG: $1"; exit 1; }
           commit="$(gh api "repos/$GH_REPO/commits/$TAG" --jq .sha)"
-          gh run view "$RUN_ID" --json workflowName,event,headBranch,headSha,jobs > /tmp/run.json
-          jq -e --arg tag "$TAG" --arg commit "$commit" '
-            .workflowName == "Release" and .event == "push" and
-            .headBranch == $tag and .headSha == $commit and
-            ([.jobs[] | select(.name == "stage")] | length == 1) and
-            ([.jobs[] | select(.name != "finalize") | .conclusion] | all(. == "success"))
-          ' /tmp/run.json > /dev/null ||
-            { echo "Run $RUN_ID is not a successful, approved Release run for $TAG"; exit 1; }
+          ancestry="$(gh api "repos/$GH_REPO/compare/$commit...main" --jq .status)"
+          [[ "$ancestry" == ahead || "$ancestry" == identical ]] || fail "$TAG is not on main"
+          workflow="$(gh api "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID" --jq .workflow_id)"
+          gh run view "$RUN_ID" --json workflowDatabaseId,event,headBranch,headSha,jobs > /tmp/run.json
+          jq -e --arg tag "$TAG" --arg commit "$commit" --argjson workflow "$workflow" '
+            .workflowDatabaseId == $workflow and .event == "push" and
+            .headBranch == $tag and .headSha == $commit
+          ' /tmp/run.json > /dev/null || fail "another workflow, event or commit"
+          # Every job except finalize, matrix images included, succeeded.
+          jq -e '
+            [.jobs[] | select(.name != "finalize")] as $jobs
+            | ($jobs | all(.conclusion == "success")) and
+              (["source", "check", "postgres", "package", "stage"]
+                | all(. as $name | $jobs | any(.name == $name))) and
+              (["image (amd64", "image (arm64"]
+                | all(. as $prefix | $jobs | any(.name | startswith($prefix))))
+          ' /tmp/run.json > /dev/null || fail "a required job did not succeed"
+          gh api "repos/$GH_REPO/actions/runs/$RUN_ID/approvals" --jq '
+            any(.[]; .state == "approved" and any(.environments[]; .name == "release"))
+          ' | grep -qx true || fail "the release environment was not approved"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: refs/tags/${{ env.TAG }}
@@ -457,10 +471,12 @@ jobs:
           mkdir -p /tmp/verify
           (cd /tmp/verify && npm pack "$name@$VERSION" --silent > /dev/null)
           cmp "/tmp/verify/$name-$VERSION.tgz" package/fonds.tgz
-          # Approving an older stage later would move this channel back.
+          # The channel points to this version or a newer one; an older stage
+          # approved later would have moved it back.
           channel="$(jq -r .npm.distTag release-manifest.json)"
-          [ "$(npm_channel "$name" "$channel")" = "$VERSION" ] || {
-            echo "$channel points to $(npm_channel "$name" "$channel"), not $VERSION; another stage was approved."
+          current="$(npm_channel "$name" "$channel")"
+          [ -n "$current" ] && [ "$(node scripts/release.mjs compare "$current" "$VERSION")" -ge 0 ] || {
+            echo "$channel points to ${current:-nothing}, older than $VERSION; an older stage was approved."
             exit 1
           }
       - name: Move rolling image tags
