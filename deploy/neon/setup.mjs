@@ -177,16 +177,19 @@ async function askSchedule(values, { input, output }) {
   }
 
   try {
+    const current = effectiveSetting("schedule", values);
     const schedule = await ask(
       "Scheduled refreshes: off, daily (recommended once a manual refresh works), hourly, or hours such as 9,13,18",
-      effectiveSetting("schedule", values),
+      current,
       "schedule",
     );
     const answers = { schedule };
     if (schedule !== "off" && schedule !== "hourly") {
+      // A named zone, or an active schedule (which runs in UTC when none is
+      // named), is kept on Enter; only a fresh choice suggests this machine's.
       answers.timeZone = await ask(
         "Time zone (IANA)",
-        values[SCHEDULE.timeZone]
+        values[SCHEDULE.timeZone]?.trim() || current !== "off"
           ? effectiveSetting("timeZone", values)
           : (Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC"),
         "timeZone",

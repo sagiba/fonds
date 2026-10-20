@@ -346,17 +346,62 @@ describe("Neon setup schedule", () => {
       FONDS_COLLECTION_SCHEDULE: "hourly",
     });
 
+    // A fresh choice: no schedule is active yet, so the machine's zone is
+    // suggested and, once accepted, written explicitly.
+    await written(before);
     const daily = terminal(["daily", "", ""]);
     await expect(
       setup(["--env-file", path, ...target], daily.io),
     ).rejects.toThrow(stopsAtDatabase);
-    expect(daily.prompts[0]).toMatch(/\[hourly\]: $/);
+    expect(daily.prompts[0]).toMatch(/\[off\]: $/);
     expect(daily.prompts[1]).toMatch(/\[Asia\/Tokyo\]: $/);
     expect(parseEnv(await readFile(path, "utf8"))).toEqual({
       ...parseEnv(before),
       FONDS_COLLECTION_SCHEDULE: "daily",
       FONDS_COLLECTION_TIMEZONE: "Asia/Tokyo",
     });
+  });
+
+  it("keeps an active schedule's UTC zone when the file names none", async () => {
+    vi.stubEnv("TZ", "Asia/Tokyo");
+    const before = `${required}\n${secrets}\nFONDS_COLLECTION_SCHEDULE=daily\nFONDS_COLLECTION_TIME=07:45\n`;
+    await written(before);
+    const { ino } = await stat(path);
+
+    const rerun = terminal(["", "", ""]);
+    await expect(
+      setup(["--env-file", path, ...target], rerun.io),
+    ).rejects.toThrow(stopsAtDatabase);
+    expect(
+      rerun.prompts.map((prompt) => prompt.match(/\[(.*)\]: $/)[1]),
+    ).toEqual(["daily", "UTC", "07:45"]);
+    await expect(
+      setup(
+        [
+          "--env-file",
+          path,
+          ...target,
+          "--schedule",
+          "daily",
+          "--time",
+          "07:45",
+        ],
+        pipes().io,
+      ),
+    ).rejects.toThrow(stopsAtDatabase);
+    expect(await readFile(path, "utf8")).toBe(before);
+    expect((await stat(path)).ino).toBe(ino);
+
+    // Changing an active hourly schedule to daily keeps its zone too.
+    await written(before.replace("SCHEDULE=daily", "SCHEDULE=hourly"));
+    const changed = terminal(["daily", "", ""]);
+    await expect(
+      setup(["--env-file", path, ...target], changed.io),
+    ).rejects.toThrow(stopsAtDatabase);
+    expect(changed.prompts[1]).toMatch(/\[UTC\]: $/);
+    expect(await readFile(path, "utf8")).not.toContain(
+      "FONDS_COLLECTION_TIMEZONE",
+    );
   });
 
   it("stops without writing anything when the terminal closes mid-answer", async () => {
