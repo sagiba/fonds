@@ -54,6 +54,8 @@ const GENERATED = {
       .map((value) => String(value).padStart(2, "0"))
       .join(":"),
 };
+/** Values the env file holds unquoted: single-line and comment-free. */
+const UNQUOTED = /^[A-Za-z0-9_.:/@+=,-]+$/;
 /** Generated settings a login link does not need. */
 const SETTINGS = new Set([SCHEDULE.time]);
 
@@ -113,34 +115,52 @@ export function scheduleAnswer(kind, text) {
   return ANSWERS[kind](text.trim());
 }
 
-/** The value the runtime would use for a setting, canonical when valid. */
+/**
+ * The canonical value the runtime reads from a setting's stored text, which
+ * is parsed exactly as stored; text the runtime refuses is returned as is,
+ * so no valid answer equals it.
+ */
 function effectiveSetting(kind, values) {
-  const text = values[SCHEDULE[kind]]?.trim() ?? "";
+  const stored = values[SCHEDULE[kind]];
   try {
     if (kind === "schedule") {
-      return text && parsedSchedule({ [SCHEDULE.schedule]: text })
-        ? scheduleAnswer(kind, text)
-        : "off";
+      const schedule =
+        stored === undefined
+          ? undefined
+          : parsedSchedule({ [SCHEDULE.schedule]: stored });
+      if (!schedule) {
+        return "off";
+      }
+      return schedule.mode === "hours"
+        ? schedule.hours.join(",")
+        : schedule.mode;
     }
-    return kind === "timeZone" && !text ? "UTC" : scheduleAnswer(kind, text);
+    if (kind === "timeZone") {
+      return ANSWERS.timeZone(stored ?? "");
+    }
+    return ANSWERS.time(stored ?? "");
   } catch (error) {
     if (error instanceof SetupError) {
-      // Invalid in the file: offered as is, and refused if kept.
-      return text;
+      return stored ?? "";
     }
     throw error;
   }
 }
 
 /**
- * Sets each answer that changes what the runtime would use and returns the
- * changed names; an answer equal to the file's effective value keeps its text.
+ * Sets each answer the file does not already hold and returns the changed
+ * names. Stored text is kept only when the runtime reads it as the answer and
+ * the file can hold it unquoted, so an unchanged rerun writes nothing.
  */
 function applySchedule(values, answers) {
   const changed = [];
   for (const [kind, text] of Object.entries(answers)) {
     const answer = scheduleAnswer(kind, text);
-    if (answer !== effectiveSetting(kind, values)) {
+    const stored = values[SCHEDULE[kind]];
+    if (
+      answer !== effectiveSetting(kind, values) ||
+      (stored !== undefined && !UNQUOTED.test(stored))
+    ) {
       values[SCHEDULE[kind]] = answer;
       changed.push(SCHEDULE[kind]);
     }
@@ -347,8 +367,7 @@ export async function prepareEnvironmentFile(
   }
   const changed = schedule ? applySchedule(values, await schedule(values)) : [];
   for (const [name, value] of Object.entries(values)) {
-    // Unquoted dotenv values must stay single-line and comment-free.
-    if (!/^[A-Za-z0-9_.:/@+=,-]+$/.test(value)) {
+    if (!UNQUOTED.test(value)) {
       fail(`${name} contains characters the env file cannot hold unquoted.`);
     }
   }

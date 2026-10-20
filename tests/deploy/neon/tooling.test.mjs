@@ -404,6 +404,102 @@ describe("Neon setup schedule", () => {
     );
   });
 
+  it("corrects padded stored values that equal the answer once trimmed", async () => {
+    const padded = `${required}\n${secrets}\nFONDS_COLLECTION_SCHEDULE=" daily "\nFONDS_COLLECTION_TIMEZONE=" Asia/Tokyo "\nFONDS_COLLECTION_TIME=" 07:45 "\n`;
+    // The runtime refuses the padded time as stored.
+    expect(() => parseCollectionSchedule(parseEnv(padded), "missing")).toThrow(
+      "FONDS_COLLECTION_TIME must be a 24-hour HH:MM time",
+    );
+    const corrected = {
+      ...parseEnv(padded),
+      FONDS_COLLECTION_SCHEDULE: "daily",
+      FONDS_COLLECTION_TIMEZONE: "Asia/Tokyo",
+      FONDS_COLLECTION_TIME: "07:45",
+    };
+
+    for (const flag of [
+      ["--time", "07:45"],
+      ["--timezone", "Asia/Tokyo"],
+      ["--schedule", "daily"],
+    ]) {
+      const [name, value] = flag;
+      const setting = {
+        "--time": "FONDS_COLLECTION_TIME",
+        "--timezone": "FONDS_COLLECTION_TIMEZONE",
+        "--schedule": "FONDS_COLLECTION_SCHEDULE",
+      }[name];
+      // Only the flagged entry is padded, so the rest of the file is valid.
+      await written(
+        `${required}\n${secrets}\nFONDS_COLLECTION_SCHEDULE=daily\nFONDS_COLLECTION_TIMEZONE=Asia/Tokyo\nFONDS_COLLECTION_TIME=07:45\n${setting}=" ${value} "\n`,
+      );
+      await expect(
+        setup(["--env-file", path, ...target, ...flag], pipes().io),
+        flag.join(" "),
+      ).rejects.toThrow(stopsAtDatabase);
+      expect(parseEnv(await readFile(path, "utf8"))).toEqual(corrected);
+    }
+
+    // Enter on every prompt corrects all three, as each default is shown.
+    await written(padded);
+    const tty = terminal(["", "", ""]);
+    await expect(
+      setup(["--env-file", path, ...target], tty.io),
+    ).rejects.toThrow(stopsAtDatabase);
+    const saved = parseEnv(await readFile(path, "utf8"));
+    expect(saved).toEqual(corrected);
+    expect(parseCollectionSchedule(saved, "missing")).toMatchObject({
+      mode: "daily",
+      hours: [7],
+      minute: 45,
+      timeZone: "Asia/Tokyo",
+    });
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+  });
+
+  it("writes padded answers trimmed, which the runtime then accepts", async () => {
+    const before = `${required}\n${secrets}\nFONDS_COLLECTION_TIME=07:45\n`;
+    await written(before);
+    await expect(
+      setup(
+        [
+          "--env-file",
+          path,
+          ...target,
+          "--schedule",
+          " 13, 9 ",
+          "--timezone",
+          " asia/tokyo ",
+          "--time",
+          " 06:30 ",
+        ],
+        pipes().io,
+      ),
+    ).rejects.toThrow(stopsAtDatabase);
+    const saved = parseEnv(await readFile(path, "utf8"));
+    expect(saved).toEqual({
+      ...parseEnv(before),
+      FONDS_COLLECTION_SCHEDULE: "9,13",
+      FONDS_COLLECTION_TIMEZONE: "Asia/Tokyo",
+      FONDS_COLLECTION_TIME: "06:30",
+    });
+    expect(parseCollectionSchedule(saved, "missing")).toMatchObject({
+      hours: [9, 13],
+      minute: 30,
+      timeZone: "Asia/Tokyo",
+    });
+
+    await written(before);
+    const tty = terminal([" daily ", " asia/tokyo ", " 06:30 "]);
+    await expect(
+      setup(["--env-file", path, ...target], tty.io),
+    ).rejects.toThrow(stopsAtDatabase);
+    expect(parseEnv(await readFile(path, "utf8"))).toMatchObject({
+      FONDS_COLLECTION_SCHEDULE: "daily",
+      FONDS_COLLECTION_TIMEZONE: "Asia/Tokyo",
+      FONDS_COLLECTION_TIME: "06:30",
+    });
+  });
+
   it("stops without writing anything when the terminal closes mid-answer", async () => {
     await written(`${required}\n`);
     const tty = terminal(["daily"]);
