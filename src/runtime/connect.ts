@@ -1,3 +1,4 @@
+import type { CredentialStore } from "../application/credential-store.js";
 import type { FinancialStore } from "../application/financial-store.js";
 import type { CredentialVault } from "./credential-vault.js";
 import { loadCredentials } from "./credentials.js";
@@ -42,5 +43,30 @@ export async function connectCredentials(options: {
     connectionId: options.connectionId,
     provider: connection.provider,
     credentials: "stored" as const,
+  };
+}
+
+/**
+ * Operator-only: removes one connection's stored credentials, so collection
+ * stops discovering it. Its ledger, evidence and events are kept.
+ */
+export async function disconnectCredentials(options: {
+  connectionId: string;
+  connections: Pick<FinancialStore, "getConnection">;
+  credentials: Pick<CredentialStore, "deleteCredentials">;
+}) {
+  const connection = await options.connections.getConnection(
+    options.connectionId,
+  );
+  if (!connection) {
+    throw new ConnectError("Connection not found.");
+  }
+  const removed = await options.credentials.deleteCredentials(
+    options.connectionId,
+  );
+  return {
+    connectionId: options.connectionId,
+    provider: connection.provider,
+    credentials: removed ? ("removed" as const) : ("none" as const),
   };
 }

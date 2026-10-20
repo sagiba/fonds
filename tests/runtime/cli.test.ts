@@ -1890,6 +1890,47 @@ describe("stored provider credentials", () => {
     expect(output).toContain("INVENTED-PRIVATE-USER");
   });
 
+  it("disconnects by removing stored credentials and keeps the connection", async () => {
+    await init("cal-cli", "cal");
+    await withCredentialFile(calCredentials, (fd) =>
+      success(
+        "connect",
+        "--db",
+        dbPath,
+        "--connection",
+        "cal-cli",
+        "--credentials-fd",
+        fd,
+      ),
+    );
+    expect(
+      await success("disconnect", "--db", dbPath, "--connection", "cal-cli"),
+    ).toEqual({
+      connectionId: "cal-cli",
+      provider: "cal",
+      credentials: "removed",
+    });
+    expect(
+      await success("disconnect", "--db", dbPath, "--connection", "cal-cli"),
+    ).toMatchObject({ credentials: "none" });
+    expect(await success("collect", "--db", dbPath)).toMatchObject({
+      status: "completed",
+      captures: 0,
+    });
+    expect(collectorState.calls).toHaveLength(0);
+    const database = await openDatabase(dbPath);
+    try {
+      expect(await database.getConnection("cal-cli")).toMatchObject({
+        provider: "cal",
+      });
+    } finally {
+      await database.close();
+    }
+    expect(
+      await run("disconnect", "--db", dbPath, "--connection", "missing"),
+    ).toMatchObject({ status: 1, stderr: "Connection not found.\n" });
+  });
+
   it("rejects unknown connections, missing input and a public state file", async () => {
     await init("cal-cli", "cal");
     expect(

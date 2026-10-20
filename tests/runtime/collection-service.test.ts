@@ -90,6 +90,7 @@ it("projects provider transport diagnostics and isolates failing log callbacks",
       credentials: {
         getCredentials: async () => undefined,
         saveCredentials: async () => {},
+        deleteCredentials: async () => false,
       },
       credentialsKey: () => undefined,
       configured: {

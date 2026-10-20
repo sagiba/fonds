@@ -100,6 +100,7 @@ uses `--db` or the default ledger.
 | ------------ | --------------------------------------------------------------------------------------------- |
 | `init`       | Creates the database if needed, binds it to the state directory, and adds a connection        |
 | `connect`    | Stores a connection's provider credentials encrypted, from hidden input or `--credentials-fd` |
+| `disconnect` | Removes stored credentials; later refreshes skip it; the ledger stays                         |
 | `collect`    | Collects now; without `--connection`, every connection with stored credentials, in turn       |
 | `consume`    | Delivers the event feed to stdout as JSON lines and advances a consumer cursor                |
 | `ingest`     | Archives and applies one captured provider response offline                                   |

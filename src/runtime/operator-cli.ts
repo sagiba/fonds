@@ -28,7 +28,11 @@ import type {
   CollectionTarget,
 } from "./collection-routes.js";
 import { collectionTargets } from "./collection-service.js";
-import { connectCredentials, ConnectError } from "./connect.js";
+import {
+  connectCredentials,
+  ConnectError,
+  disconnectCredentials,
+} from "./connect.js";
 import {
   createCredentialVault,
   type CredentialsKey,
@@ -208,6 +212,10 @@ async function withSession<T>(
   }
 }
 
+/** Usage column for synopses: wider than every command name. */
+const NAME_WIDTH = 12;
+const SYNOPSIS_CONTINUATION = " ".repeat(2 + NAME_WIDTH);
+
 const SCHEDULE_NOTE =
   "Scheduled collection runs only when the service sets FONDS_COLLECTION_SCHEDULE=daily (or hourly, or hours such as 9,13,18).\n";
 
@@ -357,10 +365,32 @@ export const operatorCommands: readonly OperatorCommand[] = [
     },
   },
   {
+    name: "disconnect",
+    synopsis: "--connection <id>",
+    description:
+      "Remove the connection's stored provider credentials, so refreshes that start later skip it; one already running finishes. Credentials from FONDS_COLLECTION_CREDENTIALS are unaffected. Its transactions, annotations and events are kept; repeating it changes nothing.",
+    options: { connection: { type: "string" } },
+    async run(context) {
+      const connectionId = required(context.values, "connection");
+      const removed = await withSession(
+        context,
+        { create: false, credentials: true },
+        (session) =>
+          disconnectCredentials({
+            connectionId,
+            connections: session.store,
+            credentials: session.credentials,
+          }),
+      );
+      print(removed);
+      return EXIT_CODES.ok;
+    },
+  },
+  {
     name: "collect",
     synopsis:
       "[--connection <id>] [--from YYYY-MM-DD --to YYYY-MM-DD] [--credentials-fd <number>]\n" +
-      "            [--history-mode monthly|search] [--search-window-months 1|3|6|12] [--call-budget 1-100] [--max-details 0-20] [--diagnostics] [--archive-days 1-30]",
+      `${SYNOPSIS_CONTINUATION}[--history-mode monthly|search] [--search-window-months 1|3|6|12] [--call-budget 1-100] [--max-details 0-20] [--diagnostics] [--archive-days 1-30]`,
     description: [
       "Collect from the provider now, as a refresh under the same lease as the server's.",
       "Without --connection, every connection with stored credentials, in turn; the provider",
@@ -518,7 +548,7 @@ export const operatorCommands: readonly OperatorCommand[] = [
     name: "ingest",
     synopsis:
       "--connection <id> --account <key> --run <id> --file <JSON file>\n" +
-      "            [--captured-at <ISO timestamp>] [--endpoint <name>]",
+      `${SYNOPSIS_CONTINUATION}[--captured-at <ISO timestamp>] [--endpoint <name>]`,
     description:
       "Archive and apply one captured provider response offline. Retry with the same run ID, source file, endpoint and capture time.",
     options: {
@@ -663,7 +693,7 @@ const commandsByName = new Map(
 );
 
 function commandUsage(command: OperatorCommand) {
-  return `  ${command.name.padEnd(10)}${command.synopsis}`.trimEnd();
+  return `  ${command.name.padEnd(NAME_WIDTH)}${command.synopsis}`.trimEnd();
 }
 
 /** Top-level usage: the same commands on every backend. */
