@@ -837,12 +837,25 @@ export function presentSyncRun(run: SyncRun) {
 }
 
 export function presentRefresh(refresh: Refresh) {
-  const { occurrence: _occurrence, windows: _windows, ...summary } = refresh;
+  const {
+    occurrence: _occurrence,
+    windows: _windows,
+    providerStopReason: _providerStopReason,
+    hasAcceptedEvidence: _hasAcceptedEvidence,
+    ...summary
+  } = refresh;
   return summary;
 }
 
 export function presentRefreshDetail(refresh: Refresh) {
-  return { ...presentRefresh(refresh), windows: refresh.windows };
+  return {
+    ...presentRefresh(refresh),
+    windows: refresh.windows.map(({ from, to, status }) => ({
+      from,
+      to,
+      status,
+    })),
+  };
 }
 
 export function presentRefreshStart(result: RefreshStartResult) {

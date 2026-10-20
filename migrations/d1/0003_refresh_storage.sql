@@ -286,3 +286,6 @@ CREATE TABLE deferred_evidence (
   first_seen_run_id TEXT NOT NULL REFERENCES sync_runs(id),
   last_seen_run_id TEXT NOT NULL REFERENCES sync_runs(id)
 ) STRICT;
+ALTER TABLE refreshes ADD COLUMN provider_stop_reason TEXT CHECK (provider_stop_reason IN ('authentication_failed','authentication_challenge','rate_limited','budget_exhausted'));
+ALTER TABLE refresh_windows ADD COLUMN has_accepted_evidence INTEGER NOT NULL DEFAULT 0 CHECK (has_accepted_evidence IN (0,1));
+ALTER TABLE refreshes ADD COLUMN has_accepted_evidence INTEGER NOT NULL DEFAULT 0 CHECK (has_accepted_evidence IN (0,1));

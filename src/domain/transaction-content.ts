@@ -105,13 +105,15 @@ export function retainedTransactionEvidence(
   adapter: Pick<SourceAdapter, "provider" | "retainProviderEvidence">,
 ): JsonObject {
   const namespace = row.details.provider[adapter.provider] ?? {};
-  return (
-    adapter.retainProviderEvidence?.(namespace) ??
-    Object.fromEntries(
-      Object.entries(namespace).filter(
-        ([key]) => !providerStateFields.some((state) => state === key),
-      ),
-    )
+  return adapter.retainProviderEvidence?.(namespace) ?? {};
+}
+
+/** Owner operations may compare accepted stored evidence; never use this to admit adapter input. */
+export function storedProviderEvidence(namespace: JsonObject): JsonObject {
+  return Object.fromEntries(
+    Object.entries(namespace).filter(
+      ([key]) => !providerStateFields.some((state) => state === key),
+    ),
   );
 }
 

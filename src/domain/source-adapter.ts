@@ -63,8 +63,8 @@ export interface SourceAdapter {
   recentComparableDays?: number;
   /** Reject a successful empty recent posted partition if comparable posted rows exist. */
   rejectEmptyRecentPosted?: boolean;
-  /** Declared source evidence only, projected identically for stored and new rows. */
-  retainProviderEvidence?(evidence: JsonObject): JsonObject;
+  /** Declared source evidence only, projected identically for stored and new rows; return {} to retain none. */
+  retainProviderEvidence(evidence: JsonObject): JsonObject;
   /** Adapter-derived reconciliation state, never part of source-content comparison. */
   projectProviderState?(evidence: JsonObject): JsonObject;
   /** Merge declared components from overlapping captures without duplicating observations. */

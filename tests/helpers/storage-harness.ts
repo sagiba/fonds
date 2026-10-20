@@ -16,6 +16,10 @@ import type {
 import type { EventSubscriptionStore } from "../../src/application/events.js";
 import type { InternalStore } from "../../src/application/financial-store.js";
 import { emptyDetails, type TransactionInput } from "../../src/domain/model.js";
+import {
+  evidenceObject,
+  scalarFields,
+} from "../../src/domain/provider-evidence.js";
 import type { SourceAdapter } from "../../src/domain/source-adapter.js";
 import { createPostgresEventStore } from "../../src/storage/postgres/events.js";
 import {
@@ -339,6 +343,20 @@ export function row(
 export const synthetic: SourceAdapter = {
   provider: "cal",
   parserVersion: "synthetic-v1",
+  retainProviderEvidence: (value) =>
+    evidenceObject(value, {
+      retained: {
+        comments: [scalarFields("key value text label")],
+        paymentHistory: [scalarFields("date num amount currency label")],
+      },
+    }),
+  projectProviderState: (value) =>
+    evidenceObject(value, {
+      identity: {
+        ...scalarFields("baseKey occurrenceCount"),
+        currentRows: ["scalar"],
+      },
+    }),
   extract: (text) => ({
     transactions: JSON.parse(text) as TransactionInput[],
     partitions: [

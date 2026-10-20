@@ -264,3 +264,6 @@ CREATE TABLE deferred_evidence (
   first_seen_run_id TEXT COLLATE "C" NOT NULL REFERENCES sync_runs(id),
   last_seen_run_id TEXT COLLATE "C" NOT NULL REFERENCES sync_runs(id)
 );
+ALTER TABLE refreshes ADD COLUMN provider_stop_reason TEXT COLLATE "C" CHECK (provider_stop_reason IN ('authentication_failed','authentication_challenge','rate_limited','budget_exhausted'));
+ALTER TABLE refresh_windows ADD COLUMN has_accepted_evidence BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE refreshes ADD COLUMN has_accepted_evidence BOOLEAN NOT NULL DEFAULT false;

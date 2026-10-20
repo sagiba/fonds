@@ -51,7 +51,16 @@ export interface CollectionLock {
 
 /** Recovery needs an operator to select compatible archived evidence. */
 export class ManualRecoveryRequiredError extends Error {
-  constructor() {
+  constructor(
+    readonly failureCategory: "collection" | "execution" = "collection",
+  ) {
     super("Archived collection requires manual recovery");
+  }
+}
+
+/** Recovery could not reach storage; retain active progress for the normal retry policy. */
+export class RetryableRecoveryError extends Error {
+  constructor() {
+    super("Archived collection recovery is temporarily unavailable");
   }
 }

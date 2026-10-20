@@ -71,6 +71,7 @@ function setup() {
   const adapter: SourceAdapter = {
     provider: "synthetic",
     parserVersion: "1",
+    retainProviderEvidence: () => ({}),
     extract: vi.fn(),
   };
   return { store, collector, adapter, ingestRun };

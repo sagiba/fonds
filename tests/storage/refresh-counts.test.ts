@@ -90,6 +90,63 @@ for (const backend of backends) {
       });
     });
 
+    if (backend === "postgres") {
+      it("reads cumulative counts after a competing connection lock commits", async () => {
+        await refresh("refresh");
+        if (db.driver.kind !== "postgres") {
+          throw new Error("Expected PostgreSQL");
+        }
+        const pool = db.driver.pool;
+        const peer = await db.peer();
+        const held = await pool.connect();
+        let pending: Promise<unknown> | undefined;
+        try {
+          await held.query("BEGIN");
+          const pid = (
+            await held.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")
+          ).rows[0]!.pid;
+          await held.query(
+            "SELECT id FROM connections WHERE id=$1 FOR UPDATE",
+            [connectionId],
+          );
+          pending = peer.withCollectionLock(connectionId, (locked) =>
+            locked.updateRefresh("refresh", { counts: emptyCounts() }),
+          );
+          let waiting = false;
+          const deadline = Date.now() + 2_000;
+          while (!waiting && Date.now() < deadline) {
+            await held.query("SELECT pg_stat_clear_snapshot()");
+            waiting = (
+              await held.query<{ waiting: boolean }>(
+                "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid))) AS waiting",
+                [pid],
+              )
+            ).rows[0]!.waiting;
+            if (!waiting) {
+              await new Promise((resolve) => setTimeout(resolve, 10));
+            }
+          }
+          expect(waiting).toBe(true);
+          await held.query(
+            "UPDATE refreshes SET captures=1, observed=1, created=1 WHERE id='refresh'",
+          );
+          await held.query("COMMIT");
+          await pending;
+          expect((await peer.getRefresh("refresh"))!.counts).toEqual({
+            ...emptyCounts(),
+            captures: 1,
+            observed: 1,
+            created: 1,
+          });
+        } finally {
+          await held.query("ROLLBACK");
+          held.release();
+          await pending?.catch(() => {});
+          await peer.close();
+        }
+      });
+    }
+
     it("rolls counts back with failed ledger writes and attributes recovery to its executing refresh", async () => {
       await refresh("original");
       if (backend === "postgres") {

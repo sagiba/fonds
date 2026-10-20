@@ -249,6 +249,42 @@ for (const backend of backends) {
       ]);
     });
 
+    it("keeps whole-run empty rejection free of deferred evidence from other responses", async () => {
+      await ingest(row("known"), 1);
+      const before = await db.listTransactions();
+      const cursor = await db.latestEventId();
+      const invalid = row("invalid", { amountMinor: 1.5 });
+      invalid.details.provider = { cal: { rows: [{ reference: "declared" }] } };
+      const result = await db.ingestRun(
+        {
+          runId: "reject-whole-run",
+          connectionId: "synthetic",
+          responses: [
+            {
+              accountKey: "other",
+              endpoint: "synthetic",
+              capturedAt: "2040-08-02T00:00:00Z",
+              responseText: JSON.stringify([invalid]),
+            },
+            {
+              accountKey: "account",
+              endpoint: "synthetic",
+              capturedAt: "2040-08-02T00:00:00Z",
+              responseText: "[]",
+            },
+          ],
+        },
+        { ...adapter, rejectEmptyRecentPosted: true },
+      );
+      expect(result).toMatchObject({
+        status: "failed",
+        failureCode: "implausible_empty",
+      });
+      expect(await db.raw("SELECT * FROM deferred_evidence")).toEqual([]);
+      expect(await db.listTransactions()).toEqual(before);
+      expect(await db.listEvents({ after: cursor })).toEqual([]);
+    });
+
     it("retains declared rejected evidence once without keeping raw bodies", async () => {
       const input = row("invalid", {
         merchantName: "Invalid\u0000canonical text",

@@ -67,6 +67,15 @@ function bankAdapter(overrides: Partial<SourceAdapter> = {}): SourceAdapter {
   return {
     provider: "synthetic-bank",
     parserVersion: "synthetic-v1",
+    retainProviderEvidence: () => ({}),
+    projectProviderState: (value) =>
+      evidenceObject(value, {
+        identity: {
+          baseKey: "scalar",
+          occurrenceCount: "scalar",
+          currentRows: ["scalar"],
+        },
+      }),
     extract(raw, context) {
       return {
         transactions: (JSON.parse(raw) as TransactionInput[]).map(

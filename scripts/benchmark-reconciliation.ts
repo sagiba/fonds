@@ -8,6 +8,7 @@ import { type Backend, open } from "../tests/helpers/storage-harness.js";
 const adapter: SourceAdapter = {
   provider: "synthetic-benchmark",
   parserVersion: "synthetic-v1",
+  retainProviderEvidence: () => ({}),
   extract(text, context) {
     return {
       transactions: JSON.parse(text) as TransactionInput[],

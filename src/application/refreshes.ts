@@ -2,6 +2,8 @@ import type { ReconciliationFailureCode } from "../domain/model.js";
 import {
   FAILURE_REASONS,
   type FailureReason,
+  PROVIDER_STOP_REASONS,
+  type ProviderStopReason,
   REFRESH_STATUSES,
   REFRESH_TRIGGERS,
   type RefreshStatus,
@@ -17,6 +19,8 @@ import { validateCollectionRange } from "./collection.js";
 export {
   FAILURE_REASONS,
   type FailureReason,
+  PROVIDER_STOP_REASONS,
+  type ProviderStopReason,
   REFRESH_STATUSES,
   REFRESH_TRIGGERS,
   type RefreshStatus,
@@ -60,6 +64,8 @@ export interface RefreshWindow {
   from: string;
   to: string;
   status: WindowStatus;
+  /** Internal evidence checkpoint, committed with the accepted run. */
+  hasAcceptedEvidence?: boolean;
 }
 
 export interface Refresh {
@@ -76,6 +82,10 @@ export interface Refresh {
   startedAt: string | null;
   finishedAt: string | null;
   requiresAttention: boolean;
+  /** Internal durable provider stop; never part of the public refresh output. */
+  providerStopReason?: ProviderStopReason | null;
+  /** Internal evidence checkpoint, committed with this refresh's accepted run. */
+  hasAcceptedEvidence?: boolean;
   counts: RefreshCounts;
   failureCodes: ReconciliationFailureCode[];
   /** Why it failed without a provider outcome; null otherwise. */

@@ -24,6 +24,7 @@ import type {
 } from "../../domain/records.js";
 import {
   FAILURE_REASONS,
+  PROVIDER_STOP_REASONS,
   REFRESH_STATUSES,
   REFRESH_TRIGGERS,
   SKIP_REASONS,
@@ -397,6 +398,12 @@ export const refreshes = sqliteTable("refreshes", {
   requiresAttention: integer("requires_attention", {
     mode: "boolean",
   }).notNull(),
+  providerStopReason: text("provider_stop_reason", {
+    enum: PROVIDER_STOP_REASONS,
+  }),
+  hasAcceptedEvidence: integer("has_accepted_evidence", { mode: "boolean" })
+    .notNull()
+    .default(false),
   captures: integer().notNull(),
   unchanged: integer().notNull(),
   failures: integer().notNull(),
@@ -424,6 +431,9 @@ export const refreshWindows = sqliteTable(
     rangeFrom: text("range_from").notNull(),
     rangeTo: text("range_to").notNull(),
     status: text({ enum: WINDOW_STATUSES }).notNull(),
+    hasAcceptedEvidence: integer("has_accepted_evidence", { mode: "boolean" })
+      .notNull()
+      .default(false),
   },
   (table) => [primaryKey({ columns: [table.refreshId, table.rangeFrom] })],
 );

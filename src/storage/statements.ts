@@ -28,7 +28,7 @@ import type {
   Run,
   Transaction,
 } from "../domain/records.js";
-import type { FailureReason } from "../domain/refreshes.js";
+import type { FailureReason, ProviderStopReason } from "../domain/refreshes.js";
 import type { RetainedRun } from "./run-evidence.js";
 import type { PlanScope } from "./sql.js";
 
@@ -51,6 +51,8 @@ export interface RefreshRow {
   startedAt: string | null;
   finishedAt: string | null;
   requiresAttention: boolean;
+  providerStopReason: ProviderStopReason | null;
+  hasAcceptedEvidence: boolean;
   captures: number;
   unchanged: number;
   failures: number;
@@ -70,6 +72,7 @@ export interface RefreshWindowRow {
   rangeFrom: string;
   rangeTo: string;
   status: WindowStatus;
+  hasAcceptedEvidence: boolean;
 }
 
 /** Content-addressed evidence that cannot safely belong to a ledger transaction. */
@@ -205,6 +208,11 @@ export interface Statements<Db> {
     id: string,
     from: string,
     status: WindowStatus,
+  ): PromiseLike<unknown>;
+  markRefreshWindowAccepted(
+    db: Db,
+    id: string,
+    from: string,
   ): PromiseLike<unknown>;
   insertSetting(db: Db, name: string, value: string): PromiseLike<unknown>;
   /** Writes accounts, cards, transactions, annotations, events, then the run. */

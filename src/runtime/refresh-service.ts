@@ -9,12 +9,14 @@ import {
   type CollectionLock,
   type LockedCollectionStore,
   ManualRecoveryRequiredError,
+  RetryableRecoveryError,
 } from "../application/collection-lock.js";
 import type { InternalStore } from "../application/financial-store.js";
 import {
   emptyCounts,
   isActive,
   monthWindows,
+  PROVIDER_STOP_REASONS,
   type Refresh,
   REFRESH_MAX_AGE_MS,
   type RefreshStartResult,
@@ -56,12 +58,9 @@ const RETRY_DELAYS_MS = [2_000, 4_000, 8_000, 16_000, 32_000];
 const RECOVERY_INTERVAL_MS = 30_000;
 
 /** Failures after which no further window of the refresh is requested. */
-const STOPPING_CODES: ReadonlySet<CollectionFailure["code"]> = new Set([
-  "authentication_failed",
-  "authentication_challenge",
-  "rate_limited",
-  "budget_exhausted",
-]);
+const STOPPING_CODES: ReadonlySet<CollectionFailure["code"]> = new Set(
+  PROVIDER_STOP_REASONS,
+);
 
 export interface RefreshStart {
   trigger: RefreshTrigger;
@@ -172,6 +171,8 @@ export function createRefreshService(options: RefreshServiceOptions) {
       startedAt: null,
       finishedAt: null,
       requiresAttention: false,
+      hasAcceptedEvidence: false,
+      providerStopReason: null,
       counts: emptyCounts(),
       failureCodes: [],
       failureReason: null,
@@ -233,10 +234,42 @@ export function createRefreshService(options: RefreshServiceOptions) {
     if (cannotFinishUnit()) {
       return "yielded";
     }
+    const statuses = new Map(
+      current.windows.map((window) => [window.from, window.status]),
+    );
+    let activeWindow = current.windows.find(
+      (window) => window.status === "running",
+    )?.from;
+    let hasAcceptedEvidence = Boolean(current.hasAcceptedEvidence);
+    const acceptedWindows = new Set(
+      current.windows
+        .filter((window) => window.hasAcceptedEvidence)
+        .map((window) => window.from),
+    );
+    let activeWindowAccepted =
+      activeWindow !== undefined && acceptedWindows.has(activeWindow);
+    const finishActiveWindow = () => {
+      if (!activeWindow || statuses.get(activeWindow) !== "running") {
+        return undefined;
+      }
+      const status = activeWindowAccepted
+        ? ("partial" as const)
+        : ("failed" as const);
+      statuses.set(activeWindow, status);
+      return { from: activeWindow, status };
+    };
+    const failureStatus = () =>
+      current.range
+        ? rangeStatus([...statuses.values()])
+        : hasAcceptedEvidence
+          ? ("partial" as const)
+          : ("failed" as const);
     const now = new Date().toISOString();
     if (Date.now() - Date.parse(current.createdAt) > REFRESH_MAX_AGE_MS) {
+      const window = finishActiveWindow();
       await locked.updateRefresh(id, {
         status: "failed",
+        ...(window && { window }),
         failureReason: "expired",
         startedAt: current.startedAt ?? now,
         finishedAt: now,
@@ -249,11 +282,11 @@ export function createRefreshService(options: RefreshServiceOptions) {
       return "done";
     }
     // A provider stop already recorded is final; it is never requested again.
-    if (current.requiresAttention) {
+    if (current.requiresAttention || current.providerStopReason) {
+      const window = finishActiveWindow();
       await locked.updateRefresh(id, {
-        status: current.range
-          ? rangeStatus(current.windows.map((window) => window.status))
-          : "failed",
+        status: failureStatus(),
+        ...(window && { window }),
         startedAt: current.startedAt ?? now,
         finishedAt: now,
       });
@@ -262,6 +295,7 @@ export function createRefreshService(options: RefreshServiceOptions) {
     let counts = current.counts;
     let failureCodes = current.failureCodes;
     let requiresAttention: boolean = current.requiresAttention;
+    let providerStopped = Boolean(current.providerStopReason);
     const reloadProgress = async () => {
       const persisted = await locked.getRefresh(id);
       if (!persisted) {
@@ -270,6 +304,16 @@ export function createRefreshService(options: RefreshServiceOptions) {
       counts = persisted.counts;
       failureCodes = persisted.failureCodes;
       requiresAttention = persisted.requiresAttention;
+      hasAcceptedEvidence = Boolean(persisted.hasAcceptedEvidence);
+      providerStopped = Boolean(persisted.providerStopReason);
+      for (const window of persisted.windows) {
+        statuses.set(window.from, window.status);
+        if (window.hasAcceptedEvidence) {
+          acceptedWindows.add(window.from);
+        }
+      }
+      activeWindowAccepted =
+        activeWindow !== undefined && acceptedWindows.has(activeWindow);
     };
     let recovering = false;
     let recoveryStarted = 0;
@@ -278,14 +322,10 @@ export function createRefreshService(options: RefreshServiceOptions) {
       startedAt: current.startedAt ?? now,
     });
     let status: "completed" | "partial" | "failed";
+    let failedWindow: ReturnType<typeof finishActiveWindow>;
     try {
       if (!target) {
         throw new Error("Refresh connection cannot be collected");
-      }
-      // Credentials are read only once this execution holds the lease.
-      const collector = await target.collector();
-      if (collector.provider !== target.adapter.provider) {
-        throw new Error("Collector does not match the adapter");
       }
       recoveryStarted = performance.now();
       recovering = true;
@@ -307,11 +347,11 @@ export function createRefreshService(options: RefreshServiceOptions) {
         durationMs: elapsedMs(recoveryStarted),
         counts: { recoveredRuns: replayed.length },
       });
-      if (requiresAttention) {
+      if (requiresAttention || providerStopped) {
+        const window = finishActiveWindow();
         await locked.updateRefresh(id, {
-          status: current.range
-            ? rangeStatus(current.windows.map((window) => window.status))
-            : "failed",
+          status: failureStatus(),
+          ...(window && { window }),
           finishedAt: new Date().toISOString(),
           counts,
           failureCodes,
@@ -319,9 +359,11 @@ export function createRefreshService(options: RefreshServiceOptions) {
         });
         return "done";
       }
-      const statuses = new Map(
-        current.windows.map((window) => [window.from, window.status]),
-      );
+      // Credentials are read only once this execution holds the lease.
+      const collector = await target.collector();
+      if (collector.provider !== target.adapter.provider) {
+        throw new Error("Collector does not match the adapter");
+      }
       const units = current.range
         ? current.windows.filter(
             (window) =>
@@ -335,6 +377,9 @@ export function createRefreshService(options: RefreshServiceOptions) {
         }
         signal.throwIfAborted();
         if (window) {
+          activeWindow = window.from;
+          activeWindowAccepted = acceptedWindows.has(window.from);
+          statuses.set(window.from, "running");
           await locked.updateRefresh(id, {
             window: { from: window.from, status: "running" },
           });
@@ -366,10 +411,13 @@ export function createRefreshService(options: RefreshServiceOptions) {
         if (signal.aborted) {
           return "interrupted";
         }
+        const accepted = window ? activeWindowAccepted : hasAcceptedEvidence;
+        const unitStatus =
+          summary.status === "failed" && accepted ? "partial" : summary.status;
         if (window) {
-          statuses.set(window.from, summary.status);
+          statuses.set(window.from, unitStatus);
         } else {
-          recent = summary.status;
+          recent = unitStatus;
         }
         // A stop finishes the refresh in the same write as its checkpoint,
         // so no resume requests the provider again.
@@ -378,17 +426,19 @@ export function createRefreshService(options: RefreshServiceOptions) {
           failureCodes,
           requiresAttention,
           ...(window && {
-            window: { from: window.from, status: summary.status },
+            window: { from: window.from, status: unitStatus },
           }),
           ...(stop
             ? {
                 status: current.range
                   ? rangeStatus([...statuses.values()])
-                  : summary.status,
+                  : unitStatus,
                 finishedAt: new Date().toISOString(),
               }
             : {}),
         });
+        activeWindow = undefined;
+        activeWindowAccepted = false;
         if (stop) {
           return "done";
         }
@@ -415,7 +465,7 @@ export function createRefreshService(options: RefreshServiceOptions) {
               : "persistence_failure",
           requiresAttention,
           failureCategory: manualRecovery
-            ? "collection"
+            ? error.failureCategory
             : interrupted
               ? "execution"
               : "persistence",
@@ -425,12 +475,17 @@ export function createRefreshService(options: RefreshServiceOptions) {
       if (interrupted) {
         return "interrupted";
       }
+      if (error instanceof RetryableRecoveryError) {
+        throw error;
+      }
       // Raw provider and driver errors can hold financial data or credentials.
-      status = "failed";
+      failedWindow = finishActiveWindow();
+      status = failureStatus();
       counts = { ...counts, failures: Math.max(1, counts.failures) };
     }
     await locked.updateRefresh(id, {
       status,
+      ...(failedWindow && { window: failedWindow }),
       finishedAt: new Date().toISOString(),
       counts,
       failureCodes,

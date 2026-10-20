@@ -209,8 +209,11 @@ export async function collectFromStore(
       captureId,
       stage: "ingest",
       outcome: result.status,
-      reason:
-        result.status === "failed" ? "capture_rejected" : "content_applied",
+      reason: result.replayed
+        ? "capture_replayed"
+        : result.status === "failed"
+          ? "capture_rejected"
+          : "content_applied",
       ...(result.status !== "completed" && {
         failureCategory:
           result.failureCode ??

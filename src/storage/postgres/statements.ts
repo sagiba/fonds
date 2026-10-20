@@ -453,11 +453,11 @@ export const insertRefresh = (
   db: Executor,
   row: typeof refreshTable.$inferInsert,
 ) => db.insert(refreshTable).values(row);
-/** Four parameters a row keeps every insert within D1's 100. */
+/** Five parameters a row keeps every insert within D1's 100. */
 export const insertRefreshWindows = (
   db: Executor,
   rows: (typeof windowTable.$inferInsert)[],
-) => [...chunks(rows, 25)].map((chunk) => db.insert(windowTable).values(chunk));
+) => [...chunks(rows, 20)].map((chunk) => db.insert(windowTable).values(chunk));
 export const refresh = (db: Executor, id: string) =>
   db.select().from(refreshTable).where(eq(refreshTable.id, id));
 export const refreshWindows = (db: Executor, id: string) =>
@@ -607,6 +607,16 @@ export const fenceLease = (
     })
     .where(eq(leases.connectionId, connectionId))
     .returning({ holder: leases.holder });
+
+export const markRefreshWindowAccepted = (
+  db: Executor,
+  id: string,
+  from: string,
+) =>
+  db
+    .update(windowTable)
+    .set({ hasAcceptedEvidence: true })
+    .where(and(eq(windowTable.refreshId, id), eq(windowTable.rangeFrom, from)));
 
 export const latestOccurrence = (db: Executor) =>
   db

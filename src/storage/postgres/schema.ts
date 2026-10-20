@@ -30,6 +30,7 @@ import type {
 } from "../../domain/records.js";
 import {
   FAILURE_REASONS,
+  PROVIDER_STOP_REASONS,
   REFRESH_STATUSES,
   REFRESH_TRIGGERS,
   SKIP_REASONS,
@@ -387,6 +388,12 @@ export const refreshes = pgTable("refreshes", {
   startedAt: text("started_at"),
   finishedAt: text("finished_at"),
   requiresAttention: boolean("requires_attention").notNull(),
+  providerStopReason: text("provider_stop_reason", {
+    enum: PROVIDER_STOP_REASONS,
+  }),
+  hasAcceptedEvidence: boolean("has_accepted_evidence")
+    .notNull()
+    .default(false),
   captures: bigint({ mode: "number" }).notNull(),
   unchanged: bigint({ mode: "number" }).notNull(),
   failures: bigint({ mode: "number" }).notNull(),
@@ -415,6 +422,9 @@ export const refreshWindows = pgTable(
     rangeFrom: text("range_from").notNull(),
     rangeTo: text("range_to").notNull(),
     status: text({ enum: WINDOW_STATUSES }).notNull(),
+    hasAcceptedEvidence: boolean("has_accepted_evidence")
+      .notNull()
+      .default(false),
   },
   (table) => [primaryKey({ columns: [table.refreshId, table.rangeFrom] })],
 );

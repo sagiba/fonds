@@ -7,6 +7,7 @@ import {
 import {
   type LockedCollectionStore,
   ManualRecoveryRequiredError,
+  RetryableRecoveryError,
 } from "../application/collection-lock.js";
 import {
   connectionInputSchema,
@@ -64,17 +65,31 @@ import {
 } from "../domain/plans/sync.js";
 import { calculateTotals, presentTransaction } from "../domain/read-model.js";
 import type { Connection, ConnectionConfig } from "../domain/records.js";
+import { PROVIDER_STOP_REASONS } from "../domain/refreshes.js";
 import type { SourceAdapter } from "../domain/source-adapter.js";
 import {
   assertSameEvidence,
   contentDigest,
   prepareRun,
   replayResult,
+  requireEvidenceRetention,
   retainedRun,
   runEvidenceDigest,
 } from "./run-evidence.js";
 import type { PlanScope } from "./sql.js";
 import type { RefreshRow, RefreshWindowRow, Statements } from "./statements.js";
+
+// Keep public error identity (for example version conflicts) while classifying recovery.
+const interpretationErrors = new WeakSet<Error>();
+
+function interpretationError(cause: unknown): Error {
+  const error =
+    cause instanceof Error
+      ? cause
+      : new Error("Archived evidence cannot be interpreted", { cause });
+  interpretationErrors.add(error);
+  return error;
+}
 
 export type WriteResults<Writes extends readonly PromiseLike<unknown>[]> = {
   -readonly [Index in keyof Writes]: Awaited<Writes[Index]>;
@@ -103,6 +118,8 @@ function refreshFromRow(
     startedAt: row.startedAt,
     finishedAt: row.finishedAt,
     requiresAttention: row.requiresAttention,
+    providerStopReason: row.providerStopReason,
+    hasAcceptedEvidence: row.hasAcceptedEvidence,
     counts: {
       captures: row.captures,
       unchanged: row.unchanged,
@@ -123,6 +140,7 @@ function refreshFromRow(
       from: window.rangeFrom,
       to: window.rangeTo,
       status: window.status,
+      hasAcceptedEvidence: window.hasAcceptedEvidence,
     })),
   };
 }
@@ -142,6 +160,8 @@ function refreshRow(refresh: Refresh): RefreshRow {
     startedAt: refresh.startedAt,
     finishedAt: refresh.finishedAt,
     requiresAttention: refresh.requiresAttention,
+    providerStopReason: refresh.providerStopReason ?? null,
+    hasAcceptedEvidence: refresh.hasAcceptedEvidence ?? false,
     ...refresh.counts,
     failureCodes: refresh.failureCodes,
     failureReason: refresh.failureReason,
@@ -234,9 +254,12 @@ export function lockedCollectionStore<Db>(
     updateRefresh: store.updateRefresh,
     async recoverPendingRuns(adapter, onDiagnostic, refreshId) {
       signal.throwIfAborted();
-      const pending = await db.execute(
-        statements.pendingRuns(db.root, connectionId, 101),
-      );
+      const pending = await db
+        .execute(statements.pendingRuns(db.root, connectionId, 101))
+        .catch(() => {
+          signal.throwIfAborted();
+          throw new RetryableRecoveryError();
+        });
       if (
         pending.length > 100 ||
         pending.some((run) => run.parserVersion !== adapter.parserVersion)
@@ -246,9 +269,17 @@ export function lockedCollectionStore<Db>(
       const results: SyncResult[] = [];
       for (const run of pending) {
         signal.throwIfAborted();
-        results.push(
-          await store.applyRun(run.id, adapter, onDiagnostic, refreshId),
-        );
+        try {
+          results.push(
+            await store.applyRun(run.id, adapter, onDiagnostic, refreshId),
+          );
+        } catch (error) {
+          signal.throwIfAborted();
+          if (error instanceof Error && interpretationErrors.has(error)) {
+            throw new ManualRecoveryRequiredError("execution");
+          }
+          throw new RetryableRecoveryError();
+        }
       }
       return results;
     },
@@ -404,6 +435,7 @@ function buildStore<Db>(
               rangeFrom: window.from,
               rangeTo: window.to,
               status: window.status,
+              hasAcceptedEvidence: window.hasAcceptedEvidence ?? false,
             })),
           ),
         ]);
@@ -434,9 +466,11 @@ function buildStore<Db>(
       ),
     updateRefresh: (id, progress) =>
       db.transaction(async (tx) => {
-        const row = (await statements.refresh(tx, id))[0];
+        const reference = (await statements.refresh(tx, id))[0];
         const connection =
-          row && (await statements.lockConnection(tx, row.connectionId))[0];
+          reference &&
+          (await statements.lockConnection(tx, reference.connectionId))[0];
+        const row = connection && (await statements.refresh(tx, id))[0];
         if (!row || !connection) {
           throw new NotFoundError("Refresh not found");
         }
@@ -660,7 +694,7 @@ function buildStore<Db>(
       ...ids,
       stage: "archive",
       outcome: "completed",
-      reason: staged ? "body_staged" : "content_unchanged",
+      reason: staged ? "body_staged" : "receipt_exists",
       durationMs: elapsedMs(started),
     });
     return applyRun(run.runId, adapter, onDiagnostic);
@@ -673,12 +707,45 @@ function buildStore<Db>(
     executionRefreshId?: string,
   ): Promise<SyncResult> {
     const emit = syncDiagnostics(onDiagnostic);
-    const ids = syncCorrelationIds({ captureId: id });
+    const ids = syncCorrelationIds({
+      captureId: id,
+      refreshId: executionRefreshId,
+    });
+    try {
+      requireEvidenceRetention(adapter);
+    } catch (error) {
+      emit({
+        event: "fonds_sync",
+        ...ids,
+        stage: "read",
+        outcome: "failed",
+        failureCategory: "execution",
+      });
+      throw interpretationError(error);
+    }
     const stored = (
-      await db.execute(statements.runWithConnection(db.root, id))
+      await db
+        .execute(statements.runWithConnection(db.root, id))
+        .catch((error: unknown) => {
+          emit({
+            event: "fonds_sync",
+            ...ids,
+            stage: "read",
+            outcome: "failed",
+            failureCategory: "persistence",
+          });
+          throw error;
+        })
     )[0];
     if (!stored) {
-      throw new NotFoundError("Run not found");
+      emit({
+        event: "fonds_sync",
+        ...ids,
+        stage: "read",
+        outcome: "failed",
+        failureCategory: "execution",
+      });
+      throw interpretationError(new NotFoundError("Run not found"));
     }
     const { run: archived, connection } = stored;
     Object.assign(
@@ -688,16 +755,41 @@ function buildStore<Db>(
       }),
     );
     if (connection.provider !== adapter.provider) {
-      throw new Error("Connection provider mismatch");
+      emit({
+        event: "fonds_sync",
+        ...ids,
+        stage: "read",
+        outcome: "failed",
+        failureCategory: "execution",
+      });
+      throw interpretationError(new Error("Connection provider mismatch"));
     }
     if (archived.appliedAt) {
       return replayResult(archived);
     }
     if (archived.parserVersion !== adapter.parserVersion) {
-      throw new Error("Run parser version differs from adapter");
+      emit({
+        event: "fonds_sync",
+        ...ids,
+        stage: "read",
+        outcome: "failed",
+        failureCategory: "execution",
+      });
+      throw interpretationError(
+        new Error("Run parser version differs from adapter"),
+      );
     }
     if (!archived.bodyAvailable) {
-      throw new Error("Unapplied run has no recoverable source body");
+      emit({
+        event: "fonds_sync",
+        ...ids,
+        stage: "read",
+        outcome: "failed",
+        failureCategory: "execution",
+      });
+      throw interpretationError(
+        new Error("Unapplied run has no recoverable source body"),
+      );
     }
     const started = performance.now();
     emit({
@@ -717,7 +809,7 @@ function buildStore<Db>(
         outcome: "failed",
         failureCategory: "invalid_response",
       });
-      throw error;
+      throw interpretationError(error);
     }
     emit({
       event: "fonds_sync",
@@ -732,7 +824,7 @@ function buildStore<Db>(
         ),
       },
     });
-    let phase: "reconciliation" | "commit" = "reconciliation";
+    let phase: "read" | "reconciliation" | "commit" = "read";
     let commitStarted = performance.now();
     const result = await db
       .transaction(async (tx) => {
@@ -743,6 +835,7 @@ function buildStore<Db>(
           return replayResult(run);
         }
         const plan = await loadPlan(tx, locked, undefined, [], true);
+        phase = "reconciliation";
         const reconciliationStarted = performance.now();
         emit({
           event: "fonds_sync",
@@ -750,14 +843,19 @@ function buildStore<Db>(
           stage: "reconciliation",
           outcome: "started",
         });
-        const result = planRun(
-          plan,
-          run,
-          adapter,
-          extraction,
-          new Date().toISOString(),
-          () => crypto.randomUUID(),
-        );
+        let result: SyncResult;
+        try {
+          result = planRun(
+            plan,
+            run,
+            adapter,
+            extraction,
+            new Date().toISOString(),
+            () => crypto.randomUUID(),
+          );
+        } catch (error) {
+          throw interpretationError(error);
+        }
         emit({
           event: "fonds_sync",
           ...ids,
@@ -801,6 +899,19 @@ function buildStore<Db>(
         if (refreshId && (!refresh || refresh.connectionId !== connection.id)) {
           throw new Error("Run refresh does not belong to its connection");
         }
+        const activeWindows =
+          refresh &&
+          refresh.rangeFrom !== null &&
+          refresh.id === run.refreshId &&
+          result.status !== "failed"
+            ? (await statements.refreshWindows(tx, refresh.id)).filter(
+                (window) => window.status === "running",
+              )
+            : [];
+        const acceptedWindow =
+          activeWindows.length === 1 && !activeWindows[0]!.hasAcceptedEvidence
+            ? activeWindows[0]
+            : undefined;
         const captures = run.snapshot.responses.length;
         const delta = {
           captures,
@@ -830,10 +941,31 @@ function buildStore<Db>(
           }
         }
         await savePlan(tx, plan, id, [
+          ...(acceptedWindow
+            ? [
+                statements.markRefreshWindowAccepted(
+                  tx,
+                  acceptedWindow.refreshId,
+                  acceptedWindow.rangeFrom,
+                ),
+              ]
+            : []),
           ...(refresh
             ? [
                 statements.updateRefresh(tx, refresh.id, {
                   ...refreshCounts,
+                  hasAcceptedEvidence:
+                    refresh.hasAcceptedEvidence ||
+                    (refresh.id === run.refreshId &&
+                      result.status !== "failed"),
+                  providerStopReason:
+                    refresh.providerStopReason ??
+                    PROVIDER_STOP_REASONS.find((code) =>
+                      run.snapshot.failures?.some(
+                        (failure) => failure.code === code,
+                      ),
+                    ) ??
+                    null,
                   failureCodes: [
                     ...new Set([
                       ...refresh.failureCodes,
@@ -865,7 +997,8 @@ function buildStore<Db>(
           ...ids,
           stage: phase,
           outcome: "failed",
-          failureCategory: phase === "commit" ? "persistence" : "execution",
+          failureCategory:
+            phase === "reconciliation" ? "execution" : "persistence",
         });
         throw error;
       });

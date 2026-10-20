@@ -1503,6 +1503,7 @@ describe("historical capture reconciliation", () => {
     const changed: SourceAdapter = {
       provider: "cal",
       parserVersion: "cal-next-test",
+      retainProviderEvidence: () => ({}),
       extract() {
         throw new Error("Extraction should not run");
       },
@@ -1564,6 +1565,7 @@ describe("historical capture reconciliation", () => {
     const adapter: SourceAdapter = {
       provider: "synthetic-bank",
       parserVersion: "bank-test-v1",
+      retainProviderEvidence: () => ({}),
       extract(raw, context) {
         return {
           transactions: [

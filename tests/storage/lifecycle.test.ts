@@ -181,8 +181,8 @@ describe("owner-confirmed transaction lifecycle", () => {
       ...posted.details.sourceRefs,
     ]);
     expect(retained(result.details, "paymentHistory")).toEqual([
-      { label: "First" },
       { label: "Earlier" },
+      { label: "First" },
     ]);
     expect(result.details.issues).toEqual(["other_financial_issue"]);
     expect(result.details.pendingPostingCandidates).toEqual([]);

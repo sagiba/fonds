@@ -133,6 +133,7 @@ function pending(
 const fakeAdapter: SourceAdapter = {
   provider: "FAKE",
   parserVersion: "fake-v1",
+  retainProviderEvidence: () => ({}),
   automaticPosting: {
     compatibleGroups: compatiblePostingGroups,
     pendingAmountBasis: "authorization",

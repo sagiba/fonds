@@ -36,6 +36,7 @@ import type { ExtractionResult, SourceAdapter } from "../source-adapter.js";
 import {
   changedTransactionContent,
   retainedTransactionEvidence,
+  storedProviderEvidence,
   transactionContent,
 } from "../transaction-content.js";
 import { reviewState } from "./annotation.js";
@@ -1298,6 +1299,7 @@ export function finishTransactionContent(
   const runId = run?.id;
   const contentAdapter = adapter ?? {
     provider: plan.snapshot.connection.provider,
+    retainProviderEvidence: storedProviderEvidence,
   };
   const runs = new Map<
     string,
@@ -1348,25 +1350,27 @@ export function finishTransactionContent(
     current.details.issues = sortedEvidence([
       ...new Set(current.details.issues),
     ]);
-    if (adapter?.retainProviderEvidence) {
+    if (adapter) {
       const namespace = current.details.provider[adapter.provider] ?? {};
-      current.details.provider = {
-        [adapter.provider]: {
-          ...adapter.projectProviderState?.(namespace),
-          ...adapter.retainProviderEvidence(namespace),
-        },
+      const projected = {
+        ...adapter.projectProviderState?.(namespace),
+        ...adapter.retainProviderEvidence(namespace),
       };
+      current.details.provider = Object.keys(projected).length
+        ? { [adapter.provider]: projected }
+        : {};
       const pending = current.details.postingLink?.pending;
       if (pending) {
         pending.details.sourceRefs = references(pending);
         const pendingEvidence =
           pending.details.provider[adapter.provider] ?? {};
-        pending.details.provider = {
-          [adapter.provider]: {
-            ...adapter.projectProviderState?.(pendingEvidence),
-            ...adapter.retainProviderEvidence(pendingEvidence),
-          },
+        const projectedPending = {
+          ...adapter.projectProviderState?.(pendingEvidence),
+          ...adapter.retainProviderEvidence(pendingEvidence),
         };
+        pending.details.provider = Object.keys(projectedPending).length
+          ? { [adapter.provider]: projectedPending }
+          : {};
       }
     }
     if (!previous) {
@@ -1505,7 +1509,6 @@ export function planRun(
   }
   const { extracted, coverage, warnings, status, deferred } =
     structuredClone(extraction);
-  plan.deferredCandidates.push(...deferred);
   const defer = (
     input: TransactionFacts,
     reason: string,
@@ -1574,6 +1577,7 @@ export function planRun(
       failureCode,
     };
   }
+  plan.deferredCandidates.push(...deferred);
   const knownAccounts = new Set([
     ...history.knownAccounts,
     ...beforeRows.map((row) => row.sourceScope),

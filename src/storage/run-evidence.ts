@@ -11,7 +11,14 @@ import type { SourceAdapter } from "../domain/source-adapter.js";
 /** Recorded for runs whose input names no collector, such as offline imports. */
 const DEFAULT_COLLECTOR_VERSION = "offline-v1";
 
+export function requireEvidenceRetention(adapter: SourceAdapter): void {
+  if (typeof adapter.retainProviderEvidence !== "function") {
+    throw new Error("Adapter must declare provider evidence retention");
+  }
+}
+
 export function prepareRun(input: RunInput, adapter: SourceAdapter) {
+  requireEvidenceRetention(adapter);
   const run = runSchema.parse(input);
   for (const item of [...run.responses, ...run.failures]) {
     if (item.scope) {

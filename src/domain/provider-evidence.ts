@@ -1,7 +1,11 @@
 import { isLosslessNumber } from "lossless-json";
 
 import type { JsonObject, JsonValue } from "./model.js";
-import { canonicalJson, retainObservations } from "./observations.js";
+import {
+  canonicalJson,
+  compareEvidence,
+  retainObservations,
+} from "./observations.js";
 
 export type EvidenceShape =
   | "scalar"
@@ -127,11 +131,7 @@ export function currentSourceRowIndices(
 export function sortedEvidence<Value extends JsonValue>(
   items: readonly Value[],
 ): Value[] {
-  return [...items].sort((left, right) => {
-    const a = canonicalJson(left);
-    const b = canonicalJson(right);
-    return a < b ? -1 : a > b ? 1 : 0;
-  });
+  return [...items].sort(compareEvidence);
 }
 
 export function mergeEvidenceLists(

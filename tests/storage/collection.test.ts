@@ -789,6 +789,7 @@ describe("streamed collection application boundary", () => {
     const adapter: SourceAdapter = {
       provider: "synthetic-bank",
       parserVersion: "synthetic-bank-v1",
+      retainProviderEvidence: () => ({}),
       extract(raw, context) {
         received = raw;
         return {
