@@ -1,0 +1,19 @@
+{
+  "isSuccess": true,
+  "data": {
+    "cardsList": [
+      {
+        "companyCode": "11",
+        "cardGuid": "SYNTHETIC-DISCOVERY-GUID",
+        "cardSuffix": "0012",
+        "cardName": "כרטיס דוגמה סינתטי",
+        "firstName": "Synthetic First",
+        "lastName": "Synthetic Last",
+        "isActive": true,
+        "isPartner": false,
+        "cardChargeNext": { "billingDate": "10/08/2040" },
+        "cardChargeLast": { "billingDate": "10/07/2040" }
+      }
+    ]
+  }
+}

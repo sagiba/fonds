@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "provider": "isracard",
+  "mode": "recent",
+  "billingMonth": "2040-07",
+  "card": {
+    "companyCode": "11",
+    "cardGuid": "SYNTHETIC-CARD-GUID",
+    "cardSuffix": "1234"
+  },
+  "legacyCardIndex": "0",
+  "responses": {
+    "cardList": "{\"isSuccess\": true, \"data\": {\"cardsList\": [{\"companyCode\": \"11\", \"cardGuid\": \"SYNTHETIC-CARD-GUID\", \"cardSuffix\": \"1234\"}]}}",
+    "digital": "{\"isSuccess\": true, \"errorCode\": \"0\", \"errorDescription\": null, \"data\": {\"approvals\": null, \"israelAbroadVouchers\": {\"vouchers\": {\"israelAbroadVouchersList\": [{\"purchaseDate\": \"11/06/2040\", \"purchaseTime\": \"12:30:00\", \"businessName\": \"Synthetic merchant\", \"businessNumber\": \"SYNTHETIC-MERCHANT\", \"cityDescription\": \"Synthetic City\", \"countryCode\": \"IL\", \"countryDescription\": \"Israel\", \"isIsraelDeal\": true, \"transactionCode\": 1, \"transactionDescription\": \"Synthetic unmapped transaction description\", \"billingAmount\": 86.4, \"billingAmountCurrency\": 0, \"originalAmount\": 86.4, \"originalCurrencyIso\": \"ILS\", \"tranzacCodeType\": 1, \"tranzacCodeDescription\": \"Synthetic channel\", \"presentCard\": false, \"isTransactionSecure\": true, \"isWalletTransaction\": false, \"isdirectDebit\": false, \"currentInstallmentNum\": null, \"numberOfInstallment\": null, \"voucherNumber\": \"DISPLAY-ONLY\", \"seqVoucherNumber\": \"000123456\"}], \"informativeOnlyVouchers\": []}, \"outOfStatementChargeDateVouchers\": []}}}",
+    "legacy": "{\"Header\": {\"Status\": \"1\"}, \"CardsTransactionsListBean\": {\"cardNumberList\": [\"Synthetic card 1234\"], \"Index0\": {\"CurrentCardTransactions\": [{\"txnIsrael\": [{\"fullPurchaseDate\": \"11/06/2040\", \"fullPaymentDate\": \"10/07/2040\", \"fullSupplierNameHeb\": \"Synthetic legacy merchant\", \"voucherNumberRatz\": \"000123456\", \"voucherNumber\": \"DO-NOT-JOIN\", \"dealSum\": 86.4, \"paymentSum\": 86.4, \"currencyId\": \"ILS\", \"currentPaymentCurrency\": \"ILS\"}, {\"fullPurchaseDate\": \"12/06/2040\", \"fullSupplierNameHeb\": \"Synthetic standing order\", \"voucherNumberRatz\": \"000654321\", \"dealSum\": 12.5, \"paymentSum\": 12.5, \"currencyId\": \"ILS\", \"isHoraatKeva\": true}], \"txnAbroad\": [], \"txnInfo\": []}]}}}",
+    "details": [
+      {
+        "voucherNumber": "000123456",
+        "responseText": "{\"Header\": {\"Status\": \"1\"}, \"PirteyIska_204Bean\": {\"voucherNumberRatz\": \"000123456\", \"address\": \"1 Synthetic Street\", \"phoneNumber\": \"SYNTHETIC-PHONE\", \"transactionType\": \"Synthetic detail channel\", \"purchaseTime\": \"12:30:00\"}}"
+      }
+    ]
+  }
+}

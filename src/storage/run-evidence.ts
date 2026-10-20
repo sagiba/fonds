@@ -1,0 +1,77 @@
+import {
+  reconciliationFailure,
+  type RunInput,
+  runSchema,
+  type SyncResult,
+} from "../domain/plans/sync.js";
+import type { Run } from "../domain/records.js";
+import type { SourceAdapter } from "../domain/source-adapter.js";
+
+/** Recorded for runs whose input names no collector, such as offline imports. */
+const DEFAULT_COLLECTOR_VERSION = "offline-v1";
+
+export function prepareRun(input: RunInput, adapter: SourceAdapter) {
+  const run = runSchema.parse(input);
+  for (const item of [...run.responses, ...run.failures]) {
+    if (item.scope) {
+      item.scope = adapter.validateScope?.(item.scope) ?? item.scope;
+    }
+  }
+  return run;
+}
+
+export function retainedRun(
+  run: ReturnType<typeof prepareRun>,
+  adapter: SourceAdapter,
+) {
+  return {
+    id: run.runId,
+    connectionId: run.connectionId,
+    startedAt: run.startedAt ?? new Date().toISOString(),
+    status: "started" as const,
+    collectorVersion: run.collectorVersion ?? DEFAULT_COLLECTOR_VERSION,
+    parserVersion: adapter.parserVersion,
+    snapshot: {
+      schemaVersion: 1 as const,
+      responses: run.responses,
+      failures: run.failures,
+    },
+    coverage: [],
+    warnings: [],
+    refreshId: run.refreshId ?? null,
+  };
+}
+
+export type RetainedRun = ReturnType<typeof retainedRun>;
+
+export function assertSameEvidence(
+  existing: Run,
+  run: ReturnType<typeof prepareRun>,
+) {
+  if (
+    existing.connectionId !== run.connectionId ||
+    existing.collectorVersion !==
+      (run.collectorVersion ?? DEFAULT_COLLECTOR_VERSION) ||
+    JSON.stringify(existing.snapshot.responses) !==
+      JSON.stringify(run.responses) ||
+    JSON.stringify(existing.snapshot.failures ?? []) !==
+      JSON.stringify(run.failures)
+  ) {
+    throw new Error("Run ID already refers to different evidence");
+  }
+}
+
+export function replayResult(run: Run): SyncResult {
+  if (run.status === "started") {
+    throw new Error("Applied run has invalid status");
+  }
+  return {
+    runId: run.id,
+    replayed: true,
+    created: 0,
+    updated: 0,
+    unlisted: 0,
+    status: run.status,
+    ...reconciliationFailure(run.warnings),
+  };
+}

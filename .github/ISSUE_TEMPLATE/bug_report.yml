@@ -1,0 +1,51 @@
+name: Bug report
+description: Something in Fonds does not behave as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never include real financial data**: no transactions, provider responses,
+        screenshots of your accounts, logs with financial values, credentials or
+        account identifiers. Describe the problem with a synthetic reproduction; the
+        committed fixtures are a good starting point. Security issues go through
+        [SECURITY.md](https://github.com/sagiba/fonds/blob/main/SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: Fonds version or commit
+    validations:
+      required: true
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: How you run Fonds
+      options:
+        - Local CLI or SQLite server
+        - Docker (SQLite image)
+        - Docker (PostgreSQL image) or compose
+        - Neon
+        - Another host
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Synthetic reproduction
+      description: Commands, inputs and output using invented data only.
+      render: shell
+    validations:
+      required: true
+  - type: checkboxes
+    id: data
+    attributes:
+      label: Data
+      options:
+        - label: This report contains no real financial data, credentials or account identifiers.
+          required: true

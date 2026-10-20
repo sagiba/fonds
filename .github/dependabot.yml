@@ -1,0 +1,76 @@
+# Keeps the pinned inputs current. Actions are pinned by commit SHA and base
+# images by digest; Dependabot moves those pins and the root and deploy
+# lockfiles. Updates are grouped and weekly so they stay reviewable.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directories:
+      - /
+      - /deploy/sqlite
+      - /deploy/postgres
+      - /deploy/turso
+      - /deploy/turso-web
+      - /deploy/d1-web
+      - /tests/d1-local
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      # Better Auth packages are pinned together and must move together.
+      better-auth:
+        patterns: ["better-auth", "better-call", "@better-auth/*"]
+      dependencies:
+        patterns: ["*"]
+        exclude-patterns: ["better-auth", "better-call", "@better-auth/*"]
+        update-types: [minor, patch]
+      # Majors need a closer look, but in one pull request, not one per package
+      # and directory.
+      major-updates:
+        patterns: ["*"]
+        exclude-patterns: ["better-auth", "better-call", "@better-auth/*"]
+        update-types: [major]
+    ignore:
+      # Node's types follow the runtime line the project supports (Node 24).
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+    commit-message:
+      prefix: deps
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      base-images:
+        patterns: ["*"]
+    ignore:
+      # Images track the Node LTS line (24); a new line is a deliberate change.
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
+    commit-message:
+      prefix: deps
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      compose-images:
+        patterns: ["*"]
+    ignore:
+      # A PostgreSQL major needs a data upgrade of the existing volume.
+      - dependency-name: postgres
+        update-types: ["version-update:semver-major"]
+    commit-message:
+      prefix: deps

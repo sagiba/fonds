@@ -1,0 +1,472 @@
+{
+  "synthetic": true,
+  "description": "Constructed examples, not redacted source transactions. Values/identities/dates are invented. Assertions describe expected interpretation or uncertainty, not a complete importer implementation.",
+  "coverage": {
+    "all_recent_files": "unknown",
+    "daysRange_is_provider_assertion": true,
+    "no_disappearance_is_a_confirmed_deletion": true
+  },
+  "files": [
+    {
+      "path": "recent-01.json",
+      "valid_observed_shape": true,
+      "role": "baseline"
+    },
+    {
+      "path": "recent-02.json",
+      "valid_observed_shape": true,
+      "role": "later capture"
+    },
+    {
+      "path": "recent-03.json",
+      "valid_observed_shape": true,
+      "role": "reappearance"
+    },
+    {
+      "path": "legacy-history.json",
+      "valid_observed_shape": true,
+      "role": "separate accumulated/legacy history; not a timed snapshot in the sequence"
+    },
+    {
+      "path": "future-field.json",
+      "valid_observed_shape": true,
+      "role": "constructed unknown-field forward compatibility"
+    },
+    {
+      "path": "malformed-pending.json",
+      "valid_observed_shape": false,
+      "role": "constructed partial response; preserve evidence and flag coverage"
+    }
+  ],
+  "expectations": {
+    "regular": {
+      "key": [
+        "SYNTHETIC-CARD-A",
+        "SYNTHETIC-TXN-REGULAR"
+      ],
+      "native_billing_amount": "86.40",
+      "billing_currency": "ILS",
+      "flag_only_change": true,
+      "evidence_basis": "observed structural/semantic pattern; values invented"
+    },
+    "opaque_cash_account_amount": {
+      "key": [
+        "SYNTHETIC-CARD-A",
+        "SYNTHETIC-TXN-REGULAR"
+      ],
+      "source_numeric_example": "123.4567",
+      "canonical_amount_source": "amountForDisplay",
+      "role": "unvalidated; preserve as provider detail without replacing canonical money",
+      "evidence_basis": "observed structural/semantic pattern; values invented"
+    },
+    "converted": {
+      "key": [
+        "SYNTHETIC-CARD-A",
+        "SYNTHETIC-TXN-CONVERTED-USD"
+      ],
+      "native_billing_amount": "222.00",
+      "billing_currency": "ILS",
+      "source_original_amount": "60.00",
+      "original_currency": "USD",
+      "do_not_convert_billing_again": true,
+      "evidence_basis": "observed structural/semantic pattern; values invented",
+      "uninterpreted_source_fields": [
+        "amtBeforeConvAndIndex"
+      ]
+    },
+    "foreign_billing": [
+      {
+        "id": "SYNTHETIC-TXN-BILLED-USD",
+        "native_billing_amount": "45.00",
+        "currency": "USD",
+        "evidence_basis": "observed currency combination; values invented"
+      },
+      {
+        "id": "SYNTHETIC-TXN-BILLED-EUR",
+        "native_billing_amount": "37.50",
+        "currency": "EUR",
+        "evidence_basis": "observed currency combination; values invented"
+      }
+    ],
+    "legacy_installments": {
+      "id": "SYNTHETIC-TXN-LEGACY-INSTALLMENTS",
+      "observations": 3,
+      "planned_count": 12,
+      "native_commitment_amount": "1200.00",
+      "observed_component_amounts": [
+        "100.00",
+        "100.00",
+        "100.00"
+      ],
+      "must_not_sum_display_amounts": true,
+      "evidence_basis": "observed structural/semantic pattern; values invented"
+    },
+    "cancellation": {
+      "id": "SYNTHETIC-TXN-CANCEL",
+      "observations": 2,
+      "same_billing_date": true,
+      "component_amounts": [
+        "-210.00",
+        "-315.00"
+      ],
+      "shared_positive_original_amount": "900.00",
+      "workflow_group_amount": "-525.00",
+      "rule_basis": "Fonds mapping policy, not an issuer-guaranteed universal rule",
+      "evidence_basis": "observed structural/semantic pattern; values invented"
+    },
+    "refund": {
+      "id": "SYNTHETIC-TXN-REFUND",
+      "display_amount": "-25.00",
+      "trnAmt": "25.00",
+      "original_purchase_link": null,
+      "evidence_basis": "observed structural/semantic pattern; values invented"
+    },
+    "waived_fee": {
+      "id": "SYNTHETIC-TXN-WAIVED-FEE",
+      "display_amount": "0.00",
+      "trnAmt": "12.50",
+      "must_not_create_12_50_charge": true,
+      "evidence_basis": "observed structural/semantic pattern; values invented"
+    },
+    "history": {
+      "id": "SYNTHETIC-TXN-HISTORY",
+      "count_before": 2,
+      "count_after": 3,
+      "old_items_preserved": true,
+      "order_changes": true,
+      "parent_counts_null": true,
+      "history_sum_is_not_parent_amount": true,
+      "num_is_localized_text": true,
+      "evidence_basis": "observed structural/semantic pattern; values invented"
+    },
+    "pending_candidate": {
+      "pending_id": "SYNTHETIC-AUTH-PENDING-POSTED",
+      "posted_id": "SYNTHETIC-TXN-PENDING-POSTED",
+      "purchase_date_changes": true,
+      "provider_link_proven": false,
+      "expected": "candidate requiring rule validation or owner decision, not an automatic identity link",
+      "evidence_basis": "observed structural/semantic pattern; values invented"
+    },
+    "unlisted_and_returned": {
+      "id": "SYNTHETIC-TXN-VANISH",
+      "expected": "retain history/annotations; absence in unknown window is not deletion",
+      "evidence_basis": "snapshot set differences observed; reappearance is a constructed lifecycle case"
+    },
+    "constructed_correction": {
+      "id": "SYNTHETIC-TXN-CORRECTED",
+      "before": "72.10",
+      "after": "75.60",
+      "basis": "hypothetical future update; not an observed response shape",
+      "evidence_basis": "constructed application behavior case"
+    },
+    "duplicates": {
+      "ids": [
+        "SYNTHETIC-TXN-DUPLICATE-A",
+        "SYNTHETIC-TXN-DUPLICATE-B"
+      ],
+      "expected_distinct_transactions": 2,
+      "evidence_basis": "constructed application behavior case"
+    },
+    "cross_card": {
+      "native_id": "SYNTHETIC-TXN-REGULAR",
+      "cards": [
+        "SYNTHETIC-CARD-A",
+        "SYNTHETIC-CARD-B"
+      ],
+      "expected_distinct_transactions": 2,
+      "evidence_basis": "constructed application behavior case"
+    },
+    "annotations": {
+      "transaction": "SYNTHETIC-TXN-CORRECTED",
+      "note": "Synthetic user note",
+      "category": "Example category",
+      "business_use": "uncertain",
+      "expected": "preserve through update; fixed-amount allocations need review",
+      "evidence_basis": "constructed application behavior case"
+    },
+    "unknown_original_currency": {
+      "id": "SYNTHETIC-TXN-UNKNOWN-ORIGINAL-CURRENCY",
+      "expected": "retain null source codes; billing currency does not supply missing original-currency proof",
+      "evidence_basis": "observed structural/semantic pattern; values invented"
+    },
+    "unknown_plan": {
+      "id": "SYNTHETIC-TXN-UNKNOWN-PLAN",
+      "observed_ordinal": 4,
+      "reported_total": 0,
+      "expected": "retain the observed ordinal; do not infer planned total or remaining count",
+      "evidence_basis": "observed cancellation pattern; values invented"
+    }
+  },
+  "collection_context": {
+    "provider": "cal",
+    "connection_id": "SYNTHETIC-CAL-CONNECTION",
+    "account_key": "SYNTHETIC-CAL-ACCOUNT"
+  },
+  "expected_baseline_projection": [
+    {
+      "source_identity": {
+        "card_key": "SYNTHETIC-CARD-A",
+        "native_id": "SYNTHETIC-TXN-REGULAR"
+      },
+      "status": "posted",
+      "amount_basis": "purchase_commitment",
+      "kind": "purchase",
+      "amount_minor": -8640,
+      "currency": "ILS",
+      "original_amount_minor": -8640,
+      "original_currency": "ILS",
+      "booking_date": null
+    },
+    {
+      "source_identity": {
+        "card_key": "SYNTHETIC-CARD-A",
+        "native_id": "SYNTHETIC-TXN-CONVERTED-USD"
+      },
+      "status": "posted",
+      "amount_basis": "purchase_commitment",
+      "kind": "purchase",
+      "amount_minor": -22200,
+      "currency": "ILS",
+      "original_amount_minor": -6000,
+      "original_currency": "USD",
+      "booking_date": null
+    },
+    {
+      "source_identity": {
+        "card_key": "SYNTHETIC-CARD-A",
+        "native_id": "SYNTHETIC-TXN-BILLED-USD"
+      },
+      "status": "posted",
+      "amount_basis": "purchase_commitment",
+      "kind": "purchase",
+      "amount_minor": -4500,
+      "currency": "USD",
+      "original_amount_minor": -4500,
+      "original_currency": "USD",
+      "booking_date": null
+    },
+    {
+      "source_identity": {
+        "card_key": "SYNTHETIC-CARD-A",
+        "native_id": "SYNTHETIC-TXN-BILLED-EUR"
+      },
+      "status": "posted",
+      "amount_basis": "purchase_commitment",
+      "kind": "purchase",
+      "amount_minor": -3750,
+      "currency": "EUR",
+      "original_amount_minor": -3750,
+      "original_currency": "EUR",
+      "booking_date": null
+    },
+    {
+      "source_identity": {
+        "card_key": "SYNTHETIC-CARD-A",
+        "native_id": "SYNTHETIC-TXN-INSTALLMENTS"
+      },
+      "status": "posted",
+      "amount_basis": "purchase_commitment",
+      "kind": "purchase",
+      "amount_minor": -120000,
+      "currency": "ILS",
+      "original_amount_minor": -120000,
+      "original_currency": "ILS",
+      "booking_date": null
+    },
+    {
+      "source_identity": {
+        "card_key": "SYNTHETIC-CARD-A",
+        "native_id": "SYNTHETIC-TXN-UNKNOWN-PLAN"
+      },
+      "status": "posted",
+      "amount_basis": "purchase_commitment",
+      "kind": "refund",
+      "amount_minor": 30000,
+      "currency": "ILS",
+      "original_amount_minor": null,
+      "original_currency": null,
+      "booking_date": null
+    },
+    {
+      "source_identity": {
+        "card_key": "SYNTHETIC-CARD-A",
+        "native_id": "SYNTHETIC-TXN-REFUND"
+      },
+      "status": "posted",
+      "amount_basis": "purchase_commitment",
+      "kind": "refund",
+      "amount_minor": 2500,
+      "currency": "ILS",
+      "original_amount_minor": 2500,
+      "original_currency": "ILS",
+      "booking_date": null
+    },
+    {
+      "source_identity": {
+        "card_key": "SYNTHETIC-CARD-A",
+        "native_id": "SYNTHETIC-TXN-CANCEL"
+      },
+      "status": "posted",
+      "amount_basis": "purchase_commitment",
+      "kind": "refund",
+      "amount_minor": 52500,
+      "currency": "ILS",
+      "original_amount_minor": null,
+      "original_currency": null,
+      "booking_date": null
+    },
+    {
+      "source_identity": {
+        "card_key": "SYNTHETIC-CARD-A",
+        "native_id": "SYNTHETIC-TXN-WAIVED-FEE"
+      },
+      "status": "posted",
+      "amount_basis": "purchase_commitment",
+      "kind": "fee",
+      "amount_minor": 0,
+      "currency": "ILS",
+      "original_amount_minor": null,
+      "original_currency": null,
+      "booking_date": null
+    },
+    {
+      "source_identity": {
+        "card_key": "SYNTHETIC-CARD-A",
+        "native_id": "SYNTHETIC-TXN-HISTORY"
+      },
+      "status": "posted",
+      "amount_basis": "purchase_commitment",
+      "kind": "purchase",
+      "amount_minor": -84000,
+      "currency": "ILS",
+      "original_amount_minor": -84000,
+      "original_currency": "ILS",
+      "booking_date": null
+    },
+    {
+      "source_identity": {
+        "card_key": "SYNTHETIC-CARD-A",
+        "native_id": "SYNTHETIC-TXN-CONTEXT"
+      },
+      "status": "posted",
+      "amount_basis": "purchase_commitment",
+      "kind": "purchase",
+      "amount_minor": -3990,
+      "currency": "ILS",
+      "original_amount_minor": -3990,
+      "original_currency": "ILS",
+      "booking_date": null
+    },
+    {
+      "source_identity": {
+        "card_key": "SYNTHETIC-CARD-A",
+        "native_id": "SYNTHETIC-TXN-UNKNOWN-ORIGINAL-CURRENCY"
+      },
+      "status": "posted",
+      "amount_basis": "purchase_commitment",
+      "kind": "purchase",
+      "amount_minor": -2200,
+      "currency": "ILS",
+      "original_amount_minor": null,
+      "original_currency": null,
+      "booking_date": null
+    },
+    {
+      "source_identity": {
+        "card_key": "SYNTHETIC-CARD-A",
+        "native_id": "SYNTHETIC-TXN-REMOTE"
+      },
+      "status": "posted",
+      "amount_basis": "purchase_commitment",
+      "kind": "purchase",
+      "amount_minor": -4860,
+      "currency": "ILS",
+      "original_amount_minor": -4860,
+      "original_currency": "ILS",
+      "booking_date": null
+    },
+    {
+      "source_identity": {
+        "card_key": "SYNTHETIC-CARD-A",
+        "native_id": "SYNTHETIC-TXN-VANISH"
+      },
+      "status": "posted",
+      "amount_basis": "purchase_commitment",
+      "kind": "purchase",
+      "amount_minor": -6480,
+      "currency": "ILS",
+      "original_amount_minor": -6480,
+      "original_currency": "ILS",
+      "booking_date": null
+    },
+    {
+      "source_identity": {
+        "card_key": "SYNTHETIC-CARD-A",
+        "native_id": "SYNTHETIC-TXN-CORRECTED"
+      },
+      "status": "posted",
+      "amount_basis": "purchase_commitment",
+      "kind": "purchase",
+      "amount_minor": -7210,
+      "currency": "ILS",
+      "original_amount_minor": -7210,
+      "original_currency": "ILS",
+      "booking_date": null
+    },
+    {
+      "source_identity": {
+        "card_key": "SYNTHETIC-CARD-A",
+        "native_id": "SYNTHETIC-TXN-DUPLICATE-A"
+      },
+      "status": "posted",
+      "amount_basis": "purchase_commitment",
+      "kind": "purchase",
+      "amount_minor": -1820,
+      "currency": "ILS",
+      "original_amount_minor": -1820,
+      "original_currency": "ILS",
+      "booking_date": null
+    },
+    {
+      "source_identity": {
+        "card_key": "SYNTHETIC-CARD-A",
+        "native_id": "SYNTHETIC-TXN-DUPLICATE-B"
+      },
+      "status": "posted",
+      "amount_basis": "purchase_commitment",
+      "kind": "purchase",
+      "amount_minor": -1820,
+      "currency": "ILS",
+      "original_amount_minor": -1820,
+      "original_currency": "ILS",
+      "booking_date": null
+    },
+    {
+      "source_identity": {
+        "card_key": "SYNTHETIC-CARD-B",
+        "native_id": "SYNTHETIC-TXN-REGULAR"
+      },
+      "status": "posted",
+      "amount_basis": "purchase_commitment",
+      "kind": "purchase",
+      "amount_minor": -8640,
+      "currency": "ILS",
+      "original_amount_minor": -8640,
+      "original_currency": "ILS",
+      "booking_date": null
+    }
+  ],
+  "expected_later_behavior": {
+    "corrected_amount_minor": -7560,
+    "legacy_pending_unchanged_identity_count": 1,
+    "flag_only_change_financial_version_bump": false,
+    "history_reordering_financial_version_bump": false,
+    "unlisted_posted_transaction_retained": true,
+    "pending_to_posted_automatic_link": false,
+    "default_totals_group_by": [
+      "amount_basis",
+      "currency"
+    ],
+    "default_spending_excludes_pending": true
+  }
+}

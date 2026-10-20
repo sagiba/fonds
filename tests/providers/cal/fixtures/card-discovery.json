@@ -1,0 +1,38 @@
+{
+  "statusCode": 1,
+  "result": {
+    "bankAccounts": [
+      {
+        "bankAccountUniqueId": "SYNTHETIC-DISCOVERY-ACCOUNT"
+      }
+    ],
+    "cards": [
+      {
+        "cardUniqueId": "SYNTHETIC-DISCOVERY-CARD",
+        "bankAccountUniqueId": "SYNTHETIC-DISCOVERY-ACCOUNT",
+        "last4Digits": "0012",
+        "cardDescription": "כרטיס דוגמה סינתטי",
+        "companyDescription": "Synthetic card company",
+        "cardType": "Synthetic product type",
+        "issuerName": "Synthetic issuer",
+        "cardStatus": 0,
+        "statusForDisplay": "Synthetic active status",
+        "isDebitCard": false,
+        "isVirtualCard": false,
+        "isDigitalCard": true,
+        "isTemporaryCard": false,
+        "cardTypeCode": 7,
+        "currentDebitDay": 10,
+        "isCreditLimited": true,
+        "cardOwnerFirstName": "SYNTHETIC-PRIVATE-FIRST",
+        "cardOwnerLastName": "SYNTHETIC-PRIVATE-LAST",
+        "cardOwnerFullName": "SYNTHETIC-PRIVATE-FULL",
+        "cardOwnerEmail": "synthetic-private@example.invalid",
+        "cardOwnerCellularPhoneNumber": "SYNTHETIC-PRIVATE-PHONE",
+        "cardOwnerCustExtId": "SYNTHETIC-PRIVATE-NATIONAL-ID",
+        "cardOwnerCustExtTypeCode": "SYNTHETIC-PRIVATE-ID-TYPE",
+        "creditLimit": 99999
+      }
+    ]
+  }
+}

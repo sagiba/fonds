@@ -1,0 +1,36 @@
+{
+  "name": "fonds-postgres",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@better-auth/cimd": "1.7.10",
+    "@better-auth/core": "1.7.10",
+    "@better-auth/mcp": "1.7.10",
+    "@better-auth/oauth-provider": "1.7.10",
+    "@better-auth/passkey": "1.7.10",
+    "@hono/node-server": "2.1.5",
+    "@modelcontextprotocol/server": "2.3.1",
+    "better-auth": "1.7.10",
+    "better-call": "1.4.2",
+    "drizzle-orm": "0.45.4",
+    "hono": "4.13.13",
+    "ipaddr.js": "2.5.0",
+    "jose": "6.2.12",
+    "lossless-json": "4.3.2",
+    "pg": "8.23.1",
+    "standardwebhooks": "1.1.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/pg": "8.23.1",
+    "typescript": "7.0.2"
+  }
+}

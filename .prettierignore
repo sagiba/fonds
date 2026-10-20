@@ -1,0 +1,10 @@
+# Immutable evidence and npm-owned lockfiles are not style-edit targets.
+tests/**/__snapshots__/
+deploy/**/package-lock.json
+tests/d1-local/package-lock.json
+tests/fixtures/
+tests/providers/*/fixtures/
+tests/providers/*/schemas/
+migrations/
+src/storage/**/migration.ts
+src/storage/**/schema-manifest.ts

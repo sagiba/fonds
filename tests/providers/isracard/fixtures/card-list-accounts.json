@@ -1,0 +1,54 @@
+{
+  "isSuccess": true,
+  "data": {
+    "cardsList": [
+      {
+        "companyCode": "11",
+        "cardGuid": "SYNTHETIC-ACCOUNT-GUID-A",
+        "cardSuffix": "1234",
+        "cardName": "Synthetic Everyday",
+        "firstName": "Synthetic First",
+        "lastName": "Synthetic Last",
+        "bank": "99",
+        "branch": "123",
+        "accountNumber": "000042",
+        "limitData": { "limit": "1000", "used": "100" },
+        "isActive": true,
+        "isPartner": false,
+        "cardChargeNext": { "billingDate": "10/08/2040" },
+        "cardChargeLast": { "billingDate": "10/07/2040" }
+      },
+      {
+        "companyCode": "77",
+        "cardGuid": "SYNTHETIC-ACCOUNT-GUID-B",
+        "cardSuffix": "5678",
+        "cardName": "Synthetic Travel",
+        "firstName": "Synthetic First",
+        "lastName": "Synthetic Last",
+        "bank": "99",
+        "branch": "123",
+        "accountNumber": "000042",
+        "limitData": { "limit": "2000", "used": "200" },
+        "isActive": true,
+        "isPartner": false,
+        "cardChargeNext": { "billingDate": "10/08/2040" },
+        "cardChargeLast": { "billingDate": "10/07/2040" }
+      },
+      {
+        "companyCode": "11",
+        "cardGuid": "SYNTHETIC-ACCOUNT-GUID-C",
+        "cardSuffix": "9012",
+        "cardName": "Synthetic Spare",
+        "firstName": "Synthetic First",
+        "lastName": "Synthetic Last",
+        "bank": "98",
+        "branch": "456",
+        "accountNumber": "777000013",
+        "isActive": true,
+        "isPartner": false,
+        "cardChargeNext": { "billingDate": "10/08/2040" },
+        "cardChargeLast": { "billingDate": "10/07/2040" }
+      }
+    ]
+  }
+}

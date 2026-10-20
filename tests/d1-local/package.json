@@ -1,0 +1,10 @@
+{
+  "name": "fonds-d1-local",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Opt-in local D1 test runtime; install only to run the FONDS_TEST_D1 suites.",
+  "type": "module",
+  "devDependencies": {
+    "miniflare": "4.20260730.0"
+  }
+}

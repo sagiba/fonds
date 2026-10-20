@@ -1,0 +1,71 @@
+name: Experimental targets
+
+# Turso (libSQL server), turso-web and D1 are experimental targets: they are not
+# required to reach feature parity and stay off the pull-request path. This runs
+# their storage suites and launcher checks weekly and on demand (dispatch it for
+# a change aimed at these targets). Keep it out of the required checks.
+on:
+  schedule:
+    - cron: "41 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  libsql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # Two disposable servers from the pinned official image: the default
+      # profile and the large-capture profile (docs/internals/storage-testing.md).
+      - name: Start libSQL servers
+        # bash enables pipefail, so a failed start fails the step.
+        shell: bash
+        run: scripts/libsql-test-servers.sh start | sed 's/^export //' >> "$GITHUB_ENV"
+      - name: Run storage integration tests
+        run: >-
+          npm test -- tests/storage --no-file-parallelism
+          --reporter=default --reporter=json
+          --outputFile=/tmp/fonds-libsql-results.json
+      - name: Verify libSQL coverage ran
+        run: node scripts/check-libsql-tests.mjs /tmp/fonds-libsql-results.json
+      - name: Run the Turso launcher in an isolated install
+        run: npm run check:targets -- turso --runtime
+      - if: always()
+        run: scripts/libsql-test-servers.sh stop
+
+  # The D1 adapter against local D1 (Miniflare/workerd); no account or network
+  # service. Real Cloudflare D1 remains unverified.
+  d1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            tests/d1-local/package-lock.json
+      - run: npm ci
+      - run: npm ci --prefix tests/d1-local
+      - run: npx vitest run tests/storage/d1.test.ts tests/tooling/d1-worker.test.mjs
+        env:
+          FONDS_TEST_D1: "1"
+      - run: npx vitest run tests/storage/backends.test.ts tests/storage/contract.test.ts tests/storage/statement-counts.test.ts -t d1-local
+        env:
+          FONDS_TEST_D1: "1"
+      - run: npm run check:targets -- d1-web
+      - run: npm run check:targets -- turso-web

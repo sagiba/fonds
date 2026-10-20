@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/sagiba/fonds/security/advisories/new
+    about: Report vulnerabilities privately, never in a public issue.
+  - name: Getting help
+    url: https://github.com/sagiba/fonds/blob/main/SUPPORT.md
+    about: Where questions, bugs and ideas go.

@@ -1,0 +1,28 @@
+name: Feature request
+description: Propose a capability or a new provider adapter.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please describe the problem before the solution. New provider adapters are
+        discussed here before anyone writes code. Never include real financial data.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what gets in the way?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: How it could work, and the alternatives you considered.
+  - type: checkboxes
+    id: data
+    attributes:
+      label: Data
+      options:
+        - label: This request contains no real financial data, credentials or account identifiers.
+          required: true

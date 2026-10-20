@@ -1,0 +1,44 @@
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+.secrets/
+secrets/
+*.pem
+*.key
+
+# Private financial/runtime data must never be committed
+data/
+private/
+exports/
+backups/
+captures/
+*.har
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+
+# Dependency/build/runtime state
+node_modules/
+dist/
+.next/
+.wrangler/
+.sites-runtime/
+.sites-checkout/
+coverage/
+*.log
+.DS_Store
+
+# Browser artifacts belong under /tmp; ignore accidental local output
+.playwright-cli/
+playwright-report/
+test-results/
+
+# Maintainer-local public-text patterns (see CONTRIBUTING.md)
+.public-text-patterns
+
+# Local compose overrides (public origin, proxy trust)
+compose.override.yaml

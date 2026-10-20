@@ -1,0 +1,147 @@
+import type {
+  AnnotationData,
+  JsonObject,
+  StoredTransactionFacts,
+} from "./model.js";
+
+/** Requested collection boundaries, not evidence of complete source coverage. */
+export interface CollectionScope {
+  kind: "recent" | "history";
+  from?: string | undefined;
+  to?: string | undefined;
+  /** Nominal window, when actual request bounds include deliberate overlap. */
+  windowFrom?: string | undefined;
+  windowTo?: string | undefined;
+  month?: string | undefined;
+  cardKey?: string | undefined;
+  cardKeys?: string[] | undefined;
+  /** Provider namespaces, validated by their adapter and retained as safe JSON. */
+  filters?: JsonObject | undefined;
+}
+
+export interface CollectionFailure {
+  accountKey: string | null;
+  endpoint: string;
+  scope?: CollectionScope | undefined;
+  code:
+    | "network_error"
+    | "authentication_failed"
+    | "authentication_challenge"
+    | "rate_limited"
+    | "budget_exhausted"
+    | "invalid_response";
+}
+
+export interface FinancialResponse {
+  accountKey: string;
+  endpoint: string;
+  capturedAt: string;
+  responseText: string;
+  httpStatus?: number | undefined;
+  scope?: CollectionScope | undefined;
+}
+
+export interface Partition {
+  accountKey: string;
+  resource: string;
+  status: "posted" | "pending";
+  success: boolean;
+  comparable: boolean;
+  scope?: CollectionScope | undefined;
+}
+
+export interface ConnectionConfig {
+  schemaVersion: 1;
+  changeCursors?: Record<string, number> | undefined;
+  [key: string]: unknown;
+}
+
+export interface Connection {
+  id: string;
+  provider: string;
+  displayName: string;
+  config: ConnectionConfig;
+  createdAt: string;
+}
+
+export type Transaction = StoredTransactionFacts & {
+  id: string;
+  connectionId: string;
+  presence: "seen" | "not_returned" | "removed";
+  firstSeenAt: string;
+  lastSeenAt: string;
+  lastSeenRunId: string;
+  version: number;
+  supersededById: string | null;
+};
+
+export interface Annotation {
+  transactionId: string;
+  version: number;
+  data: AnnotationData;
+  updatedAt: string;
+}
+
+export interface Run {
+  id: string;
+  connectionId: string;
+  startedAt: string;
+  completedAt: string | null;
+  status: "started" | "completed" | "partial" | "failed";
+  collectorVersion: string;
+  parserVersion: string;
+  snapshot: {
+    schemaVersion: 1;
+    responses: FinancialResponse[];
+    failures?: CollectionFailure[];
+  };
+  coverage: Partition[];
+  warnings: string[];
+  appliedAt: string | null;
+  /** The refresh that archived this run; null for offline ingestion. */
+  refreshId: string | null;
+}
+
+/** Every ledger event type, dotted resource.action names. Stored types stay extensible text. */
+export const EVENT_TYPES = [
+  "sync.baseline",
+  "sync.partial",
+  "sync.failed",
+  "sync.recovered",
+  "transaction.imported",
+  "transaction.created",
+  "transaction.updated",
+  "transaction.posted",
+  "transaction.linked",
+  "transaction.unlinked",
+  "transaction.removed",
+  "transaction.unlisted",
+  "transaction.restored",
+  "transaction.review_required",
+  "transaction.review_resolved",
+  "annotation.updated",
+] as const;
+
+export type EventType = (typeof EVENT_TYPES)[number];
+
+export interface LedgerEvent {
+  id: number;
+  connectionId: string;
+  transactionId: string | null;
+  runId: string | null;
+  type: string;
+  createdAt: string;
+  actor: string;
+  before: unknown;
+  after: unknown;
+}
+
+/** The plan stamps its connection on every event. */
+export type LedgerEventInput = Pick<LedgerEvent, "createdAt" | "actor"> & {
+  type: EventType;
+} & Partial<
+    Omit<LedgerEvent, "id" | "type" | "createdAt" | "actor" | "connectionId">
+  >;
+
+export type LedgerEventWrite = LedgerEventInput &
+  Pick<LedgerEvent, "connectionId">;

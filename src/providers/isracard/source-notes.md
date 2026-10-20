@@ -1,0 +1,334 @@
+# Isracard source notes
+
+> For Isracard adapter maintainers. Owns source evidence, interpretation rationale and uncertainty; the adapter code owns the mappings and the linked tests own expected outcomes.
+
+Isracard's JSON comes from private endpoints with no public contract. These
+observations come from owner-authorized collection, a value-free
+[archive profiler](../../../tests/providers/isracard/scripts/audit-isracard-db.ts) and the pinned public
+upstream sources cited below: they are maintainer attestations, not publicly
+reproducible validation. No credentials, values or identifiers are published, and
+the [fixtures](../../../tests/providers/isracard/fixtures/README.md) are invented. Nothing here
+certifies every Isracard account, card type or a future shape, and establishing
+an accounting meaning needs new evidence, never an option that bypasses review.
+
+Each record keeps three levels apart: what was **observed**, the **policy** Fonds
+adopts, and issuer semantics that stay **unknown** and raw. **Checks** name test
+cases in the linked suites.
+
+## isracard.login: login, TLS and session
+
+- **Observed:** login posts to the legacy `digital.isracard.co.il` host and sets
+  parent-domain session cookies that the DigitalV3 `web.isracard.co.il` routes
+  accept; no session hand-off or browser transactions page is needed. The login
+  POST is accepted only with browser-compatible TLS and HTTP/2 behavior,
+  including the pseudo-header order `:method`, `:authority`, `:scheme`, `:path`:
+  Node's default order is blocked on that POST while GETs are admitted, and
+  ordinary Node fetch or HTTP/2 SETTINGS changes alone did not reproduce the
+  accepted request. No mobile API was demonstrated.
+- **Policy:** certificate verification stays enabled, only the fixed origins are
+  reachable and redirects are not followed. Challenges, password failures and
+  rate limits stop the invocation, so a password is never retried.
+- **Unknown:** this is observed edge compatibility, not a provider guarantee.
+  Runtime changes, account state, cloud and EU-region egress, session lifetime
+  and unattended operation need separate validation.
+- **Checks:** [transport] "uses the proven login content type…", "never retries
+  a password…", "hard-stops explicit provider login redirects…"; [node http]
+  "routes digital through HTTP2 with certificate validation…".
+
+## isracard.envelope: response shapes and acceptance
+
+- **Observed:** DigitalV3 marks success with `isSuccess`; the legacy statement
+  and details with `Header.Status` `1`. DigitalV3 data holds
+  `israelAbroadVouchers` (the statement list, its `totalForStatement` and the
+  `outOfStatementChargeDateVouchers` immediate-charge groups), `approvals` and
+  `currentTransactionsList`. An empty month is exactly
+  `{"approvals":null,"israelAbroadVouchers":null,"currentTransactionsList":null}`.
+  Legacy groups under `CardsTransactionsListBean.Index<n>.CurrentCardTransactions[]`
+  carry one partition each (`txnIsrael`, `txnAbroad` or `txnInfo`), null when
+  empty. The detail route answers in `PirteyIska_204Bean`.
+- **Negative findings:** `approvals` was null in every observed capture, so no
+  pending row shape is known. Application success does not prove completeness,
+  and an empty month proves neither inactivity nor history depth.
+- **Policy:** only an accepted response is archived; an application error becomes
+  a typed failure and its body is discarded. Other null shapes, unknown group
+  keys and non-array partitions make coverage partial while known siblings stay.
+- **Checks:** [extraction] "accepts the observed all-null DigitalV3 month…",
+  "reads the observed one-partition legacy groups…", "reports unverified null
+  empty shapes as partial…", "keeps recognized legacy rows when a sibling
+  container is unsupported", "never manufactures pending rows…"; [transport]
+  "never retries a password or treats a failed legacy status as an empty month".
+
+## isracard.window: billing months, history and pending summary
+
+- **Observed:** DigitalV3 answers one card and billing month per request; the
+  legacy statement answers one month for all Isracard cards. DigitalV3 returns
+  roughly the last four years of billing months, and older months come only from
+  the legacy route. Multi-year ranges were collected through the combined
+  routes, and a transient legacy failure recovered on a targeted monthly retry.
+  Co-branded cards have no demonstrated legacy or detail route, and there is no
+  separate legacy-only fallback mode. Optional details
+  exist for only some transactions.
+- **Pending summary:** `currentTransactionsList` lists, per upcoming
+  `currentBillingMonth` (`DD/MM/YYYY`) and currency, `transactionsTotal`,
+  `transactionsCurrency`, `transactionsSymbol` and `transactionsCount` for
+  transactions not yet billed. They are absent from the statement and immediate
+  lists, and the summary names no merchant or date.
+- **Policy:** a billing month is not a purchase-date window or a calendar
+  cutoff, so no partition is comparable for absence. The summary stays raw, and
+  its presence does not reduce posted coverage. A card absent from discovery has
+  no proven session GUID, so its rows are never assigned by suffix.
+- **Unknown:** complete source history, every old card, future-period behavior
+  and pending semantics. A month's combined responses are not an atomic
+  provider snapshot.
+- **Checks:** [extraction] "marks history explicitly and never permits
+  disappearance…", "keeps the pending summary raw…", "reports a non-null
+  current-transactions partition beside vouchers as partial…"; [collection]
+  "collects open and just-closed periods…", "bounds history before login…";
+  [scope].
+
+## isracard.cards: discovery, billing accounts and holder data
+
+- **Observed:** the DigitalV3 card list gives each card `companyCode`, a
+  four-digit `cardSuffix`, a session `cardGuid` and a product `cardName`, beside
+  holder names, `limitData`, activity flags, charge dates and the paying
+  account's `bank`, `branch` and `accountNumber` strings, which Fonds keeps only
+  as `billingAccount`'s `providerKey` and `mask`. `cardGuid` changes at
+  every login. `bank` is a numeric code, not an institution name.
+- **Holder data in financial responses:** legacy `holderName`,
+  `displayProperties`, `selectedCardInfo`, `card6Digits` (six digits of the
+  selected card) and `cardNumberTail` (every card's last four); a detail's `info`
+  and `motavName` (the other party, a person for a person-to-person payment).
+  The login identity number can reappear in legacy `userId`, `holderId`,
+  `currentId` or a key `id<number>`.
+- **Rationale:** the owner is identified by OAuth and cards by provider keys, so
+  holder data adds risk for no benefit. Financial responses stay exact, so only
+  the card list, which the extractor needs just to bind each capture's card, is
+  stored as an allowlisted projection. The identity number is replaced only at
+  the recognized holder locations and the result rechecked; anywhere else,
+  including an unquoted, padded or coincidental voucher value, it rejects the
+  response rather than altering evidence. The billing account's private key is
+  the raw `bank|branch|accountNumber`: the number is semi-public, and a keyed
+  hash whose key sits in the same database would be brute-forced in seconds.
+- **Unknown:** later reuse of a card's final four digits, partner-card
+  ownership, and whether the card's collection scope is its funding account.
+- **Checks:** [collection] "projects the evidenced product cardName…",
+  "omits invalid cardName…", "archives the login identity number as a marker…",
+  "rejects a numeric identity reflection that redaction would make invalid",
+  "never archives reflected secrets…", "discovers each card's billing account…",
+  "leaves the mask null when the account number does not end in four digits",
+  "archives only the allowlisted card list…", "projects an old raw card list for
+  replay…"; [extraction] "rejects suffix-only identity…".
+
+## isracard.identity: vouchers and generation joins
+
+- **Observed:** DigitalV3 `seqVoucherNumber` equals legacy `voucherNumberRatz`
+  (abroad `voucherNumberRatzOutbound`) in the observed uniquely compatible joins.
+  DigitalV3 `voucherNumber` is the deal or plan voucher, shared by a plan's
+  payments and padded to seven digits in legacy. Fee rows reuse one-digit
+  vouchers, and an unrelated row can share a plan's voucher. Legacy card indices
+  correspond to cards through the string `cardNumberList` entries.
+- **Policy:** card, voucher and purchase date are identity evidence, not proof
+  of global uniqueness. Per-row vouchers stay strings with their leading zeros,
+  and numeric-equivalent lexemes across generations are reviewed, never
+  normalized; the plan voucher is the one padded value compared without leading
+  zeros. DigitalV3 is preferred, and legacy fills what it omits, notably standing
+  orders (`isHoraatKeva`).
+- **Checks:** [extraction] "prefers DigitalV3, joins unique voucher evidence…",
+  "joins equal numeric voucher lexemes and flags numeric-equivalent mismatches…",
+  "preserves all duplicate voucher occurrences…", "keeps card and transaction
+  identity when a later login issues a new session cardGuid", "matches reordered
+  duplicate rows by source facts…"; [fingerprint].
+
+## isracard.money: signs and currency codes
+
+- **Sign:** the signed convention is source-derived from upstream PR
+  [#1159][upstream-1159], inspected at head
+  `41021421497a531493d8c569c453f29db0cd0997` on 2026-10-16:
+  `base-isracard/base-isracard-utils.ts` negates DigitalV3 `billingAmount` and
+  `originalAmount`, and the legacy scraper negates `paymentSum` or
+  `paymentSumOutbound`. It is not an issuer codebook or live validation of every
+  type, so every row keeps a review issue for it. A literal `"-"` legacy
+  `paymentSumSign` accompanies an already negative `paymentSum`.
+- **Currency codes:** DigitalV3 billing codes `0`, `19` and `100` were observed
+  as ILS, USD and EUR; unlike that PR, Fonds does not default a missing code to
+  ILS. Legacy `currencyId` carries the shekel texts `₪`, `ש"ח` and `ש״ח`, the
+  dollar text `דולר` or an ISO code. The `NIS` shekel alias follows upstream at
+  commit `5170a65ffaf8df2d22f32b0fa1656350a8337590`:
+  [`src/constants.ts`][upstream-constants] (`ALT_SHEKEL_CURRENCY`) and the legacy
+  `convertCurrency` in [`src/scrapers/base-isracard-amex.ts`][upstream-amex].
+  Other markers stay unresolved.
+- **Checks:** [extraction] "uses the observed USD currency code…", "maps billing
+  currency code 100 to EUR and the legacy dollar text to USD", "maps the legacy
+  shekel texts %s to ILS", "maps the source-derived legacy NIS alias to ILS…",
+  "leaves unknown
+  currencies and unsupported money precision unresolved", "retains legacy sign
+  %s without applying it again…".
+
+## isracard.amount-basis: what a DigitalV3 bill states
+
+- **Observed:** in every same-currency DigitalV3 row, `originalAmount` equals
+  `billingAmount` plus `discountAmount` (or zero). A waived card fee bills 0 with
+  its list fee as the original amount. A legacy-only waived card fee states
+  `moreInfo` "הנחה <amount> ש"ח" ("discount <amount> ILS") with `paymentSum` 0
+  and a positive `dealSum`.
+- **Policy:** a reconciled same-currency bill of a mapped kind is a purchase
+  commitment, as for CAL's posted rows; a posted row does not establish an
+  account booking. A same-currency row that does not reconcile keeps its
+  original money unknown.
+- **Unknown:** the billed side of a cross-currency row (for example whether a
+  waived conversion commission is inside the bill), so no rate is computed;
+  `txnInfo` rows' source role; parallel `ilsAmount` and `usdAmount`; discount
+  components; null fee, rate and interest placeholders, where null does not mean
+  zero or fee-free.
+- **Checks:** [amount basis] "names a same-currency charge's bill as a purchase
+  commitment…", "keeps a same-currency row whose original money does not
+  reconcile unverified", "keeps cross-currency bills at an unknown basis…",
+  "maps a waived card fee to amount 0…", "maps a legacy-only domestic waived
+  fee…"; [extraction] "preserves legacy-only txnInfo standing-order evidence…",
+  "keeps independent foreign source amounts…".
+
+## isracard.type: transaction codes
+
+Each DigitalV3 row labels its own `transactionCode` in `transactionDescription`,
+and every code had one label. That label is the evidence for a kind:
+
+| Code | Source label                                 | Gloss                                 |
+| ---- | -------------------------------------------- | ------------------------------------- |
+| `1`  | עסקאות רגילות                                | Regular transactions                  |
+| `3`  | עסקאות בתשלומים                              | Installment transactions              |
+| `7`  | תיירות יוצאת קניות                           | Outbound tourism purchases            |
+| `8`  | `תיירות יוצאת משיכת  מזומן ATM` (two spaces) | Outbound tourism, ATM cash withdrawal |
+| `10` | דמי כרטיס                                    | Card fees, company 77 cards           |
+| `12` | עמלת דמי כרטיס - בנקים                       | Card fees, bank (company 11) cards    |
+| `20` | P2P BIT                                      | Person-to-person, Bit                 |
+| `23` | P2P כל היתר                                  | Person-to-person, all others          |
+
+- **Observed:** code `7` means a foreign acquirer (`isIsraelDeal` false),
+  including online merchants that bill ILS, not travel. Code `1` also carries Bit
+  transfers, whose `businessName` is the provider label `העברה ב BIT בנה"פ` or
+  `העברה בBIT` ("transfer by BIT"); a detail's `sector` names them too.
+- **Rationale:** no row carries a refund marker, so a zero or negative row of an
+  outflow code is not classified as a refund. Legacy rows carry no such label
+  and stay unknown.
+- **Checks:** [extraction] "maps DigitalV3 transactionCode %j…", "maps card fees
+  at any sign…", "maps positive code 1 Bit transfers by their exact provider
+  label…", "leaves unmapped, padded and malformed transaction codes unknown",
+  "leaves legacy-only rows unknown…".
+
+## isracard.atm-fee: cash withdrawal and its fee line
+
+- **Observed:** a code `8` withdrawal's DigitalV3 bill includes its cash-advance
+  fee. The legacy statement lists the withdrawal without the fee and the fee as
+  a separate zero-voucher `CASH ADVANCE FEE` abroad line in the same card-month,
+  so the fee is not missing.
+- **Policy:** the DigitalV3 bill is source-stated only when it equals the joined
+  legacy withdrawal plus exactly one fee line of the same capture and currency
+  that fits no other withdrawal; otherwise the generations conflict. The fee line
+  never becomes a row, and no fee is computed. Withdrawals bill across
+  currencies, so their basis stays unknown.
+- **Checks:** [amount basis] "cash withdrawals"; [extraction] "keeps a code 8
+  cash withdrawal's fee-inclusive DigitalV3 bill…".
+
+## isracard.payment-context: channel, wallet and counterparty
+
+- **Observed:** DigitalV3 `tranzacCodeType` takes `U` internet, `V` secure
+  internet, `R` regular, `T` phone and `H` signed. `presentCard` true means a
+  physical card was presented, and false means nothing: in-store wallet payments
+  are false. `isTransactionSecure` means strong cardholder verification (chip,
+  wallet or 3-D Secure), not 3-D Secure alone, and `isWalletTransaction` a
+  tokenized card, card-on-file subscriptions included, not a mobile wallet. A
+  detail's `transactionType` or `walletPayName` can name a wallet. Standing
+  orders are legacy `isHoraatKeva` and DigitalV3 `isdirectDebit`. Collected data
+  carries no MCC.
+- **Policy:** only `U` and `V`, wallet names from a bound detail, the
+  standing-order flags and a transfer's bound `motavName` become typed facts; the
+  name carries no role beyond the transfer. `presentCard` and the security and
+  wallet flags stay raw. DigitalV3 `countryCode` is used only as a valid ISO
+  3166-1 alpha-3 code.
+- **Checks:** [extraction] "maps DigitalV3 tranzacCodeType %j to %j / 3-D
+  Secure %j", "leaves conflicting explicit wallet names null…",
+  "does not infer a wallet from flags…", "names a transfer's counterparty only
+  from its bound detail's nonempty motavName", "keeps only a valid ISO 3166-1
+  alpha-3 merchant country code", "keeps same-row DigitalV3 moreInfo as additional
+  information and supplies no MCC".
+
+## isracard.detail: optional transaction details
+
+- **Observed:** a detail carries its own `voucherNumberRatz`, the merchant
+  address and phone, wallet labels, a raw payment table (`Table1`, numbered rows
+  beside a null-ordinal row and a total row) and null commission, fee,
+  conversion, rate and interest placeholders. Its money fields: `dealSum` is the
+  original amount (a plan's total) with a leading minus; `chargeSum` the amount
+  billed for that voucher, with a trailing minus ("N.NN-") and possible spaces;
+  `linking` the original-currency symbol; and `sumBeforeDiscount`, despite its
+  name, the discount, equal to DigitalV3 `discountAmount`. `isError` is an array
+  of strings with no established meaning.
+- **Policy:** a detail supplies facts only when exactly one detail's own voucher
+  matches the transaction's; any other detail stays in the archive alone. Its
+  money fields and payment table stay raw and never create a schedule or total.
+- **Checks:** [extraction] "projects no address, phone, wallet or detail copy
+  from a detail bound to another voucher", "keeps independent foreign source
+  amounts, payment tables and null fee placeholders…".
+
+## isracard.dates: purchase and billing dates
+
+- **Observed:** dates are `DD/MM/YYYY`. DigitalV3 `purchaseTime` has second
+  precision or is null; optional detail time has minute precision or is null.
+  No route states a booking date.
+- **Policy:** a time joins its own row's purchase date only; a voucher-only
+  detail match cannot establish that date, so detail time stays raw. A requested
+  billing month never supplies a billing date, and conflicting known dates yield
+  none.
+- **Checks:** [extraction] "leaves malformed or missing purchase time unknown…",
+  "does not promote ambiguous, invalid-date or installment source times…",
+  "extracts out-of-statement billing dates…".
+
+## isracard.installments: plans and payments
+
+- **Observed:** a plan payment is a DigitalV3 code `3` row with
+  `currentInstallmentNum`, `numberOfInstallment`, `isLastInstallment` and
+  `moreInfo` " תשלום N מ M " ("payment N of M"); its legacy companion states
+  `moreInfo` "תשלום N מתוך M" ("payment N out of M"), the total in `dealSum` and
+  the payment in `paymentSum`; a bound detail states `paymentNumber`,
+  `numberOfPayments` and `dealType` "עסקה בתשלומים". Each payment has its own
+  voucher, and payments share the plan voucher and purchase date. Payments can
+  be uneven, typically the first. Archives can start mid-plan.
+- **Not observed:** converted plans, early repayment and plan cancellation. A
+  null count does not prove a single payment.
+- **Policy:** the purchase states the source total and is never computed from
+  payments, and plan rows carry no purchase time or original money. Every source
+  that states an ordinal or count must agree, and other DigitalV3 prose naming a
+  payment is not an ordinal source.
+- **Checks:** [installments], including "takes a mid-plan purchase total as
+  stated…", "joins a padded legacy plan voucher…", "keeps foreign, converted,
+  non-plan-code and non-positive payments unresolved", "leaves a plan total
+  unknown when its payments or generations state different totals", "keeps
+  money on ordinary DigitalV3 rows whose prose names a payment"; [extraction]
+  "fails closed on malformed nonnull installment indicators".
+
+## isracard.totals: source totals and statement artifacts
+
+- **Observed:** DigitalV3 states `totalForStatement` per billing currency and,
+  per immediate-charge group, `totalImmediateVouchers` and
+  `countImmediateVouchers`. The legacy domestic list carries total rows
+  (`dealSumType` `1` for ILS, `T` for USD) and zero-voucher summaries; the abroad
+  list carries `TOTAL FOR DATE` rows whose sums include the `CASH ADVANCE FEE`
+  lines.
+- **Policy:** `dealSumType` `1` rows and all-zero-voucher lines (summaries,
+  `TOTAL FOR DATE` and fee lines) stay raw and create no rows. A disagreeing
+  total is a warning, never a failure, and an agreeing one does not prove no row
+  is missing; equal card totals never justify skipping transactions.
+- **Checks:** [amount basis] "source totals"; [extraction] "keeps known legacy
+  statement summaries raw-only…".
+
+[amount basis]: ../../../tests/providers/isracard/amount-basis.test.ts
+[collection]: ../../../tests/providers/isracard/collection.test.ts
+[extraction]: ../../../tests/providers/isracard/extraction.test.ts
+[fingerprint]: ../../../tests/providers/isracard/fingerprint.test.ts
+[installments]: ../../../tests/providers/isracard/installments.test.ts
+[node http]: ../../../tests/providers/isracard/node-http.test.ts
+[scope]: ../../../tests/providers/isracard/scope.test.ts
+[transport]: ../../../tests/providers/isracard/transport.test.ts
+[upstream-1159]: https://github.com/eshaham/israeli-bank-scrapers/pull/1159
+[upstream-constants]: https://github.com/eshaham/israeli-bank-scrapers/blob/5170a65ffaf8df2d22f32b0fa1656350a8337590/src/constants.ts
+[upstream-amex]: https://github.com/eshaham/israeli-bank-scrapers/blob/5170a65ffaf8df2d22f32b0fa1656350a8337590/src/scrapers/base-isracard-amex.ts

@@ -1,0 +1,121 @@
+{
+  "synthetic": true,
+  "format": "illustrative internal transaction projection; not an implemented API schema or external protocol",
+  "purpose": "Portability test inputs: bank income, transfer and direct debit need no card, merchant, purchase date or installments.",
+  "transactions": [
+    {
+      "id": "SYNTHETIC-BANK-SALARY",
+      "connection_id": "SYNTHETIC-BANK-CONNECTION",
+      "source_scope": "SYNTHETIC-BANK-ACCOUNT",
+      "card_key": null,
+      "source_key": "synthetic-bank-entry-salary",
+      "status": "posted",
+      "presence": "seen",
+      "description": "Synthetic payroll deposit",
+      "counterparty_name": "Example Employer",
+      "kind": "income",
+      "merchant_name": null,
+      "merchant_provider_id": null,
+      "merchant_category_code": null,
+      "transaction_date": null,
+      "booking_date": "2040-07-12",
+      "billing_date": null,
+      "amount_minor": 250000,
+      "currency": "USD",
+      "amount_basis": "booked_entry",
+      "original_amount_minor": null,
+      "original_currency": null,
+      "installment_count": null,
+      "details_json": {
+        "schemaVersion": 1,
+        "merchant": {
+          "address": null,
+          "phone": null
+        },
+        "sourceRefs": [],
+        "issues": [],
+        "provider": {
+          "synthetic_bank": {}
+        }
+      },
+      "version": 1
+    },
+    {
+      "id": "SYNTHETIC-BANK-TRANSFER",
+      "connection_id": "SYNTHETIC-BANK-CONNECTION",
+      "source_scope": "SYNTHETIC-BANK-ACCOUNT",
+      "card_key": null,
+      "source_key": "synthetic-bank-entry-transfer",
+      "status": "posted",
+      "presence": "seen",
+      "description": "Synthetic transfer between accounts",
+      "counterparty_name": "Example Other Account",
+      "kind": "transfer",
+      "merchant_name": null,
+      "merchant_provider_id": null,
+      "merchant_category_code": null,
+      "transaction_date": null,
+      "booking_date": "2040-07-12",
+      "billing_date": null,
+      "amount_minor": -50000,
+      "currency": "USD",
+      "amount_basis": "booked_entry",
+      "original_amount_minor": null,
+      "original_currency": null,
+      "installment_count": null,
+      "details_json": {
+        "schemaVersion": 1,
+        "merchant": {
+          "address": null,
+          "phone": null
+        },
+        "sourceRefs": [],
+        "issues": [],
+        "provider": {
+          "synthetic_bank": {}
+        }
+      },
+      "version": 1
+    },
+    {
+      "id": "SYNTHETIC-BANK-DIRECT-DEBIT",
+      "connection_id": "SYNTHETIC-BANK-CONNECTION",
+      "source_scope": "SYNTHETIC-BANK-ACCOUNT",
+      "card_key": null,
+      "source_key": "synthetic-bank-entry-direct-debit",
+      "status": "posted",
+      "presence": "seen",
+      "description": "Synthetic utility direct debit",
+      "counterparty_name": "Example Utility",
+      "kind": "purchase",
+      "merchant_name": null,
+      "merchant_provider_id": null,
+      "merchant_category_code": null,
+      "transaction_date": null,
+      "booking_date": "2040-07-12",
+      "billing_date": null,
+      "amount_minor": -4200,
+      "currency": "USD",
+      "amount_basis": "booked_entry",
+      "original_amount_minor": null,
+      "original_currency": null,
+      "installment_count": null,
+      "details_json": {
+        "schemaVersion": 1,
+        "merchant": {
+          "address": null,
+          "phone": null
+        },
+        "sourceRefs": [],
+        "issues": [],
+        "provider": {
+          "synthetic_bank": {}
+        },
+        "additionalInformation": [
+          "Synthetic monthly utility collection"
+        ]
+      },
+      "version": 1
+    }
+  ]
+}

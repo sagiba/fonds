@@ -1,0 +1,14 @@
+{
+  "name": "fonds-turso-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@libsql/client": "0.18.0",
+    "drizzle-orm": "0.45.4",
+    "lossless-json": "4.3.2",
+    "zod": "4.6.7",
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2"
+  }
+}

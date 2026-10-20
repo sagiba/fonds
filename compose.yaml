@@ -1,0 +1,70 @@
+# The hosted service on one machine: PostgreSQL and Fonds, which collects on
+# a schedule only once FONDS_COLLECTION_SCHEDULE is set (for example daily).
+#   docker compose up -d --build
+#   docker compose exec fonds node /app/server.js login-link
+# See docs/guides/docker.md. Publishes only on 127.0.0.1; put a TLS proxy or
+# tunnel in front for other clients (docs/guides/hosted-service.md).
+name: fonds
+
+services:
+  postgres:
+    image: postgres:18.6@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+    environment:
+      POSTGRES_USER: fonds
+      POSTGRES_DB: fonds
+      # Reachable only on the private compose network. Set your own in .env
+      # before the first start, using only letters, digits and -._~ because it
+      # is placed in FONDS_DATABASE_URL as is.
+      POSTGRES_PASSWORD: ${FONDS_POSTGRES_PASSWORD:-fonds-local-only}
+    volumes:
+      - postgres:/var/lib/postgresql
+    networks: [private]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fonds -d fonds"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  fonds:
+    build:
+      context: .
+      target: postgres
+    image: fonds:postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      FONDS_PUBLIC_ORIGIN: ${FONDS_PUBLIC_ORIGIN:-http://localhost:8787}
+      FONDS_DATABASE_URL: postgresql://fonds:${FONDS_POSTGRES_PASSWORD:-fonds-local-only}@postgres:5432/fonds
+      # The database is on the private compose network, not the internet.
+      FONDS_DATABASE_TLS: disable
+      # Off unless set: daily (recommended), hourly or hours such as 9,13,18,
+      # at this installation's random time, kept in the database's settings.
+      FONDS_COLLECTION_SCHEDULE: ${FONDS_COLLECTION_SCHEDULE:-}
+      FONDS_COLLECTION_TIMEZONE: ${FONDS_COLLECTION_TIMEZONE:-UTC}
+      # Behind a TLS proxy or tunnel, set FONDS_TRUST_PROXY: "1" and the public
+      # origin in compose.override.yaml (docs/guides/docker.md).
+    volumes:
+      - state:/data
+    networks: [private]
+    ports:
+      - "127.0.0.1:${FONDS_PORT:-8787}:8787"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        # Listening only after bootstrap; a 403 from a non-local origin still counts.
+        - "fetch('http://localhost:8787/.well-known/oauth-protected-resource/mcp').then((r) => process.exit(r.status < 500 ? 0 : 1), () => process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+networks:
+  private: {}
+
+volumes:
+  postgres: {}
+  state: {}

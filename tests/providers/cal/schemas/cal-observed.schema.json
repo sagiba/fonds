@@ -1,0 +1,998 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/fonds/cal-observed.schema.json",
+  "title": "Observed CAL financial response shapes",
+  "description": "Observed shapes of reviewed CAL recent and history exports, not a provider contract; no source values. Unknown fields are allowed and all-null fields leave future types open. Older posted rows can omit payment history. Billing-month and authentication payloads are not covered.",
+  "type": "object",
+  "required": [
+    "result",
+    "statusCode"
+  ],
+  "properties": {
+    "result": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/recentResult"
+        },
+        {
+          "$ref": "#/$defs/legacyResult"
+        }
+      ]
+    },
+    "statusCode": {
+      "type": "integer"
+    },
+    "statusDescription": {
+      "type": "string",
+      "x-observed-types": [
+        "string"
+      ]
+    },
+    "statusTitle": {
+      "x-observed-types": [
+        "null"
+      ],
+      "description": "Only null observed; future type unknown."
+    },
+    "groupPid": {
+      "type": "string",
+      "x-observed-types": [
+        "string"
+      ]
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "posted": {
+      "x-observed-types": [
+        "object"
+      ],
+      "type": "object",
+      "properties": {
+        "amountForDisplay": {
+          "x-observed-types": [
+            "number"
+          ],
+          "type": "number",
+          "x-observed-presence": "always",
+          "description": "Signed native billed amount; installment rows state the whole purchase."
+        },
+        "amtBeforeConvAndIndex": {
+          "x-observed-types": [
+            "number"
+          ],
+          "type": "number",
+          "x-observed-presence": "always",
+          "description": "Billed component; one payment in an installment plan."
+        },
+        "branchCodeDesc": {
+          "x-observed-types": [
+            "null"
+          ],
+          "description": "Category label; only null on posted rows.",
+          "x-observed-presence": "always"
+        },
+        "cardUniqueId": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Posted-row card identifier; not a wallet suffix or last four digits."
+        },
+        "cashAccountAmt": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Cash-account amount text; role unknown."
+        },
+        "cashAccountCardAmt": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Cash-account card amount text; role unknown."
+        },
+        "cashAccountCardCurr": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Cash-account card currency text; role unknown."
+        },
+        "cashAccountCurrency": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Cash-account currency text; role unknown."
+        },
+        "cashAccountTrnAmt": {
+          "x-observed-types": [
+            "number"
+          ],
+          "type": "number",
+          "x-observed-presence": "always",
+          "description": "Cash-account transaction number; role unknown."
+        },
+        "chargeExternalToCardComment": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Explanatory text about card charging."
+        },
+        "comments": {
+          "x-observed-types": [
+            "array"
+          ],
+          "type": "array",
+          "items": {
+            "x-observed-types": [
+              "object"
+            ],
+            "type": "object",
+            "properties": {
+              "key": {
+                "x-observed-types": [
+                  "string"
+                ],
+                "type": "string",
+                "x-observed-presence": "always"
+              },
+              "value": {
+                "x-observed-types": [
+                  "string"
+                ],
+                "type": "string",
+                "x-observed-presence": "always"
+              }
+            },
+            "additionalProperties": true
+          },
+          "x-observed-presence": "always",
+          "description": "Comment objects with string key and value; may contain markup."
+        },
+        "crdExtIdNumTypeCode": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Opaque code; not a personal identifier."
+        },
+        "crmIccCurrencyDesc": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Opaque currency description."
+        },
+        "curPaymentNum": {
+          "x-observed-types": [
+            "integer",
+            "null"
+          ],
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-observed-presence": "always",
+          "description": "Observed installment ordinal; can be positive when numOfPayments is zero."
+        },
+        "currencyForDisplay": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Display currency label."
+        },
+        "debCrdCurrencyCode": {
+          "x-observed-types": [
+            "integer"
+          ],
+          "type": "integer",
+          "x-observed-presence": "always",
+          "description": "Provider billing-currency code, not ISO numeric."
+        },
+        "debCrdCurrencyDesc": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Billing-currency label."
+        },
+        "debCrdCurrencySymbol": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Billing-currency symbol, separate from the original currency."
+        },
+        "debCrdDate": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Debit or billing date-time; not a posting date or pending signal."
+        },
+        "discountAmount": {
+          "x-observed-types": [
+            "null",
+            "string"
+          ],
+          "type": [
+            "null",
+            "string"
+          ],
+          "x-observed-presence": "always",
+          "description": "Discount text."
+        },
+        "discountReason": {
+          "x-observed-types": [
+            "null",
+            "string"
+          ],
+          "type": [
+            "null",
+            "string"
+          ],
+          "x-observed-presence": "always",
+          "description": "Discount explanation text."
+        },
+        "earlyPaymentInd": {
+          "x-observed-types": [
+            "boolean"
+          ],
+          "type": "boolean",
+          "x-observed-presence": "always",
+          "description": "Early-payment flag; can change without monetary change."
+        },
+        "forcedDebRate": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Rate text; conversion role unknown."
+        },
+        "foreignCurrencyWalletType": {
+          "x-observed-types": [
+            "integer"
+          ],
+          "type": "integer",
+          "x-observed-presence": "always",
+          "description": "Opaque foreign-currency wallet type."
+        },
+        "immediateComments": {
+          "x-observed-types": [
+            "array",
+            "null"
+          ],
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "x-observed-types": [
+              "object"
+            ],
+            "type": "object",
+            "properties": {
+              "comment": {
+                "x-observed-types": [
+                  "string"
+                ],
+                "type": "string",
+                "x-observed-presence": "always"
+              }
+            },
+            "additionalProperties": true
+          },
+          "x-observed-presence": "always",
+          "description": "Null, empty or comment objects; distinct observed states."
+        },
+        "internationalBranchDesc": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Merchant-classification description."
+        },
+        "internationalBranchID": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Merchant-classification code."
+        },
+        "isAbroadTransaction": {
+          "x-observed-types": [
+            "boolean"
+          ],
+          "type": "boolean",
+          "x-observed-presence": "always",
+          "description": "Abroad flag; does not imply a foreign billing currency."
+        },
+        "isCashBackTransaction": {
+          "x-observed-types": [
+            "boolean"
+          ],
+          "type": "boolean",
+          "x-observed-presence": "always",
+          "description": "Cashback flag; role unknown."
+        },
+        "isImmediate": {
+          "x-observed-types": [
+            "boolean"
+          ],
+          "type": "boolean",
+          "x-observed-presence": "always",
+          "description": "Immediate-transaction flag; role unknown."
+        },
+        "isImmediateCommentInd": {
+          "x-observed-types": [
+            "boolean"
+          ],
+          "type": "boolean",
+          "x-observed-presence": "always",
+          "description": "Opaque flag."
+        },
+        "isImmediateHHKInd": {
+          "x-observed-types": [
+            "boolean"
+          ],
+          "type": "boolean",
+          "x-observed-presence": "always",
+          "description": "Opaque flag."
+        },
+        "isInterestTransaction": {
+          "x-observed-types": [
+            "boolean"
+          ],
+          "type": "boolean",
+          "x-observed-presence": "always",
+          "description": "Interest flag."
+        },
+        "isMargaritaInd": {
+          "x-observed-types": [
+            "boolean"
+          ],
+          "type": "boolean",
+          "x-observed-presence": "always",
+          "description": "Opaque flag."
+        },
+        "isSpreadPaymenstAbroadInd": {
+          "x-observed-types": [
+            "boolean"
+          ],
+          "type": "boolean",
+          "x-observed-presence": "always",
+          "description": "Opaque flag; source spelling."
+        },
+        "linkedComments": {
+          "x-observed-types": [
+            "array"
+          ],
+          "type": "array",
+          "items": {
+            "x-observed-types": [
+              "object"
+            ],
+            "type": "object",
+            "properties": {
+              "link": {
+                "x-observed-types": [
+                  "string"
+                ],
+                "type": "string",
+                "x-observed-presence": "always"
+              },
+              "linkDisplayName": {
+                "x-observed-types": [
+                  "string"
+                ],
+                "type": "string",
+                "x-observed-presence": "always"
+              },
+              "linkType": {
+                "x-observed-types": [
+                  "integer"
+                ],
+                "type": "integer",
+                "x-observed-presence": "always"
+              },
+              "text": {
+                "x-observed-types": [
+                  "string"
+                ],
+                "type": "string",
+                "x-observed-presence": "always"
+              }
+            },
+            "additionalProperties": true
+          },
+          "x-observed-presence": "always",
+          "description": "Comment objects with text, display name, link type and link."
+        },
+        "merchantAddress": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Merchant address text."
+        },
+        "merchantId": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Merchant identifier string."
+        },
+        "merchantName": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Merchant or payee text."
+        },
+        "merchantPhoneNo": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Merchant phone text."
+        },
+        "numOfPayments": {
+          "x-observed-types": [
+            "integer",
+            "null"
+          ],
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-observed-presence": "always",
+          "description": "Planned installment count; not the observed row count."
+        },
+        "onGoingTransactionsComment": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Ongoing-transaction text."
+        },
+        "paymentsMade": {
+          "x-observed-types": [
+            "array"
+          ],
+          "type": "array",
+          "items": {
+            "x-observed-types": [
+              "object"
+            ],
+            "type": "object",
+            "properties": {
+              "amount": {
+                "x-observed-types": [
+                  "number"
+                ],
+                "type": "number",
+                "x-observed-presence": "always"
+              },
+              "currency": {
+                "x-observed-types": [
+                  "string"
+                ],
+                "type": "string",
+                "x-observed-presence": "always"
+              },
+              "date": {
+                "x-observed-types": [
+                  "string"
+                ],
+                "type": "string",
+                "x-observed-presence": "always"
+              },
+              "num": {
+                "x-observed-types": [
+                  "string"
+                ],
+                "type": "string",
+                "x-observed-presence": "always"
+              }
+            },
+            "additionalProperties": true
+          },
+          "x-observed-presence": "sometimes",
+          "description": "Payment-history objects with date, localized num label, amount and currency; not a complete schedule."
+        },
+        "paymentsMadeComment": {
+          "x-observed-types": [
+            "null",
+            "string"
+          ],
+          "type": [
+            "null",
+            "string"
+          ],
+          "x-observed-presence": "sometimes",
+          "description": "Payment-history comment."
+        },
+        "posEntryMod": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Point-of-sale entry mode text; not reliable channel evidence."
+        },
+        "refundInd": {
+          "x-observed-types": [
+            "boolean"
+          ],
+          "type": "boolean",
+          "x-observed-presence": "always",
+          "description": "Refund flag; links to no original purchase."
+        },
+        "roundingAmount": {
+          "x-observed-types": [
+            "null"
+          ],
+          "description": "Only null observed; future type unknown.",
+          "x-observed-presence": "always"
+        },
+        "roundingReason": {
+          "x-observed-types": [
+            "null"
+          ],
+          "description": "Only null observed; future type unknown.",
+          "x-observed-presence": "always"
+        },
+        "srcCurrencyCode": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Source currency code text."
+        },
+        "superBranchDesc": {
+          "x-observed-types": [
+            "null"
+          ],
+          "description": "Only null observed; future type unknown.",
+          "x-observed-presence": "always"
+        },
+        "tokenInd": {
+          "x-observed-types": [
+            "integer"
+          ],
+          "type": "integer",
+          "x-observed-presence": "always",
+          "description": "Opaque token flag."
+        },
+        "tokenNumber": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Opaque payment-token identifier; private."
+        },
+        "tokenNumberPart4": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Wallet-token suffix; not the card's last four digits."
+        },
+        "transCardPresentInd": {
+          "x-observed-types": [
+            "boolean"
+          ],
+          "type": "boolean",
+          "x-observed-presence": "always",
+          "description": "Card-present flag; false means remote, not necessarily online."
+        },
+        "transIndication": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Indication text; role unknown."
+        },
+        "transMahut": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Opaque text."
+        },
+        "transOriginalCurrencyCode": {
+          "x-observed-types": [
+            "integer",
+            "null"
+          ],
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-observed-presence": "always",
+          "description": "Provider original-currency code, not ISO numeric."
+        },
+        "transOriginalSumCurrency": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Nonnumeric text despite its name."
+        },
+        "transSafeIndication": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Indication text; no fraud or security meaning established."
+        },
+        "transSource": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Opaque source-origin text."
+        },
+        "transTypeCommentDetails": {
+          "x-observed-types": [
+            "array"
+          ],
+          "type": "array",
+          "items": {
+            "x-observed-types": [
+              "string"
+            ],
+            "type": "string"
+          },
+          "x-observed-presence": "always",
+          "description": "Transaction-context strings."
+        },
+        "transactionTypeCode": {
+          "x-observed-types": [
+            "integer"
+          ],
+          "type": "integer",
+          "x-observed-presence": "always",
+          "description": "Posted transaction-type code."
+        },
+        "trnAmt": {
+          "x-observed-types": [
+            "number"
+          ],
+          "type": "number",
+          "x-observed-presence": "always",
+          "description": "Original-amount candidate; positive on refunds, so not a signed billed amount."
+        },
+        "trnCurrencyIsoCode": {
+          "x-observed-types": [
+            "null",
+            "string"
+          ],
+          "type": [
+            "null",
+            "string"
+          ],
+          "x-observed-presence": "always",
+          "description": "Original-currency ISO numeric code as a string."
+        },
+        "trnCurrencySymbol": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Original-currency symbol."
+        },
+        "trnExacWay": {
+          "x-observed-types": [
+            "integer"
+          ],
+          "type": "integer",
+          "x-observed-presence": "always",
+          "description": "Execution-method code."
+        },
+        "trnIntId": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Posted transaction identifier; installment and cancellation rows can share it."
+        },
+        "trnNumaretor": {
+          "x-observed-types": [
+            "number"
+          ],
+          "type": "number",
+          "x-observed-presence": "always",
+          "description": "Sequence number; changes across captures, not identity."
+        },
+        "trnPurchaseDate": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Timezone-free purchase date-time."
+        },
+        "trnType": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Transaction-type label."
+        },
+        "walletProviderCode": {
+          "x-observed-types": [
+            "integer"
+          ],
+          "type": "integer",
+          "x-observed-presence": "always",
+          "description": "Wallet or channel code; not an exhaustive set."
+        },
+        "walletProviderDesc": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Wallet or channel label."
+        },
+        "walletTokenInd": {
+          "x-observed-types": [
+            "integer",
+            "null"
+          ],
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-observed-presence": "always",
+          "description": "Opaque wallet-token flag."
+        }
+      },
+      "additionalProperties": true
+    },
+    "pending": {
+      "x-observed-types": [
+        "object"
+      ],
+      "type": "object",
+      "properties": {
+        "branchCodeDesc": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Category label."
+        },
+        "cardUniqueID": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Pending-row card identifier; note the capital D."
+        },
+        "firstPaymentAmount": {
+          "x-observed-types": [
+            "number"
+          ],
+          "type": "number",
+          "x-observed-presence": "always",
+          "description": "First-payment amount; role unknown."
+        },
+        "internationalBranchID": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Merchant-classification code."
+        },
+        "isAbroadApproval": {
+          "x-observed-types": [
+            "boolean"
+          ],
+          "type": "boolean",
+          "x-observed-presence": "sometimes",
+          "description": "Abroad flag; later shape only."
+        },
+        "j5Indicator": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Opaque flag."
+        },
+        "merchantName": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Merchant or payee text."
+        },
+        "numberOfPayments": {
+          "x-observed-types": [
+            "integer"
+          ],
+          "type": "integer",
+          "x-observed-presence": "always",
+          "description": "Payment count; named differently from posted numOfPayments."
+        },
+        "tpaApprovalAmount": {
+          "x-observed-types": [
+            "null"
+          ],
+          "description": "Only null observed; future type unknown.",
+          "x-observed-presence": "always"
+        },
+        "transCardPresentInd": {
+          "x-observed-types": [
+            "boolean"
+          ],
+          "type": "boolean",
+          "x-observed-presence": "always",
+          "description": "Card-present flag; false means remote, not necessarily online."
+        },
+        "transTypeCommentDetails": {
+          "x-observed-types": [
+            "array"
+          ],
+          "type": "array",
+          "items": {
+            "x-observed-types": [
+              "string"
+            ],
+            "type": "string"
+          },
+          "x-observed-presence": "always",
+          "description": "Transaction-context strings."
+        },
+        "transactionID": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "sometimes",
+          "description": "Authorization identifier, later shape only; no proven link to trnIntId."
+        },
+        "transactionsOrigin": {
+          "x-observed-types": [
+            "integer"
+          ],
+          "type": "integer",
+          "x-observed-presence": "always",
+          "description": "Opaque origin code."
+        },
+        "trnAmt": {
+          "x-observed-types": [
+            "number"
+          ],
+          "type": "number",
+          "x-observed-presence": "always",
+          "description": "Approval amount; relation to the posted amount unknown."
+        },
+        "trnCurrencySymbol": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Original-currency symbol."
+        },
+        "trnPurchaseDate": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Timezone-free purchase date-time."
+        },
+        "trnType": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Pending transaction-type label."
+        },
+        "trnTypeCode": {
+          "x-observed-types": [
+            "string"
+          ],
+          "type": "string",
+          "x-observed-presence": "always",
+          "description": "Pending type code as a string."
+        },
+        "walletTranInd": {
+          "x-observed-types": [
+            "integer"
+          ],
+          "type": "integer",
+          "x-observed-presence": "always",
+          "description": "Opaque wallet flag."
+        }
+      },
+      "additionalProperties": true
+    },
+    "recentResult": {
+      "type": "object",
+      "required": [
+        "daysRange",
+        "transactions",
+        "clearanceRequests"
+      ],
+      "properties": {
+        "daysRange": {
+          "type": "integer"
+        },
+        "transactions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/posted"
+          }
+        },
+        "clearanceRequests": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pending"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "legacyResult": {
+      "type": "object",
+      "required": [
+        "transArr"
+      ],
+      "properties": {
+        "transArr": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/posted"
+          }
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

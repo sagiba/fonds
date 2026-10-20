@@ -1,0 +1,12 @@
+# Only sources the image build needs; never local data, credentials or history.
+*
+!package.json
+!LICENSE
+!NOTICE
+!package-lock.json
+!tsconfig.json
+!tsconfig.build.json
+!scripts/
+!src/
+!deploy/sqlite/
+!deploy/postgres/
