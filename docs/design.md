@@ -57,7 +57,9 @@ Declared evidence without a safe transaction identity is retained separately.
 
 Input digests preserve run-ID immutability after body removal; applied replay is
 quiet. Recovery needs the staged body and matching parser. Historical
-reinterpretation is unsupported.
+reinterpretation is unsupported. Retained row evidence could support re-deriving
+individual rows, but not identity grouping, pending-to-posted linking or absence
+decisions, which need whole responses.
 
 - **Backfill** requests a bounded historical range (about seven years is enough).
   Providers own windowing, paging, overlap and budgets; partial results are kept
