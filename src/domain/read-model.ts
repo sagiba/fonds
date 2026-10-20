@@ -1,4 +1,5 @@
 import { sumMinor } from "./money.js";
+import { compareStrings } from "./observations.js";
 import {
   annotationStaleness,
   reviewState,
@@ -200,8 +201,6 @@ export function calculateTotals(
       fxFeeUnknownCount++;
     }
   }
-  const order = (left: string, right: string) =>
-    left < right ? -1 : left > right ? 1 : 0;
   return {
     totals: [...groups.values()]
       .map(({ amounts, ...group }) => ({
@@ -209,7 +208,7 @@ export function calculateTotals(
         amountMinor: sumMinor(amounts),
       }))
       .sort((left, right) =>
-        order(
+        compareStrings(
           `${left.amountBasis ?? ""}:${left.currency}`,
           `${right.amountBasis ?? ""}:${right.currency}`,
         ),
@@ -219,7 +218,7 @@ export function calculateTotals(
         currency,
         amountMinor: sumMinor(amounts),
       }))
-      .sort((left, right) => order(left.currency, right.currency)),
+      .sort((left, right) => compareStrings(left.currency, right.currency)),
     fxFeeUnknownCount,
     includedCount,
     excludedCount: Object.values(excluded).reduce(

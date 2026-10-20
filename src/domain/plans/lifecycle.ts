@@ -564,7 +564,8 @@ export function planPosting(
       automatic: automatic !== undefined,
     },
   });
-  // Ingestion computes review transitions once, after all account changes.
+  // Ingestion computes review transitions and refreshes lookalike plans once,
+  // after all account changes.
   if (automatic) {
     return survivor;
   }
@@ -589,10 +590,7 @@ export function planPosting(
     command,
     now,
   );
-  // A sync refreshes lookalike plans once, after its own review diff.
-  if (!automatic) {
-    refreshDuplicatePlanReview(plan, command, now);
-  }
+  refreshDuplicatePlanReview(plan, command, now);
   return survivor;
 }
 

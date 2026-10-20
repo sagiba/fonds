@@ -288,7 +288,10 @@ function isRecognizedResponse(
   );
 }
 
-function isUsableCardKey(value: unknown, secrets: string[]): value is string {
+function isUsableResourceKey(
+  value: unknown,
+  secrets: string[],
+): value is string {
   return (
     typeof value === "string" &&
     value.trim() !== "" &&
@@ -474,10 +477,7 @@ export async function* collectCal(
     for (const account of bankAccounts) {
       if (
         !isObject(account) ||
-        typeof account.bankAccountUniqueId !== "string" ||
-        !account.bankAccountUniqueId.trim() ||
-        account.bankAccountUniqueId.length > RESOURCE_ID_MAX_LENGTH ||
-        reflectsSecrets(account.bankAccountUniqueId, secrets)
+        !isUsableResourceKey(account.bankAccountUniqueId, secrets)
       ) {
         throw new CalTransportError("invalid_response", true);
       }
@@ -496,7 +496,7 @@ export async function* collectCal(
     for (const card of cardListUsable ? cards : []) {
       if (
         !hasKnownAccount(card, accountIds) ||
-        !isUsableCardKey(card.cardUniqueId, secrets)
+        !isUsableResourceKey(card.cardUniqueId, secrets)
       ) {
         if (hasKnownAccount(card, accountIds)) {
           discoveryFailures.add(card.bankAccountUniqueId);

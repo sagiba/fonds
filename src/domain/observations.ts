@@ -1,11 +1,16 @@
 import type { JsonObject, JsonValue } from "./model.js";
 
+/** Locale-independent string order, so sorted output is the same on every host. */
+export function compareStrings(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 export function canonicalJson(value: unknown): string {
   return JSON.stringify(value, (_, item: unknown) => {
     if (item && typeof item === "object" && !Array.isArray(item)) {
       return Object.fromEntries(
         Object.entries(item).sort(([left], [right]) =>
-          left < right ? -1 : left > right ? 1 : 0,
+          compareStrings(left, right),
         ),
       );
     }

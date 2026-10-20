@@ -35,6 +35,25 @@ vi.mock("better-auth", async (importOriginal) => {
       }),
   };
 });
+// Passes through to the real verifier unless a test replaces the audience it
+// returns, to exercise the issuer's own audience check in isolation.
+const verifiedAudience = vi.hoisted(() => ({
+  override: undefined as { aud: unknown } | undefined,
+}));
+vi.mock("better-auth/oauth2", async (importOriginal) => {
+  const original = await importOriginal<typeof import("better-auth/oauth2")>();
+  return {
+    ...original,
+    verifyJwsAccessToken: async (
+      ...args: Parameters<typeof original.verifyJwsAccessToken>
+    ) => {
+      const claims = await original.verifyJwsAccessToken(...args);
+      return verifiedAudience.override
+        ? { ...claims, ...verifiedAudience.override }
+        : claims;
+    },
+  };
+});
 vi.mock("@better-auth/cimd/node", async () => {
   const { generateKeyPair, exportJWK } = await import("jose");
   const pair = await generateKeyPair("RS256");
@@ -765,6 +784,37 @@ describe("single-owner Better Auth issuer", () => {
         ),
         JSON.stringify(override),
       ).toBeNull();
+    }
+  });
+
+  it("requires the resource audience itself, even from a verifier that accepted the token", async () => {
+    const tokens = await grant();
+    const resource = `${config.publicOrigin}/mcp`;
+    const userinfo = `${service.provider.issuer}/oauth2/userinfo`;
+    const authenticate = () =>
+      service.provider.authenticate(
+        new Request(`${config.publicOrigin}/mcp`, {
+          headers: { Authorization: `Bearer ${tokens.access_token}` },
+        }),
+      );
+    try {
+      for (const aud of [
+        [],
+        [userinfo],
+        userinfo,
+        "https://elsewhere.invalid/mcp",
+        [resource, "https://elsewhere.invalid/mcp"],
+        undefined,
+      ]) {
+        verifiedAudience.override = { aud };
+        expect(await authenticate(), JSON.stringify(aud)).toBeNull();
+      }
+      for (const aud of [resource, [resource], [resource, userinfo]]) {
+        verifiedAudience.override = { aud };
+        expect(await authenticate(), JSON.stringify(aud)).not.toBeNull();
+      }
+    } finally {
+      verifiedAudience.override = undefined;
     }
   });
 

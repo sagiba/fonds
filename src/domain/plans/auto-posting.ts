@@ -1,5 +1,5 @@
 import { isBilledLine, type TransactionFacts } from "../model.js";
-import { canonicalJson } from "../observations.js";
+import { canonicalJson, compareStrings } from "../observations.js";
 import type { Transaction } from "../records.js";
 import type { AutomaticPostingCapability } from "../source-adapter.js";
 
@@ -63,10 +63,6 @@ function eligiblePosting(
 interface PostingComponent<Row extends TransactionFacts> {
   pending: Row[];
   posted: Row[];
-}
-
-function compareKeys(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 /** Group all plausible rows before applying eligibility; each key is a complete component. */
@@ -136,11 +132,11 @@ export function automaticPostingPairs(
     );
     disappearingPending.sort(
       (left, right) =>
-        compareKeys(left.firstSeenAt, right.firstSeenAt) ||
-        compareKeys(left.sourceKey, right.sourceKey),
+        compareStrings(left.firstSeenAt, right.firstSeenAt) ||
+        compareStrings(left.sourceKey, right.sourceKey),
     );
     group.posted.sort((left, right) =>
-      compareKeys(left.sourceKey, right.sourceKey),
+      compareStrings(left.sourceKey, right.sourceKey),
     );
     group.posted.forEach((posted, index) =>
       pairs.set(posted, disappearingPending[index]!),
