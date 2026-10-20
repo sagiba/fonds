@@ -277,12 +277,10 @@ export async function startServer(args: string[], seams: ServerSeams = {}) {
   return { close, url };
 }
 
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(resolve(process.argv[1])).href
-) {
+/** Starts the server; a failure prints only a fixed message and sets the exit code. */
+export async function main(args: string[]): Promise<void> {
   try {
-    await startServer(process.argv.slice(2));
+    await startServer(args);
   } catch (error) {
     // These errors carry fixed messages that are safe to print.
     const printable =
@@ -296,4 +294,11 @@ if (
     );
     process.exitCode = 1;
   }
+}
+
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(resolve(process.argv[1])).href
+) {
+  await main(process.argv.slice(2));
 }

@@ -14,6 +14,7 @@ import {
   type OperationDefinition,
 } from "../application/operations.js";
 import { isActive } from "../application/refreshes.js";
+import { FONDS_VERSION } from "../application/version.js";
 import { CredentialInputError } from "../domain/credentials.js";
 import { ProviderConfigurationError } from "../domain/source-adapter.js";
 import { NewerSchemaError } from "../storage/migrations.js";
@@ -619,6 +620,7 @@ export function operatorUsage(backend: OperatorBackend): string {
   return `Fonds — ${backend.title}
 Usage: ${backend.invocation} <command> [options]
        ${backend.invocation} <operation command> --remote <url> --token-file <private file> [options]
+       ${backend.invocation} --version
 
 ${backend.description}
 
@@ -760,6 +762,10 @@ export async function runOperatorCli(
   const [name, ...args] = argv;
   if (name === "--help" || name === "help") {
     process.stdout.write(operatorUsage(backend));
+    return EXIT_CODES.ok;
+  }
+  if (name === "--version") {
+    process.stdout.write(`${FONDS_VERSION}\n`);
     return EXIT_CODES.ok;
   }
   const definition = name ? operationForCommand(name) : undefined;
