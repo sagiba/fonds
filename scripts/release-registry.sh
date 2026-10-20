@@ -35,12 +35,12 @@ npm_versions() {
 }
 
 # The version an npm dist-tag points to; empty when the tag does not exist.
-# The tag is read by its literal name: `npm view` would parse a name such as
-# release-0.2 in `dist-tags.<name>` as a property path.
+# `npm dist-tag ls` lists every tag by its literal name; `npm view` selects the
+# latest version first and parses a name such as release-0.2 as a path.
 npm_channel() {
   local tags
-  tags="$(npm view "$1" dist-tags --json)" || return
-  echo "$tags" | jq -r --arg tag "$2" '.[$tag] // empty'
+  tags="$(npm dist-tag ls "$1")" || return
+  echo "$tags" | awk -v tag="$2" -F ': ' '$1 == tag { print $2 }'
 }
 
 # Runs `docker buildx imagetools inspect` for a reference; status 3 when the
