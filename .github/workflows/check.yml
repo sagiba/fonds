@@ -162,30 +162,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      # One export scope per image (a second export would replace the first);
-      # each build imports both, so the shared build stage is reused.
-      - name: Build the SQLite image
+      - name: Build the image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           load: true
           tags: fonds
-          cache-from: |
-            type=gha,scope=fonds-sqlite
-            type=gha,scope=fonds-postgres
-          cache-to: type=gha,scope=fonds-sqlite,mode=max
-      - name: Build the PostgreSQL image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          target: postgres
-          load: true
-          tags: fonds:postgres
-          cache-from: |
-            type=gha,scope=fonds-postgres
-            type=gha,scope=fonds-sqlite
-          cache-to: type=gha,scope=fonds-postgres,mode=max
-      - name: Smoke-test both images
+          cache-from: type=gha,scope=fonds
+          cache-to: type=gha,scope=fonds,mode=max
+      - name: Smoke-test the image
         env:
           FONDS_SMOKE_SKIP_BUILD: "1"
         run: ./scripts/docker-smoke.sh

@@ -1,7 +1,7 @@
 # The hosted service on one machine: PostgreSQL and Fonds, which refreshes on
 # a schedule only once FONDS_REFRESH_SCHEDULE is set (for example daily).
 #   docker compose up -d --build
-#   docker compose exec fonds node /app/server.js login-link
+#   docker compose exec fonds fonds login-link
 # See docs/guides/docker.md. Publishes only on 127.0.0.1; put a TLS proxy or
 # tunnel in front for other clients (docs/guides/hosted-service.md).
 name: fonds
@@ -29,8 +29,9 @@ services:
   fonds:
     build:
       context: .
-      target: postgres
-    image: fonds:postgres
+    image: fonds
+    # The image's `fonds` command; FONDS_DATABASE_URL selects PostgreSQL.
+    command: ["serve", "--hosted"]
     depends_on:
       postgres:
         condition: service_healthy

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Builds and smoke-tests both images with synthetic state only. CI runs it with
-# FONDS_SMOKE_SKIP_BUILD=1 after building the images with its cache.
+# Builds and smoke-tests the image, on SQLite and as the hosted compose stack,
+# with synthetic state only. CI runs it with FONDS_SMOKE_SKIP_BUILD=1 after
+# building the image with its cache.
 # Hosted checks run inside the container against localhost:8787, so they work
 # wherever Docker publishes ports, and generated secrets never leave it.
 set -euo pipefail
@@ -31,11 +32,13 @@ trap cleanup EXIT
 
 if [ "${FONDS_SMOKE_SKIP_BUILD:-}" != 1 ]; then
   docker build -t fonds .
-  compose build fonds
 fi
 
-echo "== sqlite image"
+echo "== sqlite"
 docker run --rm fonds --help | grep -q "local SQLite CLI" || fail "sqlite --help"
+version="$(node -p 'require("./package.json").version')"
+[ "$(docker run --rm fonds --version)" = "$version" ] || fail "--version"
+docker run --rm fonds demo | grep -q "Demo ledger ready" || fail "demo"
 docker volume create "$project-sqlite" >/dev/null
 # No --db: FONDS_HOME=/data puts the default ledger in the volume, so a second
 # container finds it.
@@ -69,7 +72,7 @@ const body = await response.json();
 if (response.status !== 200 || body.resource !== "http://localhost:8787/mcp") process.exit(1);'
 in_fonds "$metadata" || fail "protected-resource metadata"
 
-link="$(compose exec -T fonds node /app/server.js login-link)"
+link="$(compose exec -T fonds fonds login-link)"
 [[ "$link" == http://localhost:8787/* ]] || fail "login-link"
 
 in_fonds '
@@ -137,7 +140,7 @@ echo "== restart keeps the installation"
 compose restart fonds >/dev/null
 compose up -d --no-build --wait fonds
 in_fonds "$metadata" || fail "metadata after restart"
-compose exec -T fonds node /app/server.js login-link | grep -q '^http://localhost:8787/' ||
+compose exec -T fonds fonds login-link | grep -q '^http://localhost:8787/' ||
   fail "login-link after restart"
 
 echo "smoke: ok"
