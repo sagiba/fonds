@@ -6,6 +6,7 @@ import {
   assertChannelForward,
   compareVersions,
   distTag,
+  highest,
   releaseCompose,
   rollingTags,
 } from "../../scripts/release.mjs";
@@ -40,9 +41,15 @@ describe("release version order", () => {
 });
 
 describe("npm channels", () => {
-  it("publishes releases on latest and candidates on next", () => {
-    expect(distTag("0.2.0")).toBe("latest");
-    expect(distTag("0.2.0-rc.3")).toBe("next");
+  it("publishes candidates on next and the newest release on latest", () => {
+    expect(distTag("0.2.0-rc.3", "0.1.0")).toBe("next");
+    expect(distTag("0.2.0", undefined)).toBe("latest");
+    expect(distTag("0.2.0", "0.1.4")).toBe("latest");
+    expect(distTag("0.2.0", "0.2.0")).toBe("latest");
+  });
+
+  it("publishes a backport on its own line instead of moving latest back", () => {
+    expect(distTag("0.2.5", "0.3.0")).toBe("release-0.2");
   });
 
   it("refuses to move a channel back", () => {
@@ -52,6 +59,11 @@ describe("npm channels", () => {
     expect(() => assertChannelForward("0.2.0", "0.2.0")).not.toThrow();
     expect(() => assertChannelForward("0.2.1", "0.2.0")).not.toThrow();
     expect(() => assertChannelForward("0.1.0", undefined)).not.toThrow();
+  });
+
+  it("finds the highest version", () => {
+    expect(highest(["0.1.0", "0.10.0", "0.9.9", "0.10.0-rc.2"])).toBe("0.10.0");
+    expect(highest([])).toBeUndefined();
   });
 });
 

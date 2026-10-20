@@ -37,9 +37,30 @@ export function compareVersions(left, right) {
   return Math.sign(a.candidate - b.candidate);
 }
 
-/** npm's channel: stable releases on `latest`, candidates on `next`. */
-export function distTag(version) {
-  return parseVersion(version).candidate === undefined ? "latest" : "next";
+/**
+ * npm's channel for a version: `next` for candidates; `latest` for the newest
+ * stable version; `release-X.Y` for a stable backport below it, so `latest`
+ * never moves back. `highestStable` is the newest stable version npm already
+ * has, or undefined before the first.
+ */
+export function distTag(version, highestStable) {
+  const { major, minor, candidate } = parseVersion(version);
+  if (candidate !== undefined) {
+    return "next";
+  }
+  return highestStable === undefined ||
+    compareVersions(version, highestStable) >= 0
+    ? "latest"
+    : `release-${major}.${minor}`;
+}
+
+/** The highest of some release versions, or undefined when there are none. */
+export function highest(versions) {
+  return versions.reduce(
+    (best, version) =>
+      best === undefined || compareVersions(version, best) > 0 ? version : best,
+    undefined,
+  );
 }
 
 /**
@@ -50,7 +71,7 @@ export function distTag(version) {
 export function assertChannelForward(version, current) {
   if (current !== undefined && compareVersions(version, current) < 0) {
     throw new Error(
-      `${version} is older than ${distTag(version)} (${current}); publishing it would move the channel back`,
+      `${version} is older than its channel's ${current}; publishing it would move the channel back`,
     );
   }
 }
@@ -114,9 +135,19 @@ if (
       ),
     );
   } else if (command === "dist-tag" && args.length === 2) {
-    // The channel's current version, or "-" before the first publication.
+    // The newest stable version npm has, or "-" before the first.
+    console.log(distTag(args[0], optional(args[1]) ?? undefined));
+  } else if (command === "forward" && args.length === 2) {
+    // The channel's current version, or "-" when the channel does not exist.
     assertChannelForward(args[0], optional(args[1]) ?? undefined);
-    console.log(distTag(args[0]));
+  } else if (command === "highest") {
+    // With --stable, only X.Y.Z versions count: npm's version list also holds
+    // registry placeholders such as 0.0.0-stage. "-" when none remain.
+    const stable = args[0] === "--stable";
+    const versions = stable
+      ? args.slice(1).filter((version) => /^\d+\.\d+\.\d+$/.test(version))
+      : args;
+    console.log(highest(versions) ?? "-");
   } else if (command === "rolling-tags" && args.length === 3) {
     const [version, minorAlias, latest] = args;
     const { major, minor } = parseVersion(version);
@@ -131,7 +162,9 @@ if (
   } else {
     console.error(
       "Usage: node scripts/release.mjs compose <image:version>\n" +
-        "       node scripts/release.mjs dist-tag <version> <channel version|->\n" +
+        "       node scripts/release.mjs dist-tag <version> <highest stable|->\n" +
+        "       node scripts/release.mjs forward <version> <channel version|->\n" +
+        "       node scripts/release.mjs highest [--stable] <version>...\n" +
         "       node scripts/release.mjs rolling-tags <version> <X.Y version|-> <latest version|->\n" +
         "       node scripts/release.mjs compare <version> <version>",
     );

@@ -14,11 +14,11 @@ lockfile and `FONDS_VERSION`, and the workflow refuses a tag that differs.
 
 Each release publishes:
 
-| Where                  | Release `vX.Y.Z`                                    | Candidate `vX.Y.Z-rc.N`          |
-| ---------------------- | --------------------------------------------------- | -------------------------------- |
-| npm `fonds-finance`    | `X.Y.Z` on `latest`                                 | `X.Y.Z-rc.N` on `next`           |
-| `ghcr.io/sagiba/fonds` | `X.Y.Z`, then `X.Y` and `latest` if not backwards   | `X.Y.Z-rc.N` only                |
-| GitHub Release         | Notes, tarball, `compose.yaml`, manifest, checksums | The same, marked as a prerelease |
+| Where                  | Release `vX.Y.Z`                                     | Candidate `vX.Y.Z-rc.N`          |
+| ---------------------- | ---------------------------------------------------- | -------------------------------- |
+| npm `fonds-finance`    | `X.Y.Z` on `latest`, or `release-X.Y` for a backport | `X.Y.Z-rc.N` on `next`           |
+| `ghcr.io/sagiba/fonds` | `X.Y.Z`, then `X.Y` and `latest` if not backwards    | `X.Y.Z-rc.N` only                |
+| GitHub Release         | Notes, tarball, `compose.yaml`, manifest, checksums  | The same, marked as a prerelease |
 
 A candidate runs the entire path. Use one whenever the release path itself
 changed: a failure then costs an `rc` number, not a version.
@@ -43,7 +43,9 @@ changed: a failure then costs an `rc` number, not a version.
 4. **Approve the `release` environment.** The workflow tags the image with the
    exact version, creates a draft GitHub Release and stages the npm version.
 5. **Approve the staged version** on npmjs.com (the package's staged versions)
-   with your npm second factor. This makes it public.
+   with your npm second factor. This makes it public. Approve only the stage
+   this run created; reject any older pending stage, since approving it later
+   would move its channel back.
 6. Within 30 minutes the workflow sees the version, checks that the registry
    serves the tarball's exact bytes, moves the rolling image tags and publishes
    the release. Confirm `docker pull ghcr.io/sagiba/fonds:X.Y.Z` works signed
@@ -52,17 +54,20 @@ changed: a failure then costs an `rc` number, not a version.
 ## Resuming and recovering
 
 - **Approval came after the wait.** Approve the staged version, then run the
-  Release workflow manually with the tag and the original run's ID. It verifies
-  the retained artifacts against the draft and the registry and finishes; it
-  never rebuilds, repacks or restages.
+  Release workflow manually with the tag and the original run's ID. Only a run
+  for that tag whose checks, builds and approved stage all succeeded qualifies.
+  It finishes from that run's artifacts and the tag's own code, verifying them
+  against the draft and the registry; it never rebuilds, repacks or restages.
+- **Finalize failed partway.** Moving rolling tags and publishing the draft are
+  repeatable: run finalize again. A partly moved tag already points to the
+  verified, published version.
 - **A job failed before publication.** Re-run the failed jobs. Existing exact
   image tags and npm versions must match the run's own digests and tarball, or
   the run stops.
 - **Anything already public is never replaced.** A rejected stage, or a defect
   found after npm accepted a version, means a new version (or `rc` number). Tags
   are not moved or reused.
-- Releases run one at a time; a queued run waits for the current one,
-  approvals included.
+- Releases run one at a time; later runs wait in order, approvals included.
 
 ## One-time setup
 

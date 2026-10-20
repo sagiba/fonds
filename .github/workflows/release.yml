@@ -5,8 +5,8 @@ name: Release
 # those same bytes on native runners. Publication waits for the protected
 # `release` environment, then npm's staged approval. The GitHub Release stays
 # a draft and rolling image tags stay put until the published package is
-# verified. Dispatch `finalize` for a tag to finish a run that timed out
-# waiting for npm approval, from that run's retained artifacts.
+# verified. Run it manually with a tag and the ID of that tag's approved run to
+# finish one whose wait for npm timed out, from the run's retained artifacts.
 on:
   push:
     tags: ["v*"]
@@ -27,10 +27,11 @@ defaults:
   run:
     shell: bash
 
-# One release at a time, approvals included; never cancel a publication.
+# One release at a time, approvals included; later ones wait in order and
+# nothing is cancelled.
 concurrency:
   group: release
-  cancel-in-progress: false
+  queue: max
 
 env:
   IMAGE: ghcr.io/${{ github.repository }}
@@ -51,6 +52,9 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+          cache: npm
+      # The release helpers load the build scripts.
+      - run: npm ci --ignore-scripts
       - name: Validate the tag, its version and its place on main
         id: version
         env:
@@ -81,7 +85,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
-      - run: npm run check:targets -- sqlite --runtime
 
   postgres:
     needs: source
@@ -118,7 +121,6 @@ jobs:
           --outputFile=/tmp/fonds-postgres-results.json
       - name: Verify PostgreSQL coverage ran
         run: node scripts/check-postgres-tests.mjs /tmp/fonds-postgres-results.json
-      - run: npm run check:targets -- postgres --runtime
 
   # Packs the tarball once and tests it installed; every later job uses it.
   package:
@@ -260,8 +262,10 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+          cache: npm
           registry-url: https://registry.npmjs.org
       - run: npm install --global "npm@$NPM_VERSION"
+      - run: npm ci --ignore-scripts
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: package
@@ -279,30 +283,35 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Tag the multi-architecture image with its exact version
         run: |
+          source scripts/release-registry.sh
           sources=()
           for arch in amd64 arm64; do sources+=("$IMAGE@$(cat "digests/$arch")"); done
           # Each pushed digest is an index of its image and attestations; the
           # version's index must list exactly these platform images.
-          platforms() {
-            for reference in "$@"; do
-              docker buildx imagetools inspect "$reference" --format '{{json .Manifest}}' |
-                jq -r '.manifests[] | select(.platform.os == "linux") | .digest'
-            done | sort | paste -sd ' '
-          }
-          expected="$(platforms "${sources[@]}")"
+          expected="$(image_platforms "${sources[@]}")"
           [ "$(echo "$expected" | wc -w)" = 2 ]
           # An existing exact tag must already be this release; never replace it.
-          if docker buildx imagetools inspect "$IMAGE:$VERSION" >/dev/null 2>&1; then
-            [ "$(platforms "$IMAGE:$VERSION")" = "$expected" ] ||
+          if existing="$(image_platforms "$IMAGE:$VERSION")"; then
+            [ "$existing" = "$expected" ] ||
               { echo "$IMAGE:$VERSION already names other images"; exit 1; }
           else
+            [ "$?" = 3 ] || exit 1
             docker buildx imagetools create --tag "$IMAGE:$VERSION" "${sources[@]}"
           fi
-          [ "$(platforms "$IMAGE:$VERSION")" = "$expected" ]
-          docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{json .Manifest}}' |
-            jq -r .digest > digests/index
+          [ "$(image_platforms "$IMAGE:$VERSION")" = "$expected" ]
+          image_digest "$IMAGE:$VERSION" > digests/index
       - name: Prepare the release assets
         run: |
+          source scripts/release-registry.sh
+          name="$(jq -r .name package/npm.json)"
+          # The npm channel: never backwards; a backport gets its own line.
+          # Command substitution, unlike <(…), fails the step if the lookup fails.
+          listed="$(npm_versions "$name")"
+          mapfile -t versions <<< "$listed"
+          stable="$(node scripts/release.mjs highest --stable "${versions[@]}")"
+          channel="$(node scripts/release.mjs dist-tag "$VERSION" "$stable")"
+          current="$(npm_channel "$name" "$channel")"
+          node scripts/release.mjs forward "$VERSION" "${current:--}"
           mkdir release
           cp package/fonds.tgz "release/fonds-finance-$VERSION.tgz"
           node scripts/release.mjs compose "$IMAGE:$VERSION" > release/compose.yaml
@@ -311,9 +320,9 @@ jobs:
             --arg image "$IMAGE" --arg index "$(cat digests/index)" \
             --arg amd64 "$(cat digests/amd64)" --arg arm64 "$(cat digests/arm64)" \
             --arg tarball "$(sha256sum package/fonds.tgz | cut -d' ' -f1)" \
-            --slurpfile npm package/npm.json \
+            --arg channel "$channel" --slurpfile npm package/npm.json \
             '{version: $version, tag: $tag, commit: $commit,
-              npm: ($npm[0] + {sha256: $tarball}),
+              npm: ($npm[0] + {sha256: $tarball, distTag: $channel}),
               image: {name: $image, digest: $index, platforms: {amd64: $amd64, arm64: $arm64}}}' \
             > release/release-manifest.json
           (cd release && sha256sum -- * > SHA256SUMS)
@@ -331,24 +340,31 @@ jobs:
           fi
       - name: Stage the npm version
         run: |
+          source scripts/release-registry.sh
           name="$(jq -r .name package/npm.json)"
           integrity="$(jq -r .integrity package/npm.json)"
-          published="$(npm view "$name@$VERSION" dist.integrity 2>/dev/null || true)"
-          if [ -n "$published" ]; then
+          if published="$(npm_integrity "$name" "$VERSION")"; then
             # A rerun after approval: the registry must hold these exact bytes.
             [ "$published" = "$integrity" ] ||
               { echo "$name@$VERSION is published with other contents"; exit 1; }
             exit 0
+          else
+            [ "$?" = 3 ] || exit 1
           fi
-          channel="$(node scripts/release.mjs dist-tag "$VERSION" -)"
-          current="$(npm view "$name" "dist-tags.$channel" 2>/dev/null || true)"
-          node scripts/release.mjs dist-tag "$VERSION" "${current:--}" > /dev/null
+          channel="$(jq -r .npm.distTag release/release-manifest.json)"
+          # Recheck just before staging: the channel may have moved meanwhile.
+          current="$(npm_channel "$name" "$channel")"
+          node scripts/release.mjs forward "$VERSION" "${current:--}"
           npm stage publish package/fonds.tgz --tag "$channel" --access public --provenance
-          echo "Staged $name@$VERSION on $channel: approve it on npmjs.com with 2FA." >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "Staged $name@$VERSION on \`$channel\`. Approve that stage on npmjs.com with your second factor."
+            echo "Reject any older pending stage instead of approving it."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # Waits for the owner's npm approval, verifies the published bytes, then
-  # moves rolling image tags and publishes the release. Also dispatched to
-  # resume a run whose wait timed out, from that run's artifacts.
+  # moves rolling image tags and publishes the release. Run manually to resume
+  # an approved run whose wait timed out. Moving the tags and publishing are
+  # idempotent: if either fails, run finalize again.
   finalize:
     needs: [source, stage]
     if: >-
@@ -366,13 +382,31 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
+      # Only a pushed release tag's run whose checks, builds and approved
+      # stage all succeeded can be finalized, from that tag's own code.
+      - name: Verify the release run
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ && "$RUN_ID" =~ ^[0-9]+$ ]] ||
+            { echo "finalize needs a release tag and a numeric run ID"; exit 1; }
+          commit="$(gh api "repos/$GH_REPO/commits/$TAG" --jq .sha)"
+          gh run view "$RUN_ID" --json workflowName,event,headBranch,headSha,jobs > /tmp/run.json
+          jq -e --arg tag "$TAG" --arg commit "$commit" '
+            .workflowName == "Release" and .event == "push" and
+            .headBranch == $tag and .headSha == $commit and
+            ([.jobs[] | select(.name == "stage")] | length == 1) and
+            ([.jobs[] | select(.name != "finalize") | .conclusion] | all(. == "success"))
+          ' /tmp/run.json > /dev/null ||
+            { echo "Run $RUN_ID is not a successful, approved Release run for $TAG"; exit 1; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: refs/tags/${{ env.TAG }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: package
@@ -381,14 +415,11 @@ jobs:
           github-token: ${{ github.token }}
       - name: Verify the draft against its manifest
         run: |
-          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ && "$RUN_ID" =~ ^[0-9]+$ ]] ||
-            { echo "finalize needs a release tag and a numeric run ID"; exit 1; }
           gh release download "$TAG" --pattern release-manifest.json --dir /tmp/release
           manifest=/tmp/release/release-manifest.json
           [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true ] ||
             { echo "$TAG is not a draft release"; exit 1; }
-          git fetch --quiet origin "+refs/tags/$TAG:refs/tags/$TAG"
-          [ "$(git rev-parse "refs/tags/$TAG^{commit}")" = "$(jq -r .commit "$manifest")" ]
+          [ "$(jq -r .commit "$manifest")" = "$(git rev-parse "refs/tags/$TAG^{commit}")" ]
           [ "$(jq -r .tag "$manifest")" = "$TAG" ]
           [ "$(jq -r .npm.integrity "$manifest")" = "$(jq -r .integrity package/npm.json)" ]
           [ "$(jq -r .npm.sha256 "$manifest")" = "$(sha256sum package/fonds.tgz | cut -d' ' -f1)" ]
@@ -402,41 +433,42 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Wait for the npm approval and verify the published package
         run: |
+          source scripts/release-registry.sh
           name="$(jq -r .npm.name release-manifest.json)"
           integrity="$(jq -r .npm.integrity release-manifest.json)"
+          published=
           for _ in $(seq 1 60); do
-            published="$(npm view "$name@$VERSION" dist.integrity 2>/dev/null || true)"
-            [ -n "$published" ] && break
+            if published="$(npm_integrity "$name" "$VERSION")"; then
+              break
+            fi
+            [ "$?" = 3 ] || exit 1
             sleep 30
           done
           [ -n "$published" ] || {
-            echo "$name@$VERSION is not published yet: approve the staged version, then dispatch finalize for $TAG with run ID $RUN_ID."
+            echo "$name@$VERSION is not published yet: approve its stage, then run Release manually for $TAG with run ID $RUN_ID."
             exit 1
           }
           [ "$published" = "$integrity" ] ||
             { echo "$name@$VERSION is published with other contents"; exit 1; }
-          rm -rf /tmp/verify && mkdir /tmp/verify
+          mkdir -p /tmp/verify
           (cd /tmp/verify && npm pack "$name@$VERSION" --silent > /dev/null)
-          cmp /tmp/verify/*.tgz package/fonds.tgz
+          cmp "/tmp/verify/$name-$VERSION.tgz" package/fonds.tgz
+          # Approving an older stage later would move this channel back.
+          channel="$(jq -r .npm.distTag release-manifest.json)"
+          [ "$(npm_channel "$name" "$channel")" = "$VERSION" ] || {
+            echo "$channel points to $(npm_channel "$name" "$channel"), not $VERSION; another stage was approved."
+            exit 1
+          }
       - name: Move rolling image tags
         run: |
+          source scripts/release-registry.sh
           image="$(jq -r .image.name release-manifest.json)"
           digest="$(jq -r .image.digest release-manifest.json)"
-          [ "$(docker buildx imagetools inspect "$image:$VERSION" --format '{{json .Manifest}}' | jq -r .digest)" = "$digest" ]
-          # The version an alias points to, from its label; - when it does not exist.
-          current() {
-            if docker buildx imagetools inspect "$image:$1" >/dev/null 2>&1; then
-              docker buildx imagetools inspect "$image:$1" --format '{{json .Image}}' |
-                jq -r '(if has("config") then [.] else [.[]] end)
-                  | [.[] | .config.Labels["org.opencontainers.image.version"]] | unique
-                  | if length == 1 and (.[0] | type) == "string" then .[0]
-                    else error("missing or inconsistent version labels") end'
-            else
-              echo -
-            fi
-          }
+          [ "$(image_digest "$image:$VERSION")" = "$digest" ]
           minor="$(echo "$VERSION" | cut -d. -f1-2)"
-          tags="$(node scripts/release.mjs rolling-tags "$VERSION" "$(current "$minor")" "$(current latest)")"
+          minor_version="$(image_version "$image:$minor")"
+          latest_version="$(image_version "$image:latest")"
+          tags="$(node scripts/release.mjs rolling-tags "$VERSION" "$minor_version" "$latest_version")"
           for tag in $tags; do
             docker buildx imagetools create --tag "$image:$tag" "$image@$digest"
           done
@@ -445,8 +477,11 @@ jobs:
         run: |
           latest=false
           if [[ "$VERSION" != *-rc.* ]]; then
-            newest="$(gh release list --exclude-drafts --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName // ""')"
-            if [ -z "$newest" ] || [ "$(node scripts/release.mjs compare "$VERSION" "${newest#v}")" -ge 0 ]; then
+            listed="$(gh release list --exclude-drafts --exclude-pre-releases \
+              --limit 1000 --json tagName --jq '.[].tagName | ltrimstr("v")')"
+            mapfile -t published <<< "$listed"
+            newest="$(node scripts/release.mjs highest --stable "${published[@]}")"
+            if [ "$newest" = - ] || [ "$(node scripts/release.mjs compare "$VERSION" "$newest")" -ge 0 ]; then
               latest=true
             fi
           fi
