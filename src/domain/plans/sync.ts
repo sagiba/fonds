@@ -158,7 +158,7 @@ export interface SyncResult {
 }
 
 /** Bump when shared reconciliation rules change, independently of archived parser versions. */
-export const RECONCILIATION_POLICY_VERSION = "auto-posting-v7";
+export const RECONCILIATION_POLICY_VERSION = "auto-posting-v8";
 
 export function reconciliationFailure(warnings: readonly string[]) {
   const failureCode = reconciliationFailureCodeSchema.options.find((code) =>
@@ -579,6 +579,7 @@ function indexRunHistory(runs: PriorRun[], adapter: SourceAdapter) {
   );
   const knownAccounts = new Set<string>();
   const latestComparable = new Map<string, string>();
+  const latestSuccessful = new Map<string, string>();
   const historicalPartitions = new Map<string, Set<string>>();
   for (const run of runs) {
     const historical = new Set<string>();
@@ -587,10 +588,9 @@ function indexRunHistory(runs: PriorRun[], adapter: SourceAdapter) {
       if (part.success && !part.comparable) {
         historical.add(JSON.stringify([part.accountKey, part.status]));
       }
-      if (!part.success || !part.comparable) {
+      if (!part.success) {
         continue;
       }
-      knownAccounts.add(part.accountKey);
       const response = responsesByRun.get(run.id)?.get(part.accountKey);
       if (!response) {
         continue;
@@ -602,6 +602,16 @@ function indexRunHistory(runs: PriorRun[], adapter: SourceAdapter) {
         response.scope,
         part.status,
       );
+      if (
+        response.scope?.kind !== "history" &&
+        response.capturedAt > (latestSuccessful.get(key) ?? "")
+      ) {
+        latestSuccessful.set(key, response.capturedAt);
+      }
+      if (!part.comparable) {
+        continue;
+      }
+      knownAccounts.add(part.accountKey);
       if (response.capturedAt > (latestComparable.get(key) ?? "")) {
         latestComparable.set(key, response.capturedAt);
       }
@@ -610,6 +620,7 @@ function indexRunHistory(runs: PriorRun[], adapter: SourceAdapter) {
   return {
     knownAccounts,
     latestComparable,
+    latestSuccessful,
     response(runId: string, accountKey: string) {
       return responsesByRun.get(runId)?.get(accountKey);
     },
@@ -764,6 +775,7 @@ interface PostingContinuationOptions {
   history: ReturnType<typeof indexRunHistory>;
   index: ReturnType<typeof indexAccountRows>;
   comparableAbsence: (row: Transaction) => boolean;
+  baseline: boolean;
 }
 
 function planPostingContinuations({
@@ -775,13 +787,16 @@ function planPostingContinuations({
   history,
   index,
   comparableAbsence,
+  baseline,
 }: PostingContinuationOptions) {
   const empty = new Map<TransactionFacts, Transaction>();
-  if (!adapter.automaticPosting || result.historical) {
+  if (!adapter.automaticPosting || result.historical || baseline) {
     return empty;
   }
   const freshPartitions = (["posted", "pending"] as const).every((status) => {
-    const latest = history.latestComparable.get(
+    const latest = (
+      status === "pending" ? history.latestComparable : history.latestSuccessful
+    ).get(
       partitionKey(
         adapter,
         response.accountKey,
@@ -792,7 +807,12 @@ function planPostingContinuations({
     );
     return (
       (!latest || latest < response.capturedAt) &&
-      hasComparablePartition(result, status)
+      result.partitions.some(
+        (partition) =>
+          partition.status === status &&
+          partition.success &&
+          (status === "posted" || partition.comparable),
+      )
     );
   });
   if (!freshPartitions) {
@@ -821,6 +841,7 @@ function planPostingContinuations({
       .filter(
         (row) =>
           row.status === "pending" &&
+          !history.historical(row) &&
           row.presence === "seen" &&
           row.lastSeenAt < response.capturedAt &&
           comparableAbsence(row) &&
@@ -846,17 +867,29 @@ function planPostingContinuations({
   if (newPosted.size === 0) {
     return empty;
   }
-  // Keep listed, unlisted and split pending rows, plus every earlier unlinked posted row.
-  // New inputs with unresolved native identity also participate as blockers.
-  const newInputs = inputs.filter(unknownToConnection);
+  const unlinkedKeys = new Set(
+    current
+      .filter((row) => !row.supersededById && !linkedIds.has(row.id))
+      .flatMap((row) => [row.sourceKey, ...row.sourceAliases]),
+  );
+  // Current unlinked evidence also blocks after removal: fresh reappearance may
+  // restore that identity later in this plan. A listed pending input cannot disappear,
+  // and an existing posted input cannot be new, so repeated blockers cannot admit a pair.
+  const blockers = inputs.filter(
+    (input) =>
+      unknownToConnection(input) ||
+      [input.sourceKey, ...input.sourceAliases].some((key) =>
+        unlinkedKeys.has(key),
+      ),
+  );
   const { pairs } = automaticPostingPairs(
     [
       ...active.filter((row) => row.status === "pending"),
-      ...newInputs.filter((row) => row.status === "pending"),
+      ...blockers.filter((row) => row.status === "pending"),
     ],
     [
       ...active.filter((row) => row.status === "posted"),
-      ...newInputs.filter((row) => row.status === "posted"),
+      ...blockers.filter((row) => row.status === "posted"),
     ],
     disappearing,
     adapter.automaticPosting,
@@ -1350,6 +1383,7 @@ export function planRun(
       history,
       index,
       comparableAbsence,
+      baseline: baselineAccounts.has(response.accountKey),
     });
     const markSeen = (id: string) => {
       seenIds.add(id);

@@ -474,7 +474,10 @@ When a provider supports it, a pending authorization and its later posted row ar
 matched conservatively and reversibly. The pending transaction keeps its ID and
 takes the posted facts, and the posted row is retired with `supersededById`. The
 match is one-to-one. Only providers that opt in take part (each provider guide
-says whether it does), and billed lines are never matched or linked. The
+says whether it does), and billed lines are never matched or linked. Shared
+safeguards govern every match; provider evidence can only narrow eligibility.
+An unclassified pending row may take a known posted purchase's classification
+without claiming that the authorization stated its kind. The
 [design](design.md#pending-to-posted-matching) describes the guarantees, and
 [reference models](reference-models.md#pending-to-posted-policy) the policy choice.
 

@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 
+import { isLosslessNumber, parse } from "lossless-json";
 import { describe, expect, it } from "vitest";
 
 import { presentWireTransaction } from "../../../src/application/wire-output.js";
@@ -20,6 +21,7 @@ import {
   type Database,
   openDatabase,
 } from "../../../src/storage/sqlite/database.js";
+import { syncRuns } from "../../../src/storage/sqlite/schema.js";
 
 type Row = Record<string, unknown>;
 
@@ -243,10 +245,15 @@ describe("Isracard extraction", () => {
   it("projects established time, channel and location from rich observed field shapes while retaining discount and source-code evidence", () => {
     const capture = baseline("card-month-rich");
     const result = extract(capture);
-    expect(result.transactions).toHaveLength(7);
-    expect(result.partitions.every((partition) => partition.success)).toBe(
-      true,
-    );
+    expect(
+      result.transactions.filter((row) => row.status === "posted"),
+    ).toHaveLength(7);
+    expect(
+      result.transactions.filter((row) => row.status === "pending"),
+    ).toHaveLength(2);
+    expect(
+      result.partitions.find((partition) => partition.status === "posted"),
+    ).toMatchObject({ success: true });
     expect(result.warnings).toContain(
       "legacy_statement_artifacts_preserved_raw",
     );
@@ -352,6 +359,8 @@ describe("Isracard extraction", () => {
         result.transactions.map((row) => [row.merchantName, row.kind]),
       ),
     ).toEqual({
+      "Synthetic approval shop": "unknown",
+      "Synthetic foreign authorization": "unknown",
       "Synthetic discount shop": "purchase",
       "Synthetic recurring service": "fee",
       "Synthetic overseas ILS bill": "fee",
@@ -1273,6 +1282,146 @@ describe("Isracard extraction", () => {
     expect(capture.responses.legacy).toContain("ARTIFACT-VOUCHER");
   });
 
+  it.each(["txnAbroad", "txnInfo"])(
+    "does not extend domestic T-total classification to %s",
+    (partition) => {
+      const capture = baseline();
+      updateDigital(capture, (rows) => {
+        rows.length = 0;
+      });
+      updateLegacy(capture, (rows, data) => {
+        rows.length = 0;
+        const entry = data.Index0 as { CurrentCardTransactions: Row[] };
+        entry.CurrentCardTransactions[0]![partition] = [
+          {
+            dealSumType: "T",
+            voucherNumberRatz: "SYNTHETIC-NONDOMESTIC-T",
+            voucherNumberRatzOutbound: "SYNTHETIC-NONDOMESTIC-T",
+            fullPurchaseDate: "11/06/2040",
+            fullPurchaseDateOutbound: "11/06/2040",
+            paymentSum: "7.25",
+            paymentSumOutbound: "7.25",
+            currencyId: "USD",
+          },
+        ];
+      });
+      const result = extract(capture);
+      expect(result.transactions).toHaveLength(1);
+      expect(result.transactions[0]!.sourceKey).toContain(
+        "SYNTHETIC-NONDOMESTIC-T",
+      );
+      expect(result.transactions[0]!.details.sourceRefs).toContainEqual({
+        runId: "synthetic-isracard-run",
+        path: `$.responses.legacy.CardsTransactionsListBean.Index0.CurrentCardTransactions[0].${partition}[0]`,
+      });
+      expect(result.warnings).not.toContain(
+        "legacy_statement_artifacts_preserved_raw",
+      );
+    },
+  );
+
+  it("keeps a colliding domestic USD total from blocking a purchase correction or moving its annotation", async () => {
+    const capture = baseline();
+    delete capture.responses.details;
+    updateDigital(capture, (rows) => {
+      Object.assign(rows[0]!, {
+        billingAmount: 7.25,
+        billingAmountCurrency: 19,
+        originalAmount: 7.25,
+        originalCurrencyIso: "USD",
+      });
+    });
+    updateLegacy(capture, (rows) => {
+      rows.splice(
+        0,
+        rows.length,
+        {
+          fullPurchaseDate: "11/06/2040",
+          voucherNumberRatz: "VOUCHER-1",
+          fullSupplierNameHeb: "Synthetic purchase",
+          paymentSum: "7.25",
+          currencyId: "USD",
+        },
+        {
+          fullPurchaseDate: "12/06/2040",
+          voucherNumberRatz: "SYNTHETIC-USD-2",
+          fullSupplierNameHeb: "Synthetic second purchase",
+          paymentSum: "7.25",
+          currencyId: "USD",
+        },
+        {
+          fullPurchaseDate: "11/06/2040",
+          voucherNumberRatz: "000000000",
+          dealSumType: "T",
+          paymentSum: "14.50",
+          currencyId: "USD",
+        },
+      );
+    });
+    const db = await openDatabase(":memory:");
+    try {
+      await db.ensureConnection({
+        id: "synthetic-isracard",
+        provider: "isracard",
+      });
+      await ingestCapture(db, capture, 0);
+      const before = (await db.listTransactions()).find(
+        (row) => row.transactionDate === "2040-06-11",
+      )!;
+      expect(before).toMatchObject({
+        amountMinor: -725,
+        currency: "USD",
+        amountBasis: "purchase_commitment",
+        identityStrength: "native",
+      });
+      await db.editAnnotation({
+        transactionId: before.id,
+        expectedVersion: 0,
+        notes: "Synthetic purchase note",
+      });
+      updateDigital(capture, (rows) => {
+        Object.assign(rows[0]!, { billingAmount: 8.25, originalAmount: 8.25 });
+      });
+      updateLegacy(capture, (rows) => {
+        rows[0]!.paymentSum = "8.25";
+        Object.assign(rows[2]!, {
+          voucherNumberRatz: "VOUCHER-1",
+          paymentSum: "15.50",
+        });
+      });
+      const parsed = extract(capture);
+      expect(parsed.transactions).toHaveLength(2);
+      expect(parsed.warnings).not.toContain("legacy_total_mismatch");
+      expect(parsed.warnings).not.toContain("ambiguous_posted_identity");
+      expect(await ingestCapture(db, capture, 1)).toMatchObject({
+        created: 0,
+        updated: 1,
+      });
+      const after = await db.getTransaction(before.id);
+      expect(after).toMatchObject({
+        id: before.id,
+        amountMinor: -825,
+        currency: "USD",
+        amountBasis: "purchase_commitment",
+        identityStrength: "native",
+        version: before.version + 1,
+        annotation: { data: { notes: "Synthetic purchase note" } },
+      });
+      expect(await db.listTransactions()).toHaveLength(2);
+      expect(await db.getTotals()).toMatchObject({
+        totals: [{ currency: "USD", amountMinor: -825 }],
+      });
+      const runs = await db.orm.select().from(syncRuns).all();
+      const archived = JSON.parse(
+        runs.find((run) => run.id === "synthetic-review-1")!.snapshot
+          .responses[0]!.responseText,
+      ) as IsracardCapture;
+      expect(archived.responses.legacy).toBe(capture.responses.legacy);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("does not promote monthly installment billing into a purchase commitment or a billed line", () => {
     const capture = baseline();
     delete capture.responses.legacy;
@@ -1596,24 +1745,281 @@ describe("Isracard extraction", () => {
     ).toMatchObject({ amountMinor: null, currency: null });
   });
 
-  it("never manufactures pending rows from unobserved approval shapes", () => {
+  it.each(["card-month-approvals", "card-month-rich"])(
+    "keeps full approval evidence in %s separate from posted identities",
+    (name) => {
+      const capture = baseline(name);
+      const source = capture.responses.digital;
+      const result = extract(capture);
+      const withoutApprovals = structuredClone(capture);
+      updateDigital(withoutApprovals, (_rows, data) => {
+        data.approvals = null;
+      });
+      const posted = result.transactions.filter(
+        (row) => row.status === "posted",
+      );
+      expect(posted).toEqual(
+        extract(withoutApprovals).transactions.filter(
+          (row) => row.status === "posted",
+        ),
+      );
+      expect(
+        posted.flatMap((row) => row.details.sourceRefs),
+      ).not.toContainEqual(
+        expect.objectContaining({ path: expect.stringContaining("approvals") }),
+      );
+      expect(result.warnings).not.toContain(
+        "unsupported_approvals_preserved_raw",
+      );
+      expect(result.transactions.length).toBeGreaterThan(0);
+      expect(
+        result.transactions.filter((row) => row.status === "pending"),
+      ).toHaveLength(2);
+      expect(
+        result.partitions.find((partition) => partition.status === "pending"),
+      ).toMatchObject({ success: true, comparable: true });
+      expect(
+        result.partitions.find((partition) => partition.status === "posted"),
+      ).toMatchObject({ success: true, comparable: false });
+      expect(
+        (JSON.parse(serializeIsracardCapture(capture)) as IsracardCapture)
+          .responses.digital,
+      ).toBe(source);
+    },
+  );
+
+  it.each([
+    { approvedTransactions: [], totalEstimatedAmount: 0 },
+    { approvedTransactions: null, totalEstimatedAmount: null },
+    { approvedTransactions: [{ purchaseDate: "11/06/2040" }] },
+    { approvedTransactions: "Synthetic unsupported array" },
+  ])("never certifies unsupported approval coverage from %j", (approvals) => {
     const capture = baseline();
     updateDigital(capture, (_rows, data) => {
-      data.approvals = {
-        approvedTransactions: [
-          { purchaseDate: "11/06/2040", originalAmount: 123 },
-        ],
-      };
+      data.approvals = approvals;
     });
     const result = extract(capture);
-    expect(result.warnings).toContain("unsupported_approvals_preserved_raw");
     expect(result.transactions.every((row) => row.status === "posted")).toBe(
       true,
     );
+    expect(result.warnings).toContain("unsupported_approvals_preserved_raw");
     expect(
       result.partitions.find((partition) => partition.status === "pending"),
     ).toMatchObject({ success: false, comparable: false });
   });
+
+  it("accepts the observed approvals-only response as empty posted coverage alongside a pending snapshot", () => {
+    const capture = baseline("card-month-approvals");
+    updateDigital(capture, (_rows, data) => {
+      data.israelAbroadVouchers = null;
+      data.currentTransactionsList = null;
+    });
+    capture.card.companyCode = "77";
+    capture.responses.cardList = JSON.stringify({
+      isSuccess: true,
+      data: { cardsList: [capture.card] },
+    });
+    delete capture.responses.legacy;
+    delete capture.responses.details;
+    delete capture.legacyCardIndex;
+    const result = extract(capture);
+    expect(result.transactions).toHaveLength(2);
+    expect(result.transactions.every((row) => row.status === "pending")).toBe(
+      true,
+    );
+    expect(result.warnings).not.toContain(
+      "unsupported_approvals_preserved_raw",
+    );
+    expect(result.warnings).not.toContain("unsupported_digital_empty_shape");
+    expect(result.partitions).toEqual([
+      expect.objectContaining({
+        status: "pending",
+        success: true,
+        comparable: true,
+      }),
+      expect.objectContaining({
+        status: "posted",
+        success: true,
+        comparable: false,
+      }),
+    ]);
+  });
+
+  it.each<[Row, Row | null]>([
+    [{ approvedTransactions: [], totalEstimatedAmount: null }, null],
+    [{ approvedTransactions: [], totalEstimatedAmount: "0" }, null],
+    [{ approvedTransactions: null, totalEstimatedAmount: 0 }, null],
+    [{ approvedTransactions: {}, totalEstimatedAmount: 0 }, null],
+    [{ approvedTransactions: [null], totalEstimatedAmount: 0 }, null],
+    [{ approvedTransactions: [42], totalEstimatedAmount: 0 }, null],
+    [
+      { approvedTransactions: [], totalEstimatedAmount: 0, unknown: true },
+      null,
+    ],
+    [{ approvedTransactions: [] }, null],
+    [
+      (
+        JSON.parse(baseline("card-month-approvals").responses.digital!) as {
+          data: { approvals: Row };
+        }
+      ).data.approvals,
+      (
+        JSON.parse(
+          baseline("card-month-pending-summary").responses.digital!,
+        ) as { data: { currentTransactionsList: Row } }
+      ).data.currentTransactionsList,
+    ],
+  ])(
+    "keeps unsupported posted null-voucher shapes partial beside approval evidence: approvals=%j summary=%j",
+    (approvals, currentTransactionsList) => {
+      const capture = baseline("card-month-approvals");
+      updateDigital(capture, (_rows, data) => {
+        data.israelAbroadVouchers = null;
+        data.currentTransactionsList = currentTransactionsList;
+        data.approvals = approvals;
+      });
+      const result = extract(capture);
+      expect(result.warnings).toContain("unsupported_digital_empty_shape");
+      if (currentTransactionsList !== null) {
+        expect(result.warnings).toContain("unsupported_pending_summary");
+      }
+      expect(result.partitions).toEqual([
+        expect.objectContaining({
+          status: "pending",
+          success: currentTransactionsList !== null,
+          comparable: currentTransactionsList !== null,
+        }),
+        expect.objectContaining({
+          status: "posted",
+          success: false,
+          comparable: false,
+        }),
+      ]);
+    },
+  );
+
+  it.each([undefined, null, 0, "0", ""])(
+    "accepts imported DigitalV3 root errorCode %s with transport-compatible semantics",
+    (errorCode) => {
+      const capture = baseline("card-month-approvals");
+      const digital = JSON.parse(capture.responses.digital!) as Row;
+      delete digital.errorCode;
+      capture.responses.digital = JSON.stringify(digital);
+      const expected = extract(capture);
+      if (errorCode !== undefined) {
+        digital.errorCode = errorCode;
+      }
+      capture.responses.digital = JSON.stringify(digital);
+      expect(extract(capture)).toEqual(expected);
+    },
+  );
+
+  it.each(["0.0", "0e0", "-0"])(
+    "accepts numeric zero status lexeme %s without changing source money",
+    (lexeme) => {
+      const capture = baseline("card-month-approvals");
+      const digital = JSON.parse(capture.responses.digital!) as Row;
+      digital.errorCode = 0;
+      capture.responses.digital = JSON.stringify(digital);
+      const expected = extract(capture);
+      const original = capture.responses.digital;
+      capture.responses.digital = capture.responses.digital.replace(
+        '"errorCode":0',
+        `"errorCode":${lexeme}`,
+      );
+      expect(capture.responses.digital).not.toBe(original);
+      const root = parse(capture.responses.digital) as Row;
+      const rootCode = isLosslessNumber(root.errorCode)
+        ? root.errorCode
+        : undefined;
+      expect(rootCode?.value).toBe(lexeme);
+      expect(extract(capture)).toEqual(expected);
+    },
+  );
+
+  it.each([1, 13, 91, "1", "13", "unknown", "00", " 0 ", false])(
+    "rejects imported failed DigitalV3 facts with root errorCode %s while retaining successful legacy siblings",
+    (errorCode) => {
+      for (const keepLegacy of [true, false]) {
+        const capture = baseline("card-month-approvals");
+        if (!keepLegacy) {
+          delete capture.responses.legacy;
+        }
+        const digital = JSON.parse(capture.responses.digital!) as Row;
+        digital.errorCode = errorCode;
+        capture.responses.digital = JSON.stringify(digital);
+        const withoutDigital = structuredClone(capture);
+        delete withoutDigital.responses.digital;
+        const result = extract(capture);
+        expect(result.transactions).toEqual(
+          extract(withoutDigital).transactions,
+        );
+        expect(
+          result.transactions
+            .flatMap((row) => row.details.sourceRefs)
+            .every(({ path }) => !path.startsWith("$.responses.digital")),
+        ).toBe(true);
+        expect(result.warnings).toContain("invalid_digital_response");
+        expect(result.partitions).toEqual([
+          expect.objectContaining({
+            status: "pending",
+            success: false,
+            comparable: false,
+          }),
+          expect.objectContaining({
+            status: "posted",
+            success: false,
+            comparable: false,
+          }),
+        ]);
+        if (!keepLegacy) {
+          expect(result.transactions).toEqual([]);
+        }
+      }
+    },
+  );
+
+  it.each(["0", 1, "1", 13, "13", 91, "unknown"])(
+    "retains imported approval archives verbatim with root errorCode %s",
+    async (errorCode) => {
+      const capture = baseline("card-month-approvals");
+      const digital = JSON.parse(capture.responses.digital!) as Row;
+      digital.errorCode = errorCode;
+      capture.responses.digital = ` \n${JSON.stringify(digital, null, 2)}\n`;
+      const source = serializeIsracardCapture(capture);
+      const db = await openDatabase(":memory:");
+      try {
+        await db.ensureConnection({
+          id: "synthetic-isracard",
+          provider: "isracard",
+        });
+        const result = await ingestCapture(db, capture, 1);
+        if (errorCode === "0") {
+          expect(result.status).toBe("completed");
+        } else {
+          expect(result.status).not.toBe("completed");
+        }
+        const [run] = await db.orm.select().from(syncRuns).all();
+        expect(run!.snapshot.responses[0]!.responseText).toBe(source);
+        const archived = JSON.parse(
+          run!.snapshot.responses[0]!.responseText,
+        ) as IsracardCapture;
+        expect(archived.responses.digital).toBe(capture.responses.digital);
+        expect(run!.coverage).toContainEqual(
+          expect.objectContaining({
+            status: "pending",
+            success: errorCode === "0",
+            comparable: errorCode === "0",
+          }),
+        );
+        expect(await db.listTransactions({ status: "pending" })).toHaveLength(
+          errorCode === "0" ? 2 : 0,
+        );
+      } finally {
+        await db.close();
+      }
+    },
+  );
 
   it("preserves valid DigitalV3 rows if the legacy response fails or cannot bind", () => {
     for (const failure of [

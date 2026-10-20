@@ -1,13 +1,13 @@
 import type { InternalStore } from "../../src/application/financial-store.js";
 import type { TransactionInput } from "../../src/domain/model.js";
 import type { SourceAdapter } from "../../src/domain/source-adapter.js";
-import { postingEvidence } from "./posting-evidence.js";
+import { compatibleCalPostingGroups } from "../../src/providers/cal/posting-evidence.js";
 import { row, synthetic } from "./storage-harness.js";
 
 export const postingAdapter: SourceAdapter = {
   ...synthetic,
   automaticPosting: {
-    evidence: postingEvidence,
+    compatibleGroups: compatibleCalPostingGroups,
     pendingAmountBasis: "authorization",
     postedAmountBasis: "purchase_commitment",
   },
@@ -20,6 +20,20 @@ export const postingAdapter: SourceAdapter = {
       row.details.sourceRefs = [
         { runId: context.runId, path: `rows[${index}]` },
       ];
+      row.details.provider.cal = {
+        rows: [
+          {
+            cardUniqueID: row.cardKey,
+            merchantName: row.merchantName,
+            internationalBranchID: row.merchantCategoryCode ?? "5411",
+            trnTypeCode: row.kind === "refund" ? "6" : "5",
+            transCardPresentInd: false,
+            walletTranInd: "0",
+            numberOfPayments: 0,
+            merchantId: row.merchantProviderId,
+          },
+        ],
+      };
     });
     return result;
   },

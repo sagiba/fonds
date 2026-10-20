@@ -11,6 +11,7 @@ import {
 import { automaticPostingPairs } from "../../../src/domain/plans/auto-posting.js";
 import type { Transaction } from "../../../src/domain/records.js";
 import { calAdapter } from "../../../src/providers/cal/adapter.js";
+import { calPostingEvidence } from "../../../src/providers/cal/posting-evidence.js";
 
 const capability = calAdapter.automaticPosting!;
 const context = { accountKey: "synthetic", runId: "synthetic" };
@@ -56,10 +57,173 @@ function retained(
 }
 
 describe("CAL automatic posting evidence", () => {
+  function compatible(pendingRows: JsonObject[], postedRows: JsonObject[]) {
+    return capability.compatibleGroups(
+      pendingRows.map((row) => retained("pending", [row])),
+      postedRows.map((row) => retained("posted", [row])),
+    );
+  }
+
+  it.each([
+    ["PAYDEMO *FIXTURE MEDIA Testburg NLD", "PAYDEMO *FIXTURE MEDIA"],
+    ["סופר דוגמה ובניו בעמ", "סופר דוגמה ובניו"],
+    ['סופר דוגמה בע"מ', 'סופר דוגמה בע"מ'],
+    ["Cafe\u0301  FIXTURE\u00a0 Testburg", "Café\tFIXTURE"],
+    ["  Café\u2003FIXTURE  ", "Café FIXTURE"],
+    ["SYNTHO", "SYNTHO"],
+  ])("accepts conservative names %s → %s", (pendingName, postedName) => {
+    expect(
+      compatible(
+        [{ ...source("pending"), merchantName: pendingName }],
+        [{ ...source("posted"), merchantName: postedName }],
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    ["SYNTHOR SHOP", "SYNTHO"],
+    ["FIXTURE MEDIAHOUSE CITY", "FIXTURE MEDIA"],
+    ["SYNTHO SHOP", "SYNTHO"],
+    ["FIXTURE * CITY", "FIXTURE *"],
+    ["FIXTURE MEDIA", "FIXTURE MEDIA CITY"],
+    ['סופר דוגמה בע"מ', "סופר דוגמה בעמ"],
+    ["סופר דוגמה בע״מ", 'סופר דוגמה בע"מ'],
+    ["סופר דוגמה בע׳מ", "סופר דוגמה בעמ"],
+    ["PAYDEMO *FIXTURE MEDIA", "PAYDEMO FIXTURE MEDIA"],
+    ["Fixture MEDIA", "FIXTURE MEDIA"],
+    ["ＦＩＸＴＵＲＥ MEDIA", "FIXTURE MEDIA"],
+    ["", ""],
+    [" \u00a0 ", " "],
+    ["***", "***"],
+  ])("rejects incompatible names %s → %s", (pendingName, postedName) => {
+    expect(
+      compatible(
+        [{ ...source("pending"), merchantName: pendingName }],
+        [{ ...source("posted"), merchantName: postedName }],
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["internationalBranchID", "5999"],
+    ["transactionTypeCode", "9"],
+    ["transCardPresentInd", true],
+    ["tokenInd", "3"],
+    ["numOfPayments", 1],
+  ] as const)(
+    "rejects paired source discriminator mismatch: %s",
+    (field, value) => {
+      expect(
+        compatible(
+          [source("pending")],
+          [{ ...source("posted"), [field]: value }],
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it.each([
+    ["isAbroadApproval", "isAbroadTransaction", false, true],
+    ["merchantId", "merchantId", "merchant-a", "merchant-b"],
+  ] as const)(
+    "compares optional %s only when both known",
+    (pendingField, postedField, left, right) => {
+      const pending = { ...source("pending"), [pendingField]: left };
+      const posted = { ...source("posted"), [postedField]: right };
+      expect(compatible([pending], [posted])).toBe(false);
+      posted[postedField] = null;
+      expect(compatible([pending], [posted])).toBe(true);
+      pending[pendingField] = null;
+      posted[postedField] = right;
+      expect(compatible([pending], [posted])).toBe(true);
+      pending[pendingField] = left;
+      posted[postedField] = left;
+      expect(compatible([pending], [posted])).toBe(true);
+    },
+  );
+
+  it.each(["pending", "posted"] as const)(
+    "rejects heterogeneous %s twins, including optional presence",
+    (side) => {
+      for (const fields of [
+        { merchantName: "Different shop" },
+        { internationalBranchID: "5999" },
+        { trnTypeCode: "9", transactionTypeCode: "9" },
+        { transCardPresentInd: true },
+        { walletTranInd: "3", tokenInd: "3" },
+        { numberOfPayments: 1, numOfPayments: 1 },
+        { isAbroadApproval: true, isAbroadTransaction: true },
+        { merchantId: "known" },
+      ]) {
+        const pending = [source("pending"), source("pending")];
+        const posted = [source("posted"), source("posted")];
+        (side === "pending" ? pending : posted)[1] = {
+          ...source(side),
+          ...fields,
+        };
+        expect(compatible(pending, posted), JSON.stringify(fields)).toBe(false);
+      }
+    },
+  );
+
+  it("retains homogeneous twins while rejecting different names sharing a posted prefix", () => {
+    const posted = [source("posted"), source("posted")];
+    expect(compatible([source("pending"), source("pending")], posted)).toBe(
+      true,
+    );
+    expect(
+      compatible(
+        [
+          { ...source("pending"), merchantName: "FIXTURE MEDIA Testburg" },
+          { ...source("pending"), merchantName: "FIXTURE MEDIA NLD" },
+        ],
+        posted,
+      ),
+    ).toBe(false);
+  });
+
+  it("is invariant under source order for normalized twins and heterogeneous blockers", () => {
+    const pending = [
+      { ...source("pending"), merchantName: "Cafe\u0301  FIXTURE\u00a0CITY" },
+      { ...source("pending"), merchantName: "Café FIXTURE CITY" },
+    ];
+    const posted = [
+      { ...source("posted"), merchantName: "Café\tFIXTURE" },
+      { ...source("posted"), merchantName: "  Café FIXTURE " },
+    ];
+    for (const left of [pending, [...pending].reverse()]) {
+      for (const right of [posted, [...posted].reverse()]) {
+        expect(compatible(left, right)).toBe(true);
+        const blocked = right.map((row, index) => ({
+          ...row,
+          ...(index === 0 ? { merchantId: "known" } : {}),
+        }));
+        expect(compatible(left, blocked)).toBe(false);
+        expect(compatible(left, [...blocked].reverse())).toBe(false);
+      }
+    }
+  });
+
+  it.each(["pending", "posted"] as const)(
+    "rejects unsupported %s kinds and interpretation issues",
+    (side) => {
+      const pending = retained("pending");
+      const posted = retained("posted");
+      const changed = side === "pending" ? pending : posted;
+      changed.kind = "unknown";
+      expect(capability.compatibleGroups([pending], [posted])).toBe(false);
+      changed.kind = "purchase";
+      changed.details.issues = ["unsupported_direction"];
+      expect(capability.compatibleGroups([pending], [posted])).toBe(false);
+      changed.details.issues = ["possible_pending_posted_match"];
+      expect(capability.compatibleGroups([pending], [posted])).toBe(true);
+    },
+  );
+
   it.each(["pending", "posted"] as const)(
     "decodes %s aliases with numeric-string tolerance and opaque zero token",
     (status) => {
-      expect(capability.evidence(retained(status))).toEqual({
+      expect(calPostingEvidence(retained(status))).toEqual({
         merchantName: "FIXTURE MEDIA",
         categoryCode: "5411",
         sourceTypeCode: "5",
@@ -75,17 +239,17 @@ describe("CAL automatic posting evidence", () => {
   it("accepts agreeing aliases and multiple observations without selecting an arbitrary row", () => {
     const raw = { ...source("pending"), ...source("posted") };
     expect(
-      capability.evidence(
+      calPostingEvidence(
         retained("pending", [raw, { ...raw, walletTranInd: "0" }]),
       ),
     ).not.toBeNull();
     expect(
-      capability.evidence(
+      calPostingEvidence(
         retained("pending", [raw, { ...raw, transCardPresentInd: true }]),
       ),
     ).toBeNull();
     expect(
-      capability.evidence(
+      calPostingEvidence(
         retained("pending", [raw, { ...raw, merchantId: "known" }]),
       ),
     ).toBeNull();
@@ -102,9 +266,9 @@ describe("CAL automatic posting evidence", () => {
   ])("rejects missing/null required raw %s", (field) => {
     const raw = source("pending");
     raw[field] = null;
-    expect(capability.evidence(retained("pending", [raw]))).toBeNull();
+    expect(calPostingEvidence(retained("pending", [raw]))).toBeNull();
     delete raw[field];
-    expect(capability.evidence(retained("pending", [raw]))).toBeNull();
+    expect(calPostingEvidence(retained("pending", [raw]))).toBeNull();
   });
 
   it.each([
@@ -130,7 +294,7 @@ describe("CAL automatic posting evidence", () => {
     { numberOfPayments: 2 },
   ])("rejects malformed/conflicting evidence %j without throwing", (fields) => {
     expect(
-      capability.evidence(
+      calPostingEvidence(
         retained("pending", [{ ...source("pending"), ...fields }]),
       ),
     ).toBeNull();
@@ -141,9 +305,9 @@ describe("CAL automatic posting evidence", () => {
       source("pending"),
       { ...source("pending"), cardUniqueID: "OTHER-CARD" },
     ]);
-    expect(capability.evidence(row)).toBeNull();
+    expect(calPostingEvidence(row)).toBeNull();
     expect(
-      capability.evidence(
+      calPostingEvidence(
         retained("pending", [source("pending"), source("pending")]),
       ),
     ).not.toBeNull();
@@ -151,12 +315,12 @@ describe("CAL automatic posting evidence", () => {
 
   it("excludes installment type even with raw zero payments", () => {
     expect(
-      capability.evidence(
+      calPostingEvidence(
         retained("pending", [{ ...source("pending"), trnTypeCode: 8 }]),
       ),
     ).toBeNull();
     expect(
-      capability.evidence(
+      calPostingEvidence(
         retained("posted", [{ ...source("posted"), transactionTypeCode: "8" }]),
       ),
     ).toBeNull();
@@ -165,13 +329,13 @@ describe("CAL automatic posting evidence", () => {
   it("preserves optional absence, false and merchant ID zero", () => {
     const raw = source("pending");
     delete raw.isAbroadApproval;
-    expect(capability.evidence(retained("pending", [raw]))).toMatchObject({
+    expect(calPostingEvidence(retained("pending", [raw]))).toMatchObject({
       abroad: null,
       merchantProviderId: null,
     });
     raw.isAbroadApproval = null;
     raw.merchantId = 0;
-    expect(capability.evidence(retained("pending", [raw]))).toMatchObject({
+    expect(calPostingEvidence(retained("pending", [raw]))).toMatchObject({
       abroad: null,
       merchantProviderId: "0",
     });
@@ -180,7 +344,7 @@ describe("CAL automatic posting evidence", () => {
   it.each([[], [null], [42], [{}]].map((rows) => ({ rows })))(
     "rejects malformed retained observations $rows",
     ({ rows }) => {
-      expect(capability.evidence(retained("pending", rows))).toBeNull();
+      expect(calPostingEvidence(retained("pending", rows))).toBeNull();
     },
   );
 
@@ -193,9 +357,9 @@ describe("CAL automatic posting evidence", () => {
     row.merchantName = "FIXTURE MEDIA";
     row.merchantCategoryCode = "5411";
     row.installmentCount = null;
-    expect(capability.evidence(row)).toBeNull();
+    expect(calPostingEvidence(row)).toBeNull();
     row.details.provider = {};
-    expect(capability.evidence(row)).toBeNull();
+    expect(calPostingEvidence(row)).toBeNull();
   });
 
   it.each([5, 9, 6])(

@@ -403,6 +403,9 @@ describe("Isracard installment plans", () => {
     )!;
     expect(purchase.amountMinor).toBeNull();
     expect(purchase.details.issues).toContain("unresolved_amount");
+    expect(purchase.details.provider.isracard).toMatchObject({
+      monetaryEvidence: { statedTotals: [null, ["ILS", 10000]] },
+    });
 
     const counts = fixture();
     updateDigital(counts, (rows) => {
@@ -443,6 +446,39 @@ describe("Isracard installment plans", () => {
       );
       expect(purchase.amountMinor).toBe(-10000);
     }
+  });
+
+  it("leaves a plan total unknown when equal numeric totals name different currencies", () => {
+    const capture = fixture();
+    updateDigital(capture, (rows) => {
+      rows.push({
+        ...rows[0],
+        seqVoucherNumber: "700000102",
+        currentInstallmentNum: 2,
+        moreInfo: " תשלום 2 מ 3 ",
+        originalCurrencyIso: "USD",
+      });
+    });
+    const result = extract(capture);
+    const purchase = result.transactions.find(
+      (row) => row.sourceKey === planKey,
+    )!;
+    expect(purchase).toMatchObject({ amountMinor: null, currency: null });
+    expect(purchase.details.issues).toContain("conflicting_installment_total");
+    expect(purchase.details.provider.isracard).toMatchObject({
+      monetaryEvidence: {
+        statedTotals: [
+          ["ILS", 10000],
+          ["ILS", 10000],
+          ["USD", 10000],
+        ],
+      },
+    });
+    expect(
+      result.transactions.find(
+        (row) => row.sourceKey === paymentKey("2040-03-15", "700000102"),
+      )?.details.issues,
+    ).toContain("unverified_converted_installments");
   });
 
   it.each([
@@ -957,10 +993,25 @@ describe("Isracard installment plans", () => {
         originalAmount: 101,
       });
     });
-    expect(
-      extract(total).transactions.find((row) => row.sourceKey === planKey)
-        ?.amountMinor,
-    ).toBeNull();
+    const purchase = extract(total).transactions.find(
+      (row) => row.sourceKey === planKey,
+    )!;
+    expect(purchase.amountMinor).toBeNull();
+    expect(purchase.details.provider.isracard).toMatchObject({
+      monetaryEvidence: {
+        statedTotals: [
+          ["ILS", 10000],
+          ["ILS", 10000],
+          ["ILS", 10100],
+        ],
+      },
+    });
+    expect(purchase.details.sourceRefs.map(({ path }) => path)).toEqual([
+      "$.responses.digital.data.israelAbroadVouchers.vouchers.israelAbroadVouchersList[0]",
+      "$.responses.legacy.CardsTransactionsListBean.Index0.CurrentCardTransactions[0].txnIsrael[0]",
+      "$.responses.digital.data.israelAbroadVouchers.vouchers.israelAbroadVouchersList[2]",
+    ]);
+    expect(purchase.details.provider.isracard!.rows).toHaveLength(2);
     const count = fixture();
     updateDigital(count, (rows) => {
       rows.push({

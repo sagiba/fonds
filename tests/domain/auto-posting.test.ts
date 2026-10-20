@@ -14,17 +14,24 @@ import {
 } from "../../src/domain/plans/auto-posting.js";
 import { planUnlinkPosting } from "../../src/domain/plans/lifecycle.js";
 import { FinancialPlan } from "../../src/domain/plans/state.js";
-import { extractRun, planRun } from "../../src/domain/plans/sync.js";
-import type { Run, Transaction } from "../../src/domain/records.js";
+import {
+  extractRun,
+  planRun,
+  type PriorRun,
+} from "../../src/domain/plans/sync.js";
+import type {
+  CollectionScope,
+  Run,
+  Transaction,
+} from "../../src/domain/records.js";
 import type {
   AutomaticPostingCapability,
-  PostingMatchEvidence,
   SourceAdapter,
 } from "../../src/domain/source-adapter.js";
-import { postingEvidence } from "../helpers/posting-evidence.js";
+import { compatiblePostingGroups } from "../helpers/posting-evidence.js";
 
 const capability: AutomaticPostingCapability = {
-  evidence: postingEvidence,
+  compatibleGroups: compatiblePostingGroups,
   pendingAmountBasis: "authorization",
   postedAmountBasis: "purchase_commitment",
 };
@@ -126,7 +133,7 @@ const fakeAdapter: SourceAdapter = {
   provider: "FAKE",
   parserVersion: "fake-v1",
   automaticPosting: {
-    evidence: postingEvidence,
+    compatibleGroups: compatiblePostingGroups,
     pendingAmountBasis: "authorization",
     postedAmountBasis: "booked_entry",
   },
@@ -166,12 +173,19 @@ function capturePlan(
   inputs: TransactionInput[],
   day = 3,
   automatic = true,
+  options: {
+    adapter?: Partial<SourceAdapter>;
+    priorRuns?: PriorRun[];
+    scope?: CollectionScope;
+    removals?: { transactionId: string; createdAt: string }[];
+  } = {},
 ) {
   const { automaticPosting: _capability, ...manualAdapter } = fakeAdapter;
   const adapter: SourceAdapter = {
     ...manualAdapter,
     ...(automatic ? { automaticPosting: capability } : {}),
     pendingPostingCandidates: true,
+    ...options.adapter,
   };
   const plan = new FinancialPlan({
     connection: {
@@ -183,8 +197,8 @@ function capturePlan(
     },
     rows,
     annotations: [],
-    priorRuns: [],
-    removals: [],
+    priorRuns: options.priorRuns ?? [],
+    removals: options.removals ?? [],
     catalog,
   });
   const run: Run = {
@@ -205,6 +219,7 @@ function capturePlan(
           endpoint: "synthetic:fake/recent",
           capturedAt: `2040-07-0${day}T00:00:00Z`,
           responseText: JSON.stringify(inputs),
+          ...(options.scope ? { scope: options.scope } : {}),
         },
       ],
     },
@@ -238,200 +253,6 @@ describe("automatic posting candidate graph", () => {
     const authorization = pending("pending");
     const posted = postedFacts("posted", { merchantName: "Other merchant" });
     expect(pairs([authorization], [posted]).size).toBe(0);
-  });
-
-  it.each([
-    ["PAYDEMO *FIXTURE MEDIA Testburg NLD", "PAYDEMO *FIXTURE MEDIA"],
-    ["סופר דוגמה ובניו בעמ", "סופר דוגמה ובניו"],
-    ['סופר דוגמה בע"מ', 'סופר דוגמה בע"מ'],
-    ["Cafe\u0301  FIXTURE\u00a0 Testburg", "Café\tFIXTURE"],
-    ["  Café\u2003FIXTURE  ", "Café FIXTURE"],
-    ["SYNTHO", "SYNTHO"],
-  ])("accepts conservative names %s → %s", (pendingName, postedName) => {
-    expect(
-      pairs(
-        [pending("pending", { merchantName: pendingName })],
-        [row("posted", { merchantName: postedName })],
-      ).size,
-    ).toBe(1);
-  });
-
-  it.each([
-    ["SYNTHOR SHOP", "SYNTHO"],
-    ["FIXTURE MEDIAHOUSE CITY", "FIXTURE MEDIA"],
-    ["SYNTHO SHOP", "SYNTHO"],
-    ["FIXTURE * CITY", "FIXTURE *"],
-    ["FIXTURE MEDIA", "FIXTURE MEDIA CITY"],
-    ['סופר דוגמה בע"מ', "סופר דוגמה בעמ"],
-    ["סופר דוגמה בע״מ", 'סופר דוגמה בע"מ'],
-    ["סופר דוגמה בע׳מ", "סופר דוגמה בעמ"],
-    ["PAYDEMO *FIXTURE MEDIA", "PAYDEMO FIXTURE MEDIA"],
-    ["Fixture MEDIA", "FIXTURE MEDIA"],
-    ["ＦＩＸＴＵＲＥ MEDIA", "FIXTURE MEDIA"],
-    ["", ""],
-    [" \u00a0 ", " "],
-    ["***", "***"],
-  ])("rejects incompatible names %s → %s", (pendingName, postedName) => {
-    expect(
-      pairs(
-        [pending("pending", { merchantName: pendingName })],
-        [row("posted", { merchantName: postedName })],
-      ).size,
-    ).toBe(0);
-  });
-
-  function evidencePairs(
-    pendingEvidence: PostingMatchEvidence | null,
-    postedEvidence: PostingMatchEvidence | null,
-  ) {
-    const authorization = pending("pending");
-    const posted = postedFacts("posted");
-    return automaticPostingPairs(
-      [authorization],
-      [posted],
-      new Map([[authorization, authorization]]),
-      {
-        ...capability,
-        evidence: (row) =>
-          row.status === "pending" ? pendingEvidence : postedEvidence,
-      },
-    ).pairs;
-  }
-
-  const evidence = postingEvidence(row("evidence"));
-  it.each([
-    ["categoryCode", "5999"],
-    ["sourceTypeCode", "9"],
-    ["cardPresent", true],
-    ["tokenCode", "3"],
-    ["paymentCount", 1],
-  ] as const)("rejects required evidence mismatch: %s", (field, value) => {
-    expect(evidencePairs(evidence, { ...evidence, [field]: value }).size).toBe(
-      0,
-    );
-  });
-
-  it.each([
-    "merchantName",
-    "categoryCode",
-    "sourceTypeCode",
-    "cardPresent",
-    "tokenCode",
-    "paymentCount",
-  ] as const)(
-    "rejects required evidence absence on either or both sides: %s",
-    (field) => {
-      const missing = { ...evidence, [field]: null };
-      expect(evidencePairs(missing, evidence).size).toBe(0);
-      expect(evidencePairs(evidence, missing).size).toBe(0);
-      expect(evidencePairs(missing, missing).size).toBe(0);
-    },
-  );
-
-  it("rejects unavailable adapter evidence", () => {
-    expect(evidencePairs(null, evidence).size).toBe(0);
-    expect(evidencePairs(evidence, null).size).toBe(0);
-  });
-
-  it.each([
-    ["abroad", false, true],
-    ["merchantProviderId", "merchant-a", "merchant-b"],
-  ] as const)(
-    "compares optional %s only when both known",
-    (field, left, right) => {
-      expect(
-        evidencePairs(
-          { ...evidence, [field]: left },
-          { ...evidence, [field]: right },
-        ).size,
-      ).toBe(0);
-      expect(evidencePairs({ ...evidence, [field]: left }, evidence).size).toBe(
-        1,
-      );
-      expect(
-        evidencePairs(evidence, { ...evidence, [field]: right }).size,
-      ).toBe(1);
-      expect(
-        evidencePairs(
-          { ...evidence, [field]: left },
-          { ...evidence, [field]: left },
-        ).size,
-      ).toBe(1);
-    },
-  );
-
-  it("accepts known false and zero evidence", () => {
-    expect(evidencePairs(evidence, evidence).size).toBe(1);
-  });
-
-  it.each(["pending", "posted"] as const)(
-    "blocks heterogeneous %s twins even with compatible assigned pairs",
-    (side) => {
-      const pendingRows = [pending("p-a"), pending("p-b")];
-      const postedRows = [postedFacts("s-a"), postedFacts("s-b")];
-      (side === "pending" ? pendingRows : postedRows)[1]!.merchantName =
-        "Different shop";
-      expect(pairs(pendingRows, postedRows).size).toBe(0);
-    },
-  );
-
-  it.each(["pending", "posted"] as const)(
-    "requires identical optional presence within %s twins",
-    (side) => {
-      const pendingRows = [pending("p-a"), pending("p-b")];
-      const postedRows = [postedFacts("s-a"), postedFacts("s-b")];
-      (side === "pending" ? pendingRows : postedRows)[1]!.merchantProviderId =
-        "known";
-      expect(pairs(pendingRows, postedRows).size).toBe(0);
-    },
-  );
-
-  it.each(["pending", "posted"] as const)(
-    "requires complete evidence homogeneity within %s twins",
-    (side) => {
-      for (const [field, value] of [
-        ["categoryCode", "5999"],
-        ["sourceTypeCode", "9"],
-        ["cardPresent", true],
-        ["tokenCode", "3"],
-        ["paymentCount", 1],
-        ["abroad", true],
-      ] as const) {
-        const pendingRows = [pending("p-a"), pending("p-b")];
-        const postedRows = [postedFacts("s-a"), postedFacts("s-b")];
-        const changed = (side === "pending" ? pendingRows : postedRows)[1]!;
-        expect(
-          automaticPostingPairs(
-            pendingRows,
-            postedRows,
-            new Map(pendingRows.map((row) => [row, row])),
-            {
-              ...capability,
-              evidence: (row) => ({
-                ...evidence,
-                ...(row === changed ? { [field]: value } : {}),
-              }),
-            },
-          ).pairs.size,
-          field,
-        ).toBe(0);
-      }
-    },
-  );
-
-  it("blocks distinct pending names collapsing to one posted prefix", () => {
-    expect(
-      pairs(
-        [
-          pending("p-a", { merchantName: "FIXTURE MEDIA Testburg" }),
-          pending("p-b", { merchantName: "FIXTURE MEDIA NLD" }),
-        ],
-        [
-          row("s-a", { merchantName: "FIXTURE MEDIA" }),
-          row("s-b", { merchantName: "FIXTURE MEDIA" }),
-        ],
-      ).size,
-    ).toBe(0);
   });
 
   it("does not extract matching subgroups around unrelated shop competitors", () => {
@@ -608,6 +429,89 @@ describe("automatic posting candidate graph", () => {
     expect(
       next.transaction("pending")!.details.pendingPostingCandidates,
     ).toHaveLength(2);
+  });
+
+  it.each(["pending", "posted"] as const)(
+    "keeps current known %s corrections in the complete candidate component",
+    (status) => {
+      for (const aliased of [false, true]) {
+        const competitor = pending("competitor", {
+          status,
+          amountBasis:
+            status === "pending" ? "authorization" : "purchase_commitment",
+          amountMinor: -200,
+        });
+        const corrected = row(aliased ? "current-competitor" : "competitor", {
+          status,
+          amountBasis: competitor.amountBasis,
+          sourceAliases: aliased ? ["competitor"] : [],
+        });
+        const plan = capturePlan(
+          [pending("pending"), competitor],
+          [corrected, row("posted")],
+        );
+        expect(
+          plan.transaction("pending")!.status,
+          `${status}, alias=${aliased}`,
+        ).toBe("pending");
+        expect(
+          plan.events.some((event) => event.type === "transaction.posted"),
+        ).toBe(false);
+      }
+    },
+  );
+
+  it.each(["pending", "posted"] as const)(
+    "keeps current corrected %s reappearances as blockers after owner removal",
+    (status) => {
+      const competitor = pending("removed", {
+        status,
+        amountBasis:
+          status === "pending" ? "authorization" : "purchase_commitment",
+        amountMinor: -200,
+      });
+      competitor.presence = "removed";
+      competitor.version = 2;
+      const plan = capturePlan(
+        [pending("pending"), competitor],
+        [
+          row("removed", { status, amountBasis: competitor.amountBasis }),
+          row("posted"),
+        ],
+        3,
+        true,
+        {
+          removals: [
+            { transactionId: "removed", createdAt: "2040-07-02T12:00:00Z" },
+          ],
+        },
+      );
+      expect(plan.transaction("pending")!.status).toBe("pending");
+      expect(plan.transaction("removed")!.presence).toBe("seen");
+      expect(
+        plan.events.some((event) => event.type === "transaction.posted"),
+      ).toBe(false);
+    },
+  );
+
+  it("does not revive a linked pending alias as a competing authorization", () => {
+    const linked = capturePlan(
+      [pending("linked", { amountMinor: -200 })],
+      [row("linked-posted", { amountMinor: -200 })],
+    );
+    const plan = capturePlan(
+      [pending("pending"), ...linked.orderedRows()],
+      [pendingInput("linked"), row("posted")],
+      4,
+    );
+    expect(plan.transaction("pending")!.status).toBe("posted");
+    expect(plan.transaction("linked")).toMatchObject({
+      status: "posted",
+      amountMinor: -200,
+    });
+    expect(
+      plan.events.filter((event) => event.type === "transaction.posted"),
+    ).toHaveLength(1);
   });
 
   it("planner keeps a split pending blocker beside a new pair", () => {
@@ -1004,6 +908,268 @@ describe("automatic posting candidate graph", () => {
       "transaction.posted",
       "transaction.linked",
     ]);
+  });
+});
+
+describe("provider-neutral continuation admission and freshness", () => {
+  const scope: CollectionScope = {
+    kind: "recent",
+    month: "2040-07",
+    cardKey: "card",
+  };
+  const partialPosted: SourceAdapter["extract"] = (raw) => {
+    const result = fakeAdapter.extract(raw, {
+      accountKey: "account",
+      runId: "synthetic",
+    });
+    result.partitions.find(
+      (partition) => partition.status === "posted",
+    )!.comparable = false;
+    return result;
+  };
+  const singleton: AutomaticPostingCapability = {
+    pendingAmountBasis: "authorization",
+    postedAmountBasis: "purchase_commitment",
+    compatibleGroups(pending, posted) {
+      return (
+        pending.length === 1 &&
+        posted.length === 1 &&
+        pending[0]!.kind === "unknown" &&
+        posted[0]!.kind === "purchase" &&
+        pending[0]!.merchantName === posted[0]!.merchantName &&
+        [...pending, ...posted].every((row) =>
+          row.details.issues.every(
+            (issue) =>
+              issue === "synthetic_provenance" ||
+              issue === "possible_pending_posted_match",
+          ),
+        )
+      );
+    },
+  };
+  const authorization = () =>
+    pending("pending", {
+      kind: "unknown",
+      details: { ...emptyDetails(), issues: ["synthetic_provenance"] },
+    });
+
+  function prior(
+    id: string,
+    day: number,
+    coverage: {
+      status: "pending" | "posted";
+      success: boolean;
+      comparable: boolean;
+    }[],
+    priorScope?: CollectionScope,
+  ): PriorRun {
+    return {
+      id,
+      status: "completed",
+      startedAt: `2040-07-0${day}T00:00:00Z`,
+      coverage: coverage.map((partition) => ({
+        ...partition,
+        accountKey: "account",
+        resource: "synthetic:fake/recent",
+        ...(priorScope ? { scope: priorScope } : {}),
+      })),
+      snapshot: {
+        responses: [
+          {
+            accountKey: "account",
+            endpoint: "synthetic:fake/recent",
+            capturedAt: `2040-07-0${day}T00:00:00Z`,
+            ...(priorScope ? { scope: priorScope } : {}),
+          },
+        ],
+      },
+    };
+  }
+
+  it("allows an adapter-evidenced unknown pending kind and informational issue with positive noncomparable posting", () => {
+    const plan = capturePlan([authorization()], [row("posted")], 3, true, {
+      adapter: { automaticPosting: singleton, extract: partialPosted },
+      scope,
+    });
+    expect(plan.transaction("pending")).toMatchObject({
+      status: "posted",
+      kind: "purchase",
+    });
+    expect(plan.transaction("pending")!.details.postingLink!.pending.kind).toBe(
+      "unknown",
+    );
+    expect(
+      plan.events.filter((event) => event.type === "transaction.posted"),
+    ).toHaveLength(1);
+  });
+
+  it("does not compare previously posted absence when admitting positive posting evidence", () => {
+    const old = {
+      ...pending("unrelated", {
+        status: "posted",
+        amountBasis: "purchase_commitment",
+        amountMinor: -999,
+      }),
+      id: "old",
+    };
+    const plan = capturePlan([authorization(), old], [row("posted")], 3, true, {
+      adapter: { automaticPosting: singleton, extract: partialPosted },
+      scope,
+    });
+    expect(plan.transaction("pending")!.status).toBe("posted");
+    expect(plan.transaction("old")!.presence).toBe("seen");
+  });
+
+  it("cannot widen native identity, amount roles or billed-line admission through an accepting callback", () => {
+    for (const fields of [
+      { identityStrength: "weak" as const },
+      { amountBasis: "unknown" as const },
+      { amountMinor: null, currency: null },
+      { amountMinor: 100 },
+      { installmentCount: 2 },
+      { installmentNumber: 1 },
+      { details: { ...emptyDetails(), rejectedPostingKeys: ["another"] } },
+    ]) {
+      const pendingRow = authorization();
+      Object.assign(pendingRow, fields);
+      expect(
+        automaticPostingPairs(
+          [pendingRow],
+          [postedFacts("posted")],
+          new Map([[pendingRow, pendingRow]]),
+          { ...singleton, compatibleGroups: () => true },
+        ).pairs.size,
+      ).toBe(0);
+    }
+  });
+
+  it("leaves equal-size twins to an adapter that requires singleton evidence", () => {
+    const left = [
+      authorization(),
+      { ...authorization(), id: "second", sourceKey: "second" },
+    ];
+    expect(
+      automaticPostingPairs(
+        left,
+        [postedFacts("posted-a"), postedFacts("posted-b")],
+        new Map(left.map((row) => [row, row])),
+        singleton,
+      ).pairs.size,
+    ).toBe(0);
+  });
+
+  it.each([3, 4])(
+    "rejects positive posted evidence after successful equal/newer noncomparable coverage at day %i",
+    (day) => {
+      const plan = capturePlan([authorization()], [row("posted")], 3, true, {
+        adapter: { automaticPosting: singleton, extract: partialPosted },
+        scope,
+        priorRuns: [
+          prior(
+            "later",
+            day,
+            [{ status: "posted", success: true, comparable: false }],
+            scope,
+          ),
+        ],
+      });
+      expect(
+        plan.events.some((event) => event.type === "transaction.posted"),
+      ).toBe(false);
+    },
+  );
+
+  it.each([3, 4])(
+    "rejects equal/newer unscoped successful posted coverage at day %i",
+    (day) => {
+      const plan = capturePlan([authorization()], [row("posted")], 3, true, {
+        adapter: { automaticPosting: singleton, extract: partialPosted },
+        priorRuns: [
+          prior("later", day, [
+            { status: "posted", success: true, comparable: false },
+          ]),
+        ],
+      });
+      expect(
+        plan.events.some((event) => event.type === "transaction.posted"),
+      ).toBe(false);
+    },
+  );
+
+  it.each([3, 4])(
+    "rejects equal/newer comparable pending snapshots at day %i",
+    (day) => {
+      const plan = capturePlan([authorization()], [row("posted")], 3, true, {
+        adapter: { automaticPosting: singleton, extract: partialPosted },
+        scope,
+        priorRuns: [
+          prior(
+            "later",
+            day,
+            [{ status: "pending", success: true, comparable: true }],
+            scope,
+          ),
+        ],
+      });
+      expect(
+        plan.events.some((event) => event.type === "transaction.posted"),
+      ).toBe(false);
+    },
+  );
+
+  it("does not treat an unscoped historical pending observation as a disappearing current authorization", () => {
+    const plan = capturePlan([authorization()], [row("posted")], 3, true, {
+      adapter: { automaticPosting: singleton },
+      priorRuns: [
+        prior("first", 2, [
+          { status: "pending", success: true, comparable: false },
+        ]),
+      ],
+    });
+    expect(
+      plan.events.some((event) => event.type === "transaction.posted"),
+    ).toBe(false);
+  });
+
+  it("imports initial pending and posted rows separately even when the provider accepts their component", () => {
+    const plan = capturePlan(
+      [],
+      [pendingInput("pending", { kind: "unknown" }), row("posted")],
+      3,
+      true,
+      {
+        adapter: { automaticPosting: singleton, extract: partialPosted },
+        scope,
+      },
+    );
+    expect(
+      plan.events.filter((event) => event.type === "transaction.imported"),
+    ).toHaveLength(2);
+    expect(
+      plan.events.some((event) => event.type === "transaction.posted"),
+    ).toBe(false);
+  });
+
+  it("does not infer disappearance or posting across a billing-month rollover", () => {
+    const plan = capturePlan([authorization()], [row("posted")], 3, true, {
+      adapter: { automaticPosting: singleton, extract: partialPosted },
+      scope: { ...scope, month: "2040-08" },
+      priorRuns: [
+        prior(
+          "first",
+          2,
+          [{ status: "pending", success: true, comparable: true }],
+          scope,
+        ),
+      ],
+    });
+    expect(plan.transaction("pending")).toMatchObject({
+      status: "pending",
+      presence: "seen",
+    });
+    expect(
+      plan.events.some((event) => event.type === "transaction.posted"),
+    ).toBe(false);
   });
 });
 

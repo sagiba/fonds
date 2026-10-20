@@ -18,6 +18,7 @@ import {
   isracardCaptureSchema,
   isracardCardKey,
 } from "./capture.js";
+import { isIsracardDigitalSuccess } from "./transport.js";
 
 type SourceRow = Record<string, unknown>;
 
@@ -194,7 +195,7 @@ function decode(responseText: string | undefined): unknown {
 }
 
 function digitalData(value: unknown): SourceRow | null {
-  return object(value) && value.isSuccess === true && object(value.data)
+  return object(value) && isIsracardDigitalSuccess(value) && object(value.data)
     ? value.data
     : null;
 }
@@ -332,6 +333,22 @@ function exactKeys(value: unknown, keys: string): value is SourceRow {
   return object(value) && Object.keys(value).sort().join() === keys;
 }
 
+function approvalContainer(
+  value: unknown,
+): value is SourceRow & { approvedTransactions: unknown[] } {
+  return (
+    exactKeys(value, "approvedTransactions,totalEstimatedAmount") &&
+    Array.isArray(value.approvedTransactions) &&
+    isLosslessNumber(value.totalEstimatedAmount)
+  );
+}
+
+function isracardApprovals(
+  value: unknown,
+): value is SourceRow & { approvedTransactions: SourceRow[] } {
+  return approvalContainer(value) && value.approvedTransactions.every(object);
+}
+
 /**
  * Whether DigitalV3 `currentTransactionsList` has the observed summary shape:
  * per upcoming billing month, a count and total per currency of transactions
@@ -359,6 +376,147 @@ export function isracardPendingSummary(value: unknown): boolean {
         ),
     )
   );
+}
+
+function approvalIdentity(row: SourceRow, accountKey: string): string | null {
+  const location = isLosslessNumber(row.confirmationLocation)
+    ? integer(row.confirmationLocation)
+    : null;
+  const sequence = text(row.seqConfirmationNumber);
+  const timestamp = text(row.confirmationTimeStamp);
+  return location !== null &&
+    sequence !== null &&
+    timestamp !== null &&
+    sequence.trim() !== "" &&
+    timestamp.trim() !== "" &&
+    !/[\u0000-\u001f\u007f]/.test(sequence + timestamp)
+    ? `isracard:pending:${JSON.stringify([accountKey, location, sequence, timestamp])}`
+    : null;
+}
+
+/** The selected Next response owns an authorization snapshot, independently of posted vouchers. */
+function collectApprovals(
+  capture: IsracardCapture,
+  data: SourceRow | null,
+  rawApprovals: unknown,
+  context: ExtractionContext,
+  result: ExtractionResult,
+): void {
+  if (capture.isNextBillingDate !== true && rawApprovals == null) {
+    return;
+  }
+  const accountKey = isracardCardKey(capture.card);
+  const validEnvelope =
+    !result.historical &&
+    capture.isNextBillingDate === true &&
+    exactKeys(data, "approvals,currentTransactionsList,israelAbroadVouchers") &&
+    (data.israelAbroadVouchers === null || object(data.israelAbroadVouchers)) &&
+    (data.currentTransactionsList === null ||
+      isracardPendingSummary(data.currentTransactionsList)) &&
+    (data.approvals === null || approvalContainer(data.approvals));
+  let success = validEnvelope;
+  if (!validEnvelope) {
+    result.warnings.push("unsupported_approvals_preserved_raw");
+  } else if (approvalContainer(data.approvals)) {
+    const groups = new Map<
+      string,
+      { row: SourceRow; index: number; native: boolean }[]
+    >();
+    data.approvals.approvedTransactions.forEach((row, index) => {
+      if (!object(row)) {
+        success = false;
+        return;
+      }
+      const nativeKey = approvalIdentity(row, accountKey);
+      const baseKey =
+        nativeKey ??
+        `isracard:pending:missing-identity:${JSON.stringify([accountKey, sourceDate(row.purchaseDate)])}`;
+      const members = groups.get(baseKey) ?? [];
+      members.push({ row, index, native: nativeKey !== null });
+      groups.set(baseKey, members);
+    });
+    for (const [baseKey, members] of groups) {
+      for (const [occurrence, { row, index, native }] of members.entries()) {
+        const ambiguous = !native || members.length > 1;
+        const purchaseDate = sourceDate(row.purchaseDate);
+        const merchantName = text(row.businessName);
+        const iso = text(row.currencyIso);
+        const currency = iso !== null && CURRENCY_CODE.test(iso) ? iso : null;
+        const stated = isLosslessNumber(row.originalAmount)
+          ? minor(row.originalAmount, currency)
+          : null;
+        const details = emptyDetails();
+        details.issues.push("source_derived_amount_direction");
+        if (ambiguous) {
+          details.issues.push(
+            native ? "ambiguous_source_identity" : "incomplete_source_identity",
+          );
+        }
+        if (purchaseDate === null) {
+          details.issues.push("invalid_source_date");
+        }
+        if (merchantName === null || merchantName.trim() === "") {
+          details.issues.push("invalid_pending_merchant");
+        }
+        if (stated === null) {
+          details.issues.push("invalid_authorization_amount");
+        }
+        if (details.issues.length > 1) {
+          success = false;
+        }
+        details.sourceRefs.push({
+          runId: context.runId,
+          path: `$.responses.digital.data.approvals.approvedTransactions[${index}]`,
+        });
+        details.provider.isracard = {
+          identity: { baseKey, occurrenceCount: members.length },
+          rows: [json(row)],
+          billingMonth: capture.billingMonth,
+          monetaryEvidence: {
+            originalMinor: stated,
+            originalCurrency: currency,
+            convention:
+              "upstream signed originalAmount negated; authorization currency from currencyIso; kind not stated",
+          },
+        };
+        result.transactions.push({
+          sourceScope: accountKey,
+          cardKey: accountKey,
+          sourceKey: ambiguous
+            ? `${baseKey}:occurrence:${occurrence + 1}`
+            : baseKey,
+          sourceAliases: [],
+          identityStrength: ambiguous ? "ambiguous" : "native",
+          status: "pending",
+          description: null,
+          counterpartyName: null,
+          kind: "unknown",
+          merchantName,
+          merchantProviderId: null,
+          merchantCategoryCode: null,
+          transactionDate: purchaseDate,
+          bookingDate: null,
+          billingDate: null,
+          amountMinor: stated === null ? null : stated === 0 ? 0 : -stated,
+          currency: stated === null ? null : currency,
+          amountBasis: "authorization",
+          originalAmountMinor: null,
+          originalCurrency: null,
+          installmentCount: null,
+          details,
+        });
+      }
+    }
+  }
+  result.partitions.push({
+    accountKey,
+    status: "pending",
+    success,
+    comparable: success,
+  });
+  if (!success && validEnvelope) {
+    result.warnings.push("incomplete_pending_partition");
+  }
 }
 
 function collectDigital(
@@ -412,8 +570,10 @@ function collectDigital(
         data,
         "approvals,currentTransactionsList,israelAbroadVouchers",
       ) &&
-      data.approvals === null &&
-      (data.currentTransactionsList === null || pendingSummary)
+      ((data.approvals === null &&
+        (data.currentTransactionsList === null || pendingSummary)) ||
+        (isracardApprovals(data.approvals) &&
+          data.currentTransactionsList === null))
     ) {
       return { rows, success: true };
     }
@@ -597,6 +757,7 @@ function collectLegacy(
           : row.voucherNumberRatz;
         const artifact =
           token(row.dealSumType) === "1" ||
+          (field === "txnIsrael" && token(row.dealSumType) === "T") ||
           /^0+$/.test(token(rawVoucher) ?? "");
         if (field !== "txnInfo") {
           lines.push({ row, foreign, artifact });
@@ -742,21 +903,22 @@ type PlanPayment = {
 
 /**
  * What an installment states about the plan it names, whether or not it is a
- * proven payment: every observation's total, as `[currency, minor]` text (null
+ * proven payment: every observation's total, as `[currency, minor]` (null
  * when unreadable), and every planned count its sources state.
  */
 type PlanWitness = {
   purchaseKey: string;
-  totals: (string | null)[];
+  totals: ([currency: string, minor: number] | null)[];
   counts: number[];
 };
 
 type InstallmentAssessment = {
   installment: boolean;
   issues: string[];
-  plan: PlanPayment | null;
-  witness: PlanWitness | null;
-};
+} & (
+  | { plan: null; witness: PlanWitness | null }
+  | { plan: PlanPayment; witness: PlanWitness }
+);
 
 function present(value: unknown): boolean {
   return value !== null && value !== undefined;
@@ -874,7 +1036,7 @@ function assessInstallment(
     planVoucher !== null && head.purchaseDate !== null
       ? {
           purchaseKey: `isracard:posted:purchase:${JSON.stringify([accountKey, planVoucher, head.purchaseDate])}`,
-          totals: observations.map((item) => {
+          totals: observations.map((item): [string, number] | null => {
             const currency = planTotalCurrency(item);
             const total =
               currency === null
@@ -885,7 +1047,9 @@ function assessInstallment(
                       : item.row.dealSum,
                     currency,
                   );
-            return total === null ? null : JSON.stringify([currency, total]);
+            return currency === null || total === null
+              ? null
+              : [currency, total];
           }),
           counts: [...counts],
         }
@@ -1338,19 +1502,15 @@ function extractGroup(
   };
 }
 
-/** A plan's billed payments in one capture, each with its observations and line. */
-type PlanMember = {
-  observations: Observation[];
-  plan: PlanPayment;
-  line: TransactionInput;
-};
-
 /** Everything one capture states about one plan. */
 type PlanEvidence = {
-  /** Proven payments, which become the plan's lines. */
-  members: PlanMember[];
-  /** Every installment that names the plan, proven or not. */
-  witnesses: { observations: Observation[]; witness: PlanWitness }[];
+  /** Every installment that names the plan; only proven payments have a plan role. */
+  groups: {
+    observations: Observation[];
+    witness: PlanWitness;
+    plan: PlanPayment | null;
+    line: TransactionInput;
+  }[];
   /** One payment voucher's occurrences name different plans. */
   conflictingVoucher: boolean;
 };
@@ -1368,10 +1528,13 @@ type PlanEvidence = {
  */
 function extractPlanPurchase(
   purchaseKey: string,
-  { members, witnesses, conflictingVoucher }: PlanEvidence,
+  { groups, conflictingVoucher }: PlanEvidence,
   capture: IsracardCapture,
   context: ExtractionContext,
 ): TransactionInput {
+  const members = groups.flatMap(({ observations, plan, line }) =>
+    plan === null ? [] : [{ observations, plan, line }],
+  );
   const ordered = members
     .map((member, index) => ({ member, index }))
     .sort(
@@ -1387,20 +1550,25 @@ function extractPlanPurchase(
   const issues = details.issues;
   details.sourceRefs = [
     ...new Set(
-      witnesses.flatMap((item) => item.observations.map(({ path }) => path)),
+      groups.flatMap((item) => item.observations.map(({ path }) => path)),
     ),
   ].map((path) => ({ runId: context.runId, path }));
-  const stated = witnesses.flatMap(({ witness }) => witness.totals);
+  const stated = groups.flatMap(({ witness }) => witness.totals);
   let amountMinor: number | null = null;
   let currency: string | null = null;
   if (conflictingVoucher) {
     issues.push("invalid_installment_plan_voucher");
-  } else if (stated.some((total) => total === null)) {
+  } else if (!stated.every((total) => total !== null)) {
     issues.push("unresolved_amount");
-  } else if (new Set(stated).size !== 1) {
+  } else if (
+    stated.some(
+      ([totalCurrency, totalMinor]) =>
+        totalCurrency !== stated[0]![0] || totalMinor !== stated[0]![1],
+    )
+  ) {
     issues.push("conflicting_installment_total");
   } else {
-    const [statedCurrency, total] = JSON.parse(stated[0]!) as [string, number];
+    const [statedCurrency, total] = stated[0]!;
     if (total > 0) {
       amountMinor = -total;
       currency = statedCurrency;
@@ -1436,7 +1604,7 @@ function extractPlanPurchase(
   const legacyRows = rows("legacy");
   if (
     duplicateOrdinal ||
-    new Set(witnesses.flatMap(({ witness }) => witness.counts)).size > 1 ||
+    new Set(groups.flatMap(({ witness }) => witness.counts)).size > 1 ||
     differs(digitalRows.map((row) => row.businessName)) ||
     differs(digitalRows.map((row) => row.businessNumber)) ||
     differs(legacyRows.map((row) => row.fullSupplierNameHeb)) ||
@@ -1460,10 +1628,8 @@ function extractPlanPurchase(
       row: json(item.row),
     })),
     monetaryEvidence: {
-      // Each observation's stated total as [currency, minor units], or null.
-      statedTotals: stated.map((total) =>
-        total === null ? null : (JSON.parse(total) as JsonValue),
-      ),
+      // Unlike the proven-payment rows, totals include unresolved witnesses in capture order.
+      statedTotals: stated,
       convention:
         "plan total as every installment naming the plan states it (DigitalV3 originalAmount, legacy dealSum), negated; never computed from payments",
     },
@@ -1620,7 +1786,8 @@ export function extractIsracard(
   ) {
     return reject("invalid_card_or_scope_binding");
   }
-  const digital = digitalData(decode(capture.responses.digital));
+  const digitalResponse = decode(capture.responses.digital);
+  const digital = digitalData(digitalResponse);
   const legacy = legacyData(
     decode(capture.responses.legacy),
     "CardsTransactionsListBean",
@@ -1641,19 +1808,11 @@ export function extractIsracard(
   if (capture.responses.legacy !== undefined && !legacy) {
     result.warnings.push("invalid_legacy_response");
   }
-  if (
-    digital &&
-    digital.approvals !== null &&
-    digital.approvals !== undefined
-  ) {
-    result.warnings.push("unsupported_approvals_preserved_raw");
-    result.partitions.push({
-      accountKey,
-      status: "pending",
-      success: false,
-      comparable: false,
-    });
-  }
+  const rawApprovals =
+    object(digitalResponse) && object(digitalResponse.data)
+      ? digitalResponse.data.approvals
+      : undefined;
+  collectApprovals(capture, digital, rawApprovals, context, result);
   const groups = new Map<string, Observation[]>();
   const voucherCounts = new Map<string, { digital: number; legacy: number }>();
   const numericVouchers = new Map<
@@ -1720,8 +1879,7 @@ export function extractIsracard(
   const plansByVoucher = new Map<string, (string | null)[]>();
   const evidence = (purchaseKey: string) => {
     const plan = plans.get(purchaseKey) ?? {
-      members: [],
-      witnesses: [],
+      groups: [],
       conflictingVoucher: false,
     };
     plans.set(purchaseKey, plan);
@@ -1784,14 +1942,9 @@ export function extractIsracard(
         explainedWithdrawals.has(key),
       );
       if (assessment.witness !== null) {
-        evidence(assessment.witness.purchaseKey).witnesses.push({
+        evidence(assessment.witness.purchaseKey).groups.push({
           observations: members,
           witness: assessment.witness,
-        });
-      }
-      if (assessment.plan !== null) {
-        evidence(assessment.plan.purchaseKey).members.push({
-          observations: members,
           plan: assessment.plan,
           line,
         });
@@ -1833,7 +1986,7 @@ export function extractIsracard(
   for (const [purchaseKey, plan] of plans) {
     // Only a proven payment creates a purchase; other installments only
     // witness its facts.
-    if (plan.members.length > 0) {
+    if (plan.groups.some((group) => group.plan !== null)) {
       result.transactions.push(
         extractPlanPurchase(purchaseKey, plan, capture, context),
       );

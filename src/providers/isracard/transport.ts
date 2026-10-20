@@ -1,4 +1,4 @@
-import { parse } from "lossless-json";
+import { isLosslessNumber, parse } from "lossless-json";
 
 import type { CollectionFailure } from "../../domain/records.js";
 
@@ -332,11 +332,19 @@ function isLoginRedirect(location: unknown, base: URL): boolean {
 }
 
 function isSuccessErrorCode(code: unknown): boolean {
+  // Extraction retains numeric lexemes; transport parses status numbers as Number.
+  const value = isLosslessNumber(code) ? Number(code.value) : code;
   return (
-    code === undefined ||
-    code === null ||
-    [0, "0", ""].includes(code as string | number)
+    value === undefined ||
+    value === null ||
+    [0, "0", ""].includes(value as string | number)
   );
+}
+
+export function isIsracardDigitalSuccess(
+  payload: Record<string, unknown>,
+): boolean {
+  return payload.isSuccess === true && isSuccessErrorCode(payload.errorCode);
 }
 
 /** Each endpoint family reports application-level success differently. */
@@ -354,7 +362,7 @@ function assertEndpointSuccess(
     endpoint === ISRACARD_ENDPOINTS.cards ||
     endpoint === ISRACARD_ENDPOINTS.transactions
   ) {
-    if (payload.isSuccess !== true || !isSuccessErrorCode(payload.errorCode)) {
+    if (!isIsracardDigitalSuccess(payload)) {
       throw new IsracardTransportError("invalid_response", false);
     }
     return;

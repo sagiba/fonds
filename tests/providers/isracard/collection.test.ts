@@ -26,8 +26,8 @@ const firstCard = {
   cardSuffix: "1234",
   isActive: true,
   isPartner: false,
-  cardChargeNext: { billingDate: "10/08/2040" },
-  cardChargeLast: { billingDate: "10/07/2040" },
+  cardChargeNext: { billingDate: "10/08/2040", period: "Next" },
+  cardChargeLast: { billingDate: "10/07/2040", period: "Last" },
 };
 const secondCard = {
   ...firstCard,
@@ -48,8 +48,8 @@ function financial(
   };
 }
 
-function setup(cards = [firstCard]) {
-  const request = vi.fn(async (endpoint: string) => {
+function setup(cards: Record<string, unknown>[] = [firstCard]) {
+  const request = vi.fn(async (endpoint: string, _body?: object) => {
     if (endpoint === ISRACARD_ENDPOINTS.login) {
       return financial({ status: "1" });
     }
@@ -320,6 +320,28 @@ describe("Isracard conservative bounded collection", () => {
       ),
     ).toHaveLength(1);
     expect(request.mock.calls).toHaveLength(8);
+    expect(
+      request.mock.calls
+        .filter(([endpoint]) => endpoint === ISRACARD_ENDPOINTS.transactions)
+        .map(([, body]) => body),
+    ).toEqual([
+      expect.objectContaining({
+        billingMonth: "01/08/2040",
+        isNextBillingDate: true,
+      }),
+      expect.objectContaining({
+        billingMonth: "01/08/2040",
+        isNextBillingDate: true,
+      }),
+      expect.objectContaining({
+        billingMonth: "01/07/2040",
+        isNextBillingDate: false,
+      }),
+      expect.objectContaining({
+        billingMonth: "01/07/2040",
+        isNextBillingDate: false,
+      }),
+    ]);
     expect(sleep.mock.calls).toEqual(
       Array.from({ length: 7 }, () => [1000, undefined]),
     );
@@ -327,7 +349,11 @@ describe("Isracard conservative bounded collection", () => {
       const envelope = JSON.parse(capture.responseText) as {
         responses: { digital: string; legacy: string };
         legacyCardIndex: string;
+        isNextBillingDate: boolean;
       };
+      expect(envelope.isNextBillingDate).toBe(
+        capture.scope?.month === "2040-08",
+      );
       expect(envelope.responses.digital).toBe(digitalText);
       expect(envelope.responses.legacy).toContain("CardsTransactionsListBean");
       expect(envelope.legacyCardIndex).toMatch(/^[01]$/);
@@ -335,6 +361,145 @@ describe("Isracard conservative bounded collection", () => {
       expect(capture.responseText).not.toContain("Sisma");
     }
     expect(transport.close).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["current next period", {}, "2040-08", true],
+    ["last period", {}, "2040-07", false],
+    ["another historical month", {}, "2040-06", false],
+    [
+      "absent period",
+      { cardChargeNext: { billingDate: "10/08/2040" } },
+      "2040-08",
+      false,
+    ],
+    [
+      "null period",
+      { cardChargeNext: { billingDate: "10/08/2040", period: null } },
+      "2040-08",
+      false,
+    ],
+    [
+      "numeric period",
+      { cardChargeNext: { billingDate: "10/08/2040", period: 1 } },
+      "2040-08",
+      false,
+    ],
+    [
+      "lowercase period",
+      { cardChargeNext: { billingDate: "10/08/2040", period: "next" } },
+      "2040-08",
+      false,
+    ],
+    [
+      "padded period",
+      { cardChargeNext: { billingDate: "10/08/2040", period: " Next " } },
+      "2040-08",
+      false,
+    ],
+    [
+      "unknown period",
+      { cardChargeNext: { billingDate: "10/08/2040", period: "Future" } },
+      "2040-08",
+      false,
+    ],
+    [
+      "Last literal in next field",
+      { cardChargeNext: { billingDate: "10/08/2040", period: "Last" } },
+      "2040-08",
+      false,
+    ],
+    [
+      "Next literal in last field",
+      { cardChargeLast: { billingDate: "10/07/2040", period: "Next" } },
+      "2040-07",
+      true,
+    ],
+    [
+      "malformed next date",
+      { cardChargeNext: { billingDate: "31/02/2040", period: "Next" } },
+      "2040-02",
+      false,
+    ],
+    [
+      "missing next date",
+      { cardChargeNext: { period: "Next" } },
+      "2040-08",
+      false,
+    ],
+    [
+      "same-month next precedence",
+      { cardChargeLast: { billingDate: "20/08/2040", period: "Last" } },
+      "2040-08",
+      true,
+    ],
+    [
+      "same-month unknown next precedence",
+      {
+        cardChargeNext: { billingDate: "10/08/2040" },
+        cardChargeLast: { billingDate: "20/08/2040", period: "Next" },
+      },
+      "2040-08",
+      false,
+    ],
+  ])(
+    "uses the discovered request period during history: %s",
+    async (_label, change, month, expected) => {
+      const { options, request } = setup([{ ...firstCard, ...change }]);
+      const result = await events({
+        ...options,
+        range: { from: `${month}-01`, to: `${month}-01` },
+      });
+      expect(result.every((event) => event.type === "capture")).toBe(true);
+      expect(request.mock.calls).toHaveLength(4);
+      expect(
+        request.mock.calls.find(
+          ([endpoint]) => endpoint === ISRACARD_ENDPOINTS.transactions,
+        )?.[1],
+      ).toMatchObject({
+        billingMonth: `01/${month.slice(5)}/${month.slice(0, 4)}`,
+        isNextBillingDate: expected,
+      });
+      const capture = result.find((event) => event.type === "capture")!;
+      expect(JSON.parse(capture.capture.responseText).isNextBillingDate).toBe(
+        expected,
+      );
+    },
+  );
+
+  it("keeps Next approvals verbatim through the financial capture and credential guards", async () => {
+    const raw =
+      ' {"isSuccess":true,"data":{"approvals":{"approvedTransactions":[{"confirmationNumber":"SYN:40:50","originalAmount":1.23000000000000001}]}}}\n';
+    for (const reflected of [false, true]) {
+      const { options, request } = setup();
+      const original = request.getMockImplementation()!;
+      request.mockImplementation(async (endpoint, body) => {
+        if (
+          endpoint === ISRACARD_ENDPOINTS.transactions &&
+          (body as { isNextBillingDate: boolean }).isNextBillingDate
+        ) {
+          const text = reflected
+            ? raw.replace("SYN:40:50", options.credentials.password)
+            : raw;
+          return financial(JSON.parse(text), text);
+        }
+        return original(endpoint, body);
+      });
+      const result = await events(options);
+      if (reflected) {
+        expect(result.every((event) => event.type === "failure")).toBe(true);
+        expect(request.mock.calls).toHaveLength(3);
+        expect(JSON.stringify(result)).not.toContain(
+          options.credentials.password,
+        );
+      } else {
+        const capture = result.find((event) => event.type === "capture")!;
+        expect(JSON.parse(capture.capture.responseText)).toMatchObject({
+          isNextBillingDate: true,
+          responses: { digital: raw },
+        });
+      }
+    }
   });
 
   it("flushes successful DigitalV3 evidence before stopping on legacy 429, with no next month or retry", async () => {

@@ -4,7 +4,7 @@ import { ConflictError } from "../../src/domain/errors.js";
 import { emptyDetails } from "../../src/domain/model.js";
 import { RECONCILIATION_POLICY_VERSION } from "../../src/domain/plans/sync.js";
 import { calAdapter } from "../../src/providers/cal/adapter.js";
-import { isracardAdapter } from "../../src/providers/isracard/adapter.js";
+import { calPostingEvidence } from "../../src/providers/cal/posting-evidence.js";
 import {
   authorization,
   postingAdapter,
@@ -678,7 +678,7 @@ describe.each(backends)("%s automatic posting and split", (backend) => {
       ...postingAdapter,
       automaticPosting: {
         ...postingAdapter.automaticPosting!,
-        evidence: () => null,
+        compatibleGroups: () => false,
       },
     });
     expect((await harness.byKey("posted")).details.postingLink).toEqual(
@@ -834,7 +834,7 @@ describe.each(backends)("%s automatic posting and split", (backend) => {
         installmentNumber: null,
         purchaseId: null,
       });
-      expect(calAdapter.automaticPosting!.evidence(posted)).not.toBeNull();
+      expect(calPostingEvidence(posted)).not.toBeNull();
       expect(posted.details.provider.cal!.rows).toMatchObject([
         {
           transactionTypeCode: "5",
@@ -889,7 +889,6 @@ describe.each(backends)("%s automatic posting and split", (backend) => {
     ["pending", false, true],
     ["posted", false, true],
     ["pending", true, false],
-    ["posted", true, false],
   ] as const)(
     "requires a successful comparable %s partition (success=%s, comparable=%s)",
     async (status, success, comparable) => {
@@ -1059,8 +1058,7 @@ describe.each(backends)("%s automatic posting and split", (backend) => {
     },
   );
 
-  it("keeps history, adapters without capability and Isracard outside the automatic policy", async () => {
-    expect(isracardAdapter.automaticPosting).toBeUndefined();
+  it("keeps history and adapters without capability outside the automatic policy", async () => {
     await harness.capture(2, [authorization()]);
     await harness.capture(3, [row("historical")], postingAdapter, {
       history: true,

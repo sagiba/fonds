@@ -26,29 +26,19 @@ export interface ExtractionResult {
   historical: boolean;
 }
 
-/**
- * Provider-neutral continuation evidence. Null means unknown, never false/zero.
- * All fields except abroad/merchantProviderId are required for automatic eligibility.
- * Optional fields compare only when both are known; twins also require equal presence.
- * Codes are opaque provider values, not payment-channel or category semantics.
- */
-export interface PostingMatchEvidence {
-  merchantName: string | null;
-  categoryCode: string | null;
-  sourceTypeCode: string | null;
-  cardPresent: boolean | null;
-  tokenCode: string | null;
-  paymentCount: number | null;
-  abroad: boolean | null;
-  merchantProviderId: string | null;
-}
-
 /** Amount roles whose normalized purchase money supports automatic continuation. */
 export interface AutomaticPostingCapability {
   pendingAmountBasis: TransactionInput["amountBasis"];
   postedAmountBasis: TransactionInput["amountBasis"];
-  /** Pure decoding from retained source evidence; missing/malformed/conflicting => null. */
-  evidence(row: TransactionFacts): PostingMatchEvidence | null;
+  /**
+   * Pure source interpretation for a whole plausible component. Reject unknown
+   * kinds/issues or insufficient source evidence unless explicitly supported by
+   * the provider policy. Rejecting a member vetoes the component, never filters it.
+   */
+  compatibleGroups(
+    pending: readonly TransactionFacts[],
+    posted: readonly TransactionFacts[],
+  ): boolean;
 }
 
 /** Collection owns provider paging; adapters project one archived capture at a time. */
@@ -75,6 +65,11 @@ export interface SourceAdapter {
    * omit it to archive every capture.
    */
   contentFingerprint?(responseText: string): string;
+  /**
+   * Declared identity groups use `details.provider[provider].identity.baseKey`.
+   * Retain identity-distinguishing raw observations in that provider's `rows`;
+   * shared uncertain-identity comparison consumes them to preserve annotation ownership.
+   */
   extract(responseText: string, context: ExtractionContext): ExtractionResult;
 }
 
