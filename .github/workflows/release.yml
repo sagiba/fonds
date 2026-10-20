@@ -328,14 +328,16 @@ jobs:
           (cd release && sha256sum -- * > SHA256SUMS)
       - name: Create or refresh the draft release
         run: |
-          prerelease=()
-          [[ "$VERSION" == *-rc.* ]] && prerelease=(--prerelease)
+          # Set from the version, also on a draft that already exists.
+          prerelease=false
+          [[ "$VERSION" == *-rc.* ]] && prerelease=true
           if state="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null)"; then
             [ "$state" = true ] || { echo "$TAG is already published"; exit 1; }
+            gh release edit "$TAG" --prerelease="$prerelease"
             gh release upload "$TAG" release/* --clobber
           else
             git for-each-ref --format='%(contents)' "refs/tags/$TAG" > /tmp/summary.md
-            gh release create "$TAG" release/* --draft --verify-tag "${prerelease[@]}" \
+            gh release create "$TAG" release/* --draft --verify-tag --prerelease="$prerelease" \
               --title "Fonds $VERSION" --notes-file /tmp/summary.md --generate-notes
           fi
       - name: Stage the npm version
@@ -496,7 +498,9 @@ jobs:
       - name: Publish the release
         run: |
           latest=false
+          prerelease=true
           if [[ "$VERSION" != *-rc.* ]]; then
+            prerelease=false
             listed="$(gh release list --exclude-drafts --exclude-pre-releases \
               --limit 1000 --json tagName --jq '.[].tagName | ltrimstr("v")')"
             mapfile -t published <<< "$listed"
@@ -505,4 +509,4 @@ jobs:
               latest=true
             fi
           fi
-          gh release edit "$TAG" --draft=false --latest="$latest"
+          gh release edit "$TAG" --draft=false --prerelease="$prerelease" --latest="$latest"
