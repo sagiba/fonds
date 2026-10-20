@@ -133,7 +133,7 @@ them working.
   requests or block access. Login failures or challenges stop refreshes until you
   intervene and explicitly retry. Use only your own accounts. Automated access may
   violate your provider's terms or lead to access restrictions; check the terms
-  that apply to your account before collecting.
+  that apply to your account before refreshing.
 - **Double-check what matters.** Fonds leaves facts the source does not state
   unknown. Check your provider's own records before a financial decision.
 

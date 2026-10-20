@@ -67,7 +67,7 @@ docker compose exec fonds node /app/server.js init --connection cal-main --provi
 docker compose exec fonds node /app/server.js connect --connection cal-main
 ```
 
-Nothing is collected until you choose a [schedule](hosted-service.md#scheduling).
+Nothing is refreshed until you choose a [schedule](hosted-service.md#scheduling).
 Add it to the `.env` file and recreate the service:
 
 ```sh

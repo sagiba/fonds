@@ -46,7 +46,7 @@ const GENERATED = {
   // Decrypts the credentials `connect` stores; part of the installation's binding.
   FONDS_CREDENTIALS_KEY: () => randomBytes(32).toString("base64url"),
   FONDS_REFRESH_SECRET: () => randomBytes(48).toString("base64url"),
-  // This installation's random collection time (UTC unless the time zone
+  // This installation's random refresh time (UTC unless the time zone
   // setting says otherwise), so installations do not all reach a provider at
   // the same minute.
   [SCHEDULE.time]: () =>
@@ -217,7 +217,7 @@ async function askSchedule(values, { input, output }) {
     }
     if (schedule !== "off") {
       answers.time = await ask(
-        "Collection time, HH:MM (Enter keeps this installation's random time)",
+        "Refresh time, HH:MM (Enter keeps this installation's random time)",
         values[SCHEDULE.time],
         "time",
       );

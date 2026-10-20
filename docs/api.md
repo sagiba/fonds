@@ -125,19 +125,19 @@ different connections.
 
 `get_transaction` takes the transaction ID, `detail` and `includeEvidence`.
 Evidence expansion requires detail: `detail: false` with `includeEvidence: true`
-is invalid. Transaction reads never trigger collection.
+is invalid. Transaction reads never start a refresh.
 
 ## Connection
 
 `{id, provider, displayName, createdAt, latestRefresh}`: provider access and
-collection configuration, which may expose several cards and accounts.
+refresh configuration, which may expose several cards and accounts.
 Credentials and internal configuration are never included. `latestRefresh` is the
 newest [refresh](#refreshes) or recorded scheduled occurrence, without its
 windows, or `null` before any.
 
 ## Refreshes
 
-A refresh records one connection's manual or scheduled collection.
+A refresh records one connection's manual or scheduled provider update.
 
 | Field                                  | Meaning                                                                                                                                            |
 | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -148,7 +148,7 @@ A refresh records one connection's manual or scheduled collection.
 | `range`                                | A backfill's inclusive `{from, to}`, or `null` for the recent window.                                                                              |
 | `scheduledAt`                          | A scheduled refresh's occurrence time, otherwise `null`.                                                                                           |
 | `createdAt`, `startedAt`, `finishedAt` | Acceptance, first execution and finish; the last two `null` until then.                                                                            |
-| `requiresAttention`                    | Collection needs operator attention.                                                                                                               |
+| `requiresAttention`                    | Refreshing needs operator attention.                                                                                                               |
 | `counts`                               | Cumulative observation and change counts, including retries.                                                                                       |
 | `failureCodes`                         | Reconciliation codes met, at most `"implausible_empty"`.                                                                                           |
 | `failureReason`                        | `expired` when it was still unfinished a day after `createdAt`; otherwise `null`.                                                                  |
@@ -165,7 +165,7 @@ Counts need not partition observations. `failures` is positive when failed.
 neither, at most 120 months). A start records the refresh, runs it in the same
 process and waits about 10 seconds: `200 {refresh}` when it finished, otherwise
 `202 {refresh}` while it continues; read it later with `get_refresh`. A pending
-or running refresh answers `409 refresh_in_progress`, collection needing operator attention
+or running refresh answers `409 refresh_in_progress`, a connection needing operator attention
 `409 requires_attention`, and within 60 seconds of a finished refresh a start
 returns that one without calling the provider. Without `connectionId` (HTTP
 `POST /v1/refreshes`), every connection with stored credentials, under the same
@@ -179,7 +179,7 @@ the provider rejects the session; a resumed refresh logs in again. A held lease
 or failed execution is retried for about a minute; an active refresh then
 resumes on the next scheduler tick, start or `get_refresh`, and expires a day
 after creation. `completed` means the requested work succeeded, not that history
-is complete; see [collection behavior](guides/hosted-service.md#collection-refresh-and-scheduling).
+is complete; see [refresh behavior](guides/hosted-service.md#refresh-and-scheduling).
 No change event announces completion.
 
 ## Sync run
@@ -189,7 +189,7 @@ Collection receipt:
 `status` is `started`, `completed`, `partial` or `failed`; nullable `finishedAt` and `appliedAt`
 distinguish collection from application. `refreshId` names its
 refresh, or `null` for offline ingestion. Unchanged reads still create receipts.
-`list_sync_runs` excludes bodies and coverage and never starts collection.
+`list_sync_runs` excludes bodies and coverage and never starts a refresh.
 
 Optional enrichment failures remain visible in status and failure counts without
 marking transaction coverage incomplete; authentication can still require owner
@@ -466,7 +466,7 @@ where `excluded` is
   income or transfer, `authorization` basis, then unresolved, such as unknown
   basis or kind, or ambiguous identity.
 - `not_returned` alone does not remove a row from totals. An empty list of groups is
-  not proof that collection was complete.
+  not proof that a refresh was complete.
 
 ## Pending-to-posted matching
 
@@ -508,7 +508,7 @@ retired purchase move to the surviving one in the same write.
 
 ## Annotations
 
-An annotation is the owner's independent document. Collection never writes it.
+An annotation is the owner's independent document. Refreshes never write it.
 Compact records carry `{version, category, tags, hasNotes, metadata}` or null; the
 detailed read returns the full annotation:
 
@@ -573,9 +573,9 @@ Event IDs are integers, ordered ascending.
 | Type                                                               | Meaning                                                                         |
 | ------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
 | `sync.baseline`                                                    | First successful capture of an account or resource, with a count summary.       |
-| `sync.partial`, `sync.failed`, `sync.recovered`                    | Collection health.                                                              |
+| `sync.partial`, `sync.failed`, `sync.recovered`                    | Sync run health.                                                                |
 | `transaction.imported`                                             | A record discovered by an initial or historical import. It is not new spending. |
-| `transaction.created`                                              | A record discovered by a later recent collection.                               |
+| `transaction.created`                                              | A record discovered by a later recent-window refresh.                           |
 | `transaction.updated`                                              | A versioned field changed.                                                      |
 | `transaction.posted`, `transaction.linked`, `transaction.unlinked` | Pending-to-posted transitions.                                                  |
 | `transaction.removed`                                              | The owner confirmed removal.                                                    |

@@ -16,7 +16,7 @@ https://YOUR_PUBLIC_ORIGIN/mcp
 2. Choose **Server URL** and enter the URL above. Use a distinct name such as Fonds.
 3. Choose **OAuth**. Leave static client ID and client secret empty; select **CIMD** when offered. Leave advanced authorization/token URL overrides empty.
 4. Create/connect. On Fonds's login page, sign in with a passkey or an owner-linked Google/GitHub account (on Neon, also **Continue with Google** with the configured owner Google account, which needs no Google app of your own), then approve the requested access. Without a passkey yet, first open a [login link](hosted-service.md#owner-login-and-authorization) in the same browser, add a passkey on `/account`, then connect.
-5. Install/enable the resulting plugin in the existing dot and call `list_connections`. Verify the expected connection and read synthetic data before enabling collection.
+5. Install/enable the resulting plugin in the existing dot and call `list_connections`. Verify the expected connection and read synthetic data before enabling refreshes.
 
 These UI and CIMD steps follow the
 [official custom-server guide](https://developers.openai.com/api/docs/guides/custom-mcp-server)
@@ -40,10 +40,10 @@ Use the connection ID `list_connections` returns. `refresh_connection` starts a
 [refresh](../api.md#refreshes) that calls the provider and needs
 `financial:write`; `get_refresh`, `list_refreshes` and `list_sync_runs` read
 progress with `financial:read`. After an interrupted request, read refreshes
-before retrying. Normal read tools never start collection. Only an
-[operator retry](hosted-service.md#collection-refresh-and-scheduling)
+before retrying. Normal read tools never refresh. Only an
+[operator retry](hosted-service.md#refresh-and-scheduling)
 (`node server.js refresh`, or `neon:smoke --refresh` on Neon) that succeeds
-clears an authentication block. [Scheduled collection](hosted-service.md#scheduling) is
+clears an authentication block. [Scheduled refresh](hosted-service.md#scheduling) is
 off until the deployment sets `FONDS_REFRESH_SCHEDULE`; verify one scheduled
 run on each new deployment.
 

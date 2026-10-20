@@ -194,7 +194,7 @@ export function createCollectionRoutes(
 ) {
   const origin = new URL(hostedOrigin(routes.publicOrigin));
   if (!/^[A-Za-z0-9_-]{32,256}$/.test(routes.manualSecret)) {
-    throw new Error("Invalid collection route configuration");
+    throw new Error("Invalid refresh route configuration");
   }
   const secret = Buffer.from(routes.manualSecret);
   const log =

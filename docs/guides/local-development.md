@@ -3,7 +3,7 @@
 Run the SQLite service locally, query it over loopback bearer HTTP, or connect a
 trusted local MCP client over stdio; both serve the same
 [operations](../api.md#operations) from `dist/server.js`. Synthetic development
-needs no provider credentials, and collection is opt-in. Hosted setup is in the
+needs no provider credentials, and refresh is opt-in. Hosted setup is in the
 [hosted-service guide](hosted-service.md).
 
 ## Start with synthetic data
@@ -160,7 +160,7 @@ use `/mcp` with the bearer header from private client configuration.
 
 The server offers [refreshes](../api.md#refreshes) on HTTP and stdio, and
 [scheduling](hosted-service.md#scheduling), as the
-[hosted service](hosted-service.md#collection-refresh-and-scheduling) does. Only
+[hosted service](hosted-service.md#refresh-and-scheduling) does. Only
 connections with credentials `connect` stored refresh (read at each refresh, so
 `connect` needs no restart); others answer `not_found`. An authentication block
 clears only when an operator `refresh` succeeds. Refreshing calls the provider,

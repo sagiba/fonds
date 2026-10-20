@@ -33,7 +33,7 @@ The npm/tsx launcher does not preserve descriptor 3; use the built CLI or
 `node --import tsx src/cli.ts`. The hosted target accepts the same object when
 `FONDS_CONNECTION_PROVIDER=isracard`
 ([hosted-service guide](../guides/hosted-service.md#adding-providers),
-[Neon runbook](../guides/neon-deployment.md)), but hosted collection is
+[Neon runbook](../guides/neon-deployment.md)), but hosted refresh is
 unverified. The stored connection selects the provider, so an Isracard archive is
 never collected, ingested or recovered as CAL.
 
@@ -78,7 +78,7 @@ database never receives it. No CLI command applies it.
   presence stays unknown. Wallet, merchant address and phone, and counterparty
   require a voucher-bound optional legacy detail. The CLI defaults to
   `--max-details 0`; opt in with, for example, `--max-details 5` on `refresh`
-  (range 0–20 attempts per collection window; a history backfill applies the cap
+  (range 0–20 attempts per refresh window; a history backfill applies the cap
   to each month). Details share the request budget with statements and have no
   cache, so repeats can fetch them again. Co-branded cards have no supported
   detail route. Optional failures are [reported separately](../api.md#sync-run).
@@ -137,7 +137,7 @@ wait out a rate limit, then rerun the refresh or the reported history range.
 Unsupported approval shapes leave pending coverage incomplete; inspect the run's
 reported failures before retrying. A retry cannot resolve an unsupported shape.
 
-Still unverified: hosted collection and EU-region egress, unattended operation,
+Still unverified: hosted refresh and EU-region egress, unattended operation,
 session lifetime, reuse of a card's final four digits, partner and co-branded
 cards, old cards missing from discovery, pending coverage across rollover and
 accounting meaning beyond the rows totals count.

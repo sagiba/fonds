@@ -63,7 +63,7 @@ for (const name of REQUIRED) {
 }
 
 // Optional: decrypts credentials stored by `connect`, so every such connection
-// is collected, not only the env-configured one.
+// is refreshed, not only the env-configured one.
 const credentialsKey = process.env.FONDS_CREDENTIALS_KEY;
 if (credentialsKey) {
   try {
@@ -94,7 +94,7 @@ if (credentialsFile) {
 }
 
 // Schedule state lives in the private env file so a deploy never flips it;
-// when absent (fresh environments) collection stays off. Neon cron is UTC
+// when absent (fresh environments) scheduled refresh stays off. Neon cron is UTC
 // only: local hours convert with the zone's offset at deploy time.
 const schedule = parseCollectionSchedule(
   process.env,

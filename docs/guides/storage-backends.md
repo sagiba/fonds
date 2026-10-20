@@ -22,12 +22,12 @@ Selecting a backend adds no copy of the financial rules.
 | PostgreSQL                  | A PostgreSQL server                                   | `pg` on a dedicated connection, with the [connection-row lock](../database.md#commit-boundaries)                                   |
 | D1 (experimental)           | Cloudflare D1, as a library only                      | One guarded atomic batch per store transaction; see [the D1 note](../internals/d1-storage.md)                                      |
 
-Refreshes, the CLI `refresh`, scheduled collection and Events delivery behave the
+Refreshes (API, CLI and scheduled) and Events delivery behave the
 same on SQLite and PostgreSQL: the SQLite server, the PostgreSQL launchers and the
-hosted service offer refreshes, and only the `get_refresh` read collects,
-[resuming](../api.md#refreshes) interrupted work. Turso and D1 share the SQLite
+hosted service offer refreshes, and only the `get_refresh` read
+[resumes](../api.md#refreshes) interrupted work. Turso and D1 share the SQLite
 lease and stores, but no Turso or D1 launcher composes refresh, and the Turso
-target has no collection command. Reuse one store handle per local SQLite file in
+target has no refresh command. Reuse one store handle per local SQLite file in
 a process; closing it drains queued work and rejects new work.
 
 ## Build one backend

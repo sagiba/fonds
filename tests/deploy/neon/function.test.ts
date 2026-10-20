@@ -218,7 +218,7 @@ describe("Neon configuration", () => {
     "rejects unsupported providers or invalid credentials without revealing values: %o",
     (override) => {
       expect(() => neonConfiguration({ ...environment, ...override })).toThrow(
-        /^Invalid collection provider or credentials configuration$/,
+        /^Invalid connection provider or credentials configuration$/,
       );
     },
   );
@@ -272,7 +272,7 @@ describe("Neon configuration", () => {
     { FONDS_CONNECTION_CREDENTIALS: undefined },
   ])("rejects incomplete optional groups: %o", (override) => {
     expect(() => neonConfiguration({ ...environment, ...override })).toThrow(
-      /^Incomplete (Neon Google|collection) configuration$/,
+      /^Incomplete (Neon Google|connection) configuration$/,
     );
   });
 

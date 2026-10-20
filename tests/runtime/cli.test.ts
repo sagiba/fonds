@@ -200,7 +200,7 @@ function spawnCli(args: string[], credentialsFd?: number) {
 
 /** `connect`'s one stderr note: what turns scheduled collection on. */
 const scheduleNote =
-  "Scheduled collection runs only when the service sets FONDS_REFRESH_SCHEDULE=daily (or hourly, or hours such as 9,13,18).\n";
+  "Scheduled refresh runs only when the service sets FONDS_REFRESH_SCHEDULE=daily (or hourly, or hours such as 9,13,18).\n";
 
 async function success<T>(...args: string[]): Promise<T> {
   const result = await run(...args);

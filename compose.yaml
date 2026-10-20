@@ -1,4 +1,4 @@
-# The hosted service on one machine: PostgreSQL and Fonds, which collects on
+# The hosted service on one machine: PostgreSQL and Fonds, which refreshes on
 # a schedule only once FONDS_REFRESH_SCHEDULE is set (for example daily).
 #   docker compose up -d --build
 #   docker compose exec fonds node /app/server.js login-link

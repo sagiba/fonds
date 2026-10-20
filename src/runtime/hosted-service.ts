@@ -114,7 +114,7 @@ export function hostedConfiguration(
     (configured.length !== 0 && !fullyConfigured) ||
     (fullyConfigured && manualSecret === undefined)
   ) {
-    throw new HostedConfigurationError("Incomplete collection configuration");
+    throw new HostedConfigurationError("Incomplete connection configuration");
   }
   const socialLogin = Object.fromEntries(
     (
@@ -180,7 +180,7 @@ function collectionCredentials(provider: string, text: string) {
     );
   } catch {
     throw new HostedConfigurationError(
-      "Invalid collection provider or credentials configuration",
+      "Invalid connection provider or credentials configuration",
     );
   }
 }

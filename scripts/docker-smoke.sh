@@ -84,7 +84,7 @@ const response = await fetch("http://localhost:8787/internal/refresh/recent", {
 const result = await response.json();
 // One refresh per target; with no targets there is none.
 if (response.status !== 200 || !Array.isArray(result.refreshes) || result.refreshes.length !== 0) process.exit(1);' ||
-  fail "operator collection with no connections"
+  fail "operator refresh with no connections"
 
 trigger='
 import { readFileSync } from "node:fs";
@@ -108,7 +108,7 @@ runs() { "$1" logs fonds 2>/dev/null | grep -c '"event":"fonds_scheduled_refresh
 
 echo "== schedule off by default"
 trigger_expects '[200, 0]' || fail "external trigger"
-[ "$(runs compose)" = 0 ] || fail "collection without FONDS_REFRESH_SCHEDULE"
+[ "$(runs compose)" = 0 ] || fail "refresh without FONDS_REFRESH_SCHEDULE"
 
 echo "== embedded schedule"
 # Hourly at a minute already past its start jitter, so the first tick runs it.
@@ -125,7 +125,7 @@ for _ in $(seq 1 30); do
   [ "$(runs scheduled)" = 1 ] && break
   sleep 2
 done
-[ "$(runs scheduled)" = 1 ] || fail "embedded scheduled collection"
+[ "$(runs scheduled)" = 1 ] || fail "embedded scheduled refresh"
 # The trigger and a restart find the occurrence recorded and never rerun it.
 trigger_expects '[200, 0]' || fail "trigger with the embedded schedule"
 scheduled restart fonds >/dev/null
