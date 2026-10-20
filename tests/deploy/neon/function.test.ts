@@ -458,8 +458,8 @@ describe("Neon configuration", () => {
           FONDS_COLLECTION_TIMEZONE: undefined,
         }),
       ).toEqual({ cron: "17 3 * * *", enabled: true });
-      // The `enabled` value means hourly, at the random minute.
-      expect(await trigger({ FONDS_COLLECTION_SCHEDULE: "enabled" })).toEqual({
+      // Hourly runs at the installation's random minute.
+      expect(await trigger({ FONDS_COLLECTION_SCHEDULE: "hourly" })).toEqual({
         cron: "17 * * * *",
         enabled: true,
       });
@@ -469,11 +469,14 @@ describe("Neon configuration", () => {
           FONDS_COLLECTION_TIMEZONE: "Asia/Jerusalem",
         }),
       ).toEqual({ cron: "17 7,11,16 * * *", enabled: true });
-      // Off keeps the declared cron, whatever the time.
-      expect(await trigger({ FONDS_COLLECTION_SCHEDULE: "off" })).toEqual({
-        cron: "12 * * * *",
-        enabled: false,
-      });
+      // Off, like any unrecognized word, keeps the declared cron, whatever
+      // the time.
+      for (const value of ["off", "enabled"]) {
+        expect(await trigger({ FONDS_COLLECTION_SCHEDULE: value })).toEqual({
+          cron: "12 * * * *",
+          enabled: false,
+        });
+      }
       vi.stubEnv("FONDS_COLLECTION_TIME", undefined);
       await expect(
         trigger({ FONDS_COLLECTION_SCHEDULE: "daily" }),
