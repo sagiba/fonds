@@ -1,10 +1,11 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { root, targets } from "./build-targets.mjs";
 
 /** `X.Y.Z` or a release candidate `X.Y.Z-rc.N`; the release workflow publishes no other form. */
-const versionPattern =
+export const versionPattern =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-rc\.[1-9]\d*)?$/;
 const versionModule = "src/application/version.ts";
 const versionDeclaration = /export const FONDS_VERSION = "([^"]*)";/;
@@ -96,16 +97,25 @@ async function checkVersion(tag) {
   return version;
 }
 
-const [command, argument] = process.argv.slice(2);
-if (command === "--check") {
-  console.log(await checkVersion(argument));
-} else if (command && versionPattern.test(command) && argument === undefined) {
-  await setVersion(command);
-  console.log(await checkVersion());
-} else {
-  console.error(
-    "Usage: node scripts/release-version.mjs <X.Y.Z | X.Y.Z-rc.N>\n" +
-      "       node scripts/release-version.mjs --check [vX.Y.Z]",
-  );
-  process.exitCode = 2;
+if (
+  process.argv[1] &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  const [command, argument] = process.argv.slice(2);
+  if (command === "--check") {
+    console.log(await checkVersion(argument));
+  } else if (
+    command &&
+    versionPattern.test(command) &&
+    argument === undefined
+  ) {
+    await setVersion(command);
+    console.log(await checkVersion());
+  } else {
+    console.error(
+      "Usage: node scripts/release-version.mjs <X.Y.Z | X.Y.Z-rc.N>\n" +
+        "       node scripts/release-version.mjs --check [vX.Y.Z]",
+    );
+    process.exitCode = 2;
+  }
 }
