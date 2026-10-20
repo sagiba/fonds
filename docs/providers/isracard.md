@@ -78,9 +78,10 @@ database never receives it. No CLI command applies it.
   presence stays unknown. The CLI requests no optional transaction details, so
   wallet, merchant address and phone, and counterparty come only from captures
   that already hold one.
-- **Not collected.** Pending rows: the upcoming-charge summary names no
-  transactions and stays raw, and Isracard takes no part in pending-to-posted
-  matching. Collection uses no browser and downloads no PDFs.
+- **Pending evidence.** Approvals and upcoming-charge summaries stay raw; no
+  approval ledger rows or posting matches are produced. Approval-bearing captures
+  report failed pending coverage: runs remain partial when posted extraction
+  succeeds and may fail otherwise. Collection uses no browser and downloads no PDFs.
 
 ## What totals and history omit
 
@@ -119,6 +120,9 @@ later success elsewhere does not clear them, and there is no automatic resume,
 completion acknowledgement or detail cache. Resolve a challenge or password
 change on Isracard's own site, run `connect` again if the credentials changed,
 wait out a rate limit, then rerun the refresh or the reported history range.
+
+A partial run caused solely by unsupported pending coverage is expected;
+retrying does not resolve that limitation.
 
 `contentFingerprint` ignores only the session `cardGuid` values, which every login
 renews. Collection remembers one capture per connection, so of a refresh's

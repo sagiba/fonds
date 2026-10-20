@@ -23,11 +23,11 @@
   "docs/internals/repository-layout.md": 1503,
   "docs/internals/storage-testing.md": 1361,
   "docs/providers/cal.md": 867,
-  "docs/providers/isracard.md": 1096,
+  "docs/providers/isracard.md": 1126,
   "docs/reference-models.md": 723,
   "docs/security-model.md": 939,
   "src/providers/cal/source-notes.md": 2208,
-  "src/providers/isracard/source-notes.md": 2795,
+  "src/providers/isracard/source-notes.md": 3024,
   "tests/providers/cal/fixtures/README.md": 469,
   "tests/providers/isracard/fixtures/README.md": 476
 }

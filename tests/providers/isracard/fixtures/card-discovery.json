@@ -11,8 +11,8 @@
         "lastName": "Synthetic Last",
         "isActive": true,
         "isPartner": false,
-        "cardChargeNext": { "billingDate": "10/08/2040" },
-        "cardChargeLast": { "billingDate": "10/07/2040" }
+        "cardChargeNext": { "billingDate": "10/08/2040", "period": "Next" },
+        "cardChargeLast": { "billingDate": "10/07/2040", "period": "Last" }
       }
     ]
   }

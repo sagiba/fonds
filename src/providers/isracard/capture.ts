@@ -32,6 +32,8 @@ export const isracardCaptureSchema = z
     provider: z.literal("isracard"),
     mode: z.enum(["recent", "history"]),
     billingMonth: z.string().regex(ISRACARD_BILLING_MONTH_PATTERN),
+    /** Actual DigitalV3 request flag; absent without that response or in older captures. */
+    isNextBillingDate: z.boolean().optional(),
     card: isracardCardSchema,
     /** Binding established from a unique company+suffix match in the archived card list. */
     legacyCardIndex: z.string().regex(/^\d+$/).optional(),
