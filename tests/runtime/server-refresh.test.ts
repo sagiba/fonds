@@ -292,9 +292,9 @@ describe("refresh on the local SQLite server", () => {
     await running?.close();
     running = await startServer(["--db", dbPath, "--port", "0"], {
       env: {
-        FONDS_COLLECTION_SCHEDULE: "hourly",
-        FONDS_COLLECTION_TIME: "00:05",
-        FONDS_COLLECTION_TIMEZONE: "UTC",
+        FONDS_REFRESH_SCHEDULE: "hourly",
+        FONDS_REFRESH_TIME: "00:05",
+        FONDS_REFRESH_TIMEZONE: "UTC",
       },
       scheduler: { maxJitterMs: 0, tickMs: 20 },
     });

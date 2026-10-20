@@ -139,7 +139,7 @@ describe.skipIf(!postgresUrl)("PostgreSQL operator CLI", () => {
     }
     // A stored connection is collected only once a schedule is turned on.
     expect(notes.join("")).toBe(
-      "Scheduled collection runs only when the service sets FONDS_COLLECTION_SCHEDULE=daily (or hourly, or hours such as 9,13,18).\n",
+      "Scheduled collection runs only when the service sets FONDS_REFRESH_SCHEDULE=daily (or hourly, or hours such as 9,13,18).\n",
     );
   });
 

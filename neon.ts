@@ -23,9 +23,9 @@ const REQUIRED = [
   "FONDS_PUBLIC_ORIGIN",
   "FONDS_OWNER_ID",
   "FONDS_AUTH_SECRET",
-  "FONDS_COLLECTION_SECRET",
-  "FONDS_COLLECTION_CONNECTION_ID",
-  "FONDS_COLLECTION_PROVIDER",
+  "FONDS_REFRESH_SECRET",
+  "FONDS_CONNECTION_ID",
+  "FONDS_CONNECTION_PROVIDER",
   "FONDS_NEON_GOOGLE_AUTH_URL",
   "FONDS_GOOGLE_OWNER_EMAIL",
 ] as const;
@@ -76,16 +76,16 @@ if (credentialsKey) {
 
 // Provider credentials are uploaded only when explicitly supplied. Neon merges
 // omitted Function variables, so ordinary deploys keep stored credentials.
-const credentialsFile = process.env.FONDS_COLLECTION_CREDENTIALS_FILE;
+const credentialsFile = process.env.FONDS_CONNECTION_CREDENTIALS_FILE;
 if (credentialsFile) {
   const text = readPrivateFile(credentialsFile);
   try {
-    const provider = runtimeProvider(env.FONDS_COLLECTION_PROVIDER!);
+    const provider = runtimeProvider(env.FONDS_CONNECTION_PROVIDER!);
     const credentials = parseCredentials(
       JSON.parse(text),
       provider.credentials,
     );
-    env.FONDS_COLLECTION_CREDENTIALS = JSON.stringify(credentials);
+    env.FONDS_CONNECTION_CREDENTIALS = JSON.stringify(credentials);
   } catch {
     throw new Error(
       "Provider credentials file does not match the configured provider",
@@ -98,7 +98,7 @@ if (credentialsFile) {
 // only: local hours convert with the zone's offset at deploy time.
 const schedule = parseCollectionSchedule(
   process.env,
-  "FONDS_COLLECTION_SCHEDULE is on but FONDS_COLLECTION_TIME is missing; rerun npm run neon:setup",
+  "FONDS_REFRESH_SCHEDULE is on but FONDS_REFRESH_TIME is missing; rerun npm run neon:setup",
 );
 
 export default defineConfig({

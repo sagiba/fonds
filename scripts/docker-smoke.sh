@@ -75,7 +75,7 @@ link="$(compose exec -T fonds node /app/server.js login-link)"
 in_fonds '
 import { readFileSync } from "node:fs";
 import { parseEnv } from "node:util";
-const { FONDS_COLLECTION_SECRET: secret } = parseEnv(readFileSync("/data/fonds.env", "utf8"));
+const { FONDS_REFRESH_SECRET: secret } = parseEnv(readFileSync("/data/fonds.env", "utf8"));
 const response = await fetch("http://localhost:8787/internal/collect/recent", {
   method: "POST",
   headers: { Authorization: `Bearer ${secret}`, "Content-Type": "application/json" },
@@ -108,7 +108,7 @@ runs() { "$1" logs fonds 2>/dev/null | grep -c '"event":"fonds_scheduled_collect
 
 echo "== schedule off by default"
 trigger_expects '[200, 0]' || fail "external trigger"
-[ "$(runs compose)" = 0 ] || fail "collection without FONDS_COLLECTION_SCHEDULE"
+[ "$(runs compose)" = 0 ] || fail "collection without FONDS_REFRESH_SCHEDULE"
 
 echo "== embedded schedule"
 # Hourly at a minute already past its start jitter, so the first tick runs it.
@@ -117,8 +117,8 @@ cat >"$override" <<YAML
 services:
   fonds:
     environment:
-      FONDS_COLLECTION_SCHEDULE: hourly
-      FONDS_COLLECTION_TIME: "00:$(printf %02d "$minute")"
+      FONDS_REFRESH_SCHEDULE: hourly
+      FONDS_REFRESH_TIME: "00:$(printf %02d "$minute")"
 YAML
 scheduled up -d --no-build --wait fonds
 for _ in $(seq 1 30); do

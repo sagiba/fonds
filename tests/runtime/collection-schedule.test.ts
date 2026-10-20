@@ -27,9 +27,9 @@ function schedule(
 ): CollectionSchedule {
   return parseCollectionSchedule(
     {
-      FONDS_COLLECTION_SCHEDULE: value,
-      FONDS_COLLECTION_TIME: time,
-      FONDS_COLLECTION_TIMEZONE: timeZone,
+      FONDS_REFRESH_SCHEDULE: value,
+      FONDS_REFRESH_TIME: time,
+      FONDS_REFRESH_TIMEZONE: timeZone,
     },
     missing,
   )!;
@@ -68,7 +68,7 @@ describe("collection schedule settings", () => {
       "weekly",
     ]) {
       expect(
-        parseCollectionSchedule({ FONDS_COLLECTION_SCHEDULE: value }, missing),
+        parseCollectionSchedule({ FONDS_REFRESH_SCHEDULE: value }, missing),
       ).toBeUndefined();
     }
   });
@@ -86,15 +86,15 @@ describe("collection schedule settings", () => {
       "daily,9",
     ]) {
       expect(() => schedule(value)).toThrow(
-        "FONDS_COLLECTION_SCHEDULE must be daily, hourly or hours 0-23 such as 9,13,18",
+        "FONDS_REFRESH_SCHEDULE must be daily, hourly or hours 0-23 such as 9,13,18",
       );
     }
     expect(() =>
-      parseCollectionSchedule({ FONDS_COLLECTION_SCHEDULE: "daily" }, missing),
+      parseCollectionSchedule({ FONDS_REFRESH_SCHEDULE: "daily" }, missing),
     ).toThrow(missing);
     for (const time of ["3:17", "24:00", "12:60", "12:00:00", "noon"]) {
       expect(() => schedule("daily", time)).toThrow(
-        "FONDS_COLLECTION_TIME must be a 24-hour HH:MM time",
+        "FONDS_REFRESH_TIME must be a 24-hour HH:MM time",
       );
     }
     let message = "";
@@ -104,7 +104,7 @@ describe("collection schedule settings", () => {
       message = (error as Error).message;
     }
     expect(message).toBe(
-      "FONDS_COLLECTION_TIMEZONE must be an IANA time zone such as Europe/London",
+      "FONDS_REFRESH_TIMEZONE must be an IANA time zone such as Europe/London",
     );
     expect(schedule("daily", "03:17", "asia/jerusalem").timeZone).toBe(
       "Asia/Jerusalem",

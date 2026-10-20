@@ -41,10 +41,10 @@ Stdio is for a trusted local MCP host and needs no HTTP token; stdout is protoco
 refresh_connection starts a refresh of a connection whose credentials the CLI's connect
 stored, with the state's FONDS_CREDENTIALS_KEY; it shares the CLI collect lease and
 continues in the server after the response. Reads never collect. HTTP also serves MCP
-Events webhooks, delivered after each refresh and every minute. FONDS_COLLECTION_SCHEDULE
+Events webhooks, delivered after each refresh and every minute. FONDS_REFRESH_SCHEDULE
 (daily, hourly or hours such as
-9,13,18; off by default), FONDS_COLLECTION_TIME (HH:MM; otherwise a random time kept in
-the database) and FONDS_COLLECTION_TIMEZONE schedule collection. Operational events are
+9,13,18; off by default), FONDS_REFRESH_TIME (HH:MM; otherwise a random time kept in
+the database) and FONDS_REFRESH_TIMEZONE schedule collection. Operational events are
 count-only JSON lines on stderr.
 `;
 

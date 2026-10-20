@@ -28,7 +28,7 @@ const GENERATED = {
   FONDS_CREDENTIALS_KEY: () => randomBytes(32).toString("base64url"),
   FONDS_SCHEDULE_SECRET: () => randomBytes(48).toString("base64url"),
   // Enables collection over stored credentials and the operator endpoint.
-  FONDS_COLLECTION_SECRET: () => randomBytes(48).toString("base64url"),
+  FONDS_REFRESH_SECRET: () => randomBytes(48).toString("base64url"),
   // The bearer of a loopback HTTP server.
   FONDS_API_TOKEN: () => randomBytes(32).toString("base64url"),
 } as const;

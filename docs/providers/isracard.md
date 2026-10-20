@@ -31,7 +31,7 @@ input, or reads `--credentials-fd`, and stores them encrypted for later `collect
 runs ([provider credentials table](../database.md#provider-credentials-table)).
 The npm/tsx launcher does not preserve descriptor 3; use the built CLI or
 `node --import tsx src/cli.ts`. The hosted target accepts the same object when
-`FONDS_COLLECTION_PROVIDER=isracard`
+`FONDS_CONNECTION_PROVIDER=isracard`
 ([hosted-service guide](../guides/hosted-service.md#adding-providers),
 [Neon runbook](../guides/neon-deployment.md)), but hosted collection is
 unverified. The stored connection selects the provider, so an Isracard archive is

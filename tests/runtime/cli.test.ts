@@ -200,7 +200,7 @@ function spawnCli(args: string[], credentialsFd?: number) {
 
 /** `connect`'s one stderr note: what turns scheduled collection on. */
 const scheduleNote =
-  "Scheduled collection runs only when the service sets FONDS_COLLECTION_SCHEDULE=daily (or hourly, or hours such as 9,13,18).\n";
+  "Scheduled collection runs only when the service sets FONDS_REFRESH_SCHEDULE=daily (or hourly, or hours such as 9,13,18).\n";
 
 async function success<T>(...args: string[]): Promise<T> {
   const result = await run(...args);
@@ -2026,7 +2026,7 @@ describe("state directory and installation", () => {
     const state = readFileSync(statePath, "utf8");
     expect(statSync(statePath).mode & 0o777).toBe(0o600);
     expect(state).toMatch(
-      /^FONDS_AUTH_SECRET=\S+\nFONDS_OWNER_ID=\S+\nFONDS_CREDENTIALS_KEY=\S+\nFONDS_SCHEDULE_SECRET=\S+\nFONDS_COLLECTION_SECRET=\S+\nFONDS_API_TOKEN=\S+\n$/,
+      /^FONDS_AUTH_SECRET=\S+\nFONDS_OWNER_ID=\S+\nFONDS_CREDENTIALS_KEY=\S+\nFONDS_SCHEDULE_SECRET=\S+\nFONDS_REFRESH_SECRET=\S+\nFONDS_API_TOKEN=\S+\n$/,
     );
     const key = /FONDS_CREDENTIALS_KEY=(\S+)/.exec(state)![1]!;
     expect(await recorded()).toMatchObject({

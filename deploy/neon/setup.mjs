@@ -29,23 +29,23 @@ const root = fileURLToPath(new URL("../..", import.meta.url));
 const NEON_CLI = "neon@8.4.3";
 /** The env file's schedule settings, named once here; the runtime reads them too. */
 const SCHEDULE = {
-  schedule: "FONDS_COLLECTION_SCHEDULE",
-  timeZone: "FONDS_COLLECTION_TIMEZONE",
-  time: "FONDS_COLLECTION_TIME",
+  schedule: "FONDS_REFRESH_SCHEDULE",
+  timeZone: "FONDS_REFRESH_TIMEZONE",
+  time: "FONDS_REFRESH_TIME",
 };
 const REQUIRED = [
   "FONDS_PUBLIC_ORIGIN",
   "FONDS_NEON_GOOGLE_AUTH_URL",
   "FONDS_GOOGLE_OWNER_EMAIL",
-  "FONDS_COLLECTION_CONNECTION_ID",
-  "FONDS_COLLECTION_PROVIDER",
+  "FONDS_CONNECTION_ID",
+  "FONDS_CONNECTION_PROVIDER",
 ];
 const GENERATED = {
   FONDS_AUTH_SECRET: () => randomBytes(48).toString("base64url"),
   FONDS_OWNER_ID: () => randomUUID(),
   // Decrypts the credentials `connect` stores; part of the installation's binding.
   FONDS_CREDENTIALS_KEY: () => randomBytes(32).toString("base64url"),
-  FONDS_COLLECTION_SECRET: () => randomBytes(48).toString("base64url"),
+  FONDS_REFRESH_SECRET: () => randomBytes(48).toString("base64url"),
   // This installation's random collection time (UTC unless the time zone
   // setting says otherwise), so installations do not all reach a provider at
   // the same minute.
@@ -454,7 +454,7 @@ async function setupAuth(authPool, values) {
 
 async function initializeDatabase(connectionString, values) {
   const { runtimeProvider } = await import("../../src/runtime/providers.js");
-  runtimeProvider(values.FONDS_COLLECTION_PROVIDER);
+  runtimeProvider(values.FONDS_CONNECTION_PROVIDER);
   const { Pool } = await import("pg");
   const { ensurePostgresSchema, openPostgresDatabase } =
     await import("../../src/storage/postgres/store.js");
@@ -478,8 +478,8 @@ async function initializeDatabase(connectionString, values) {
     );
     const store = openPostgresDatabase(financialPool);
     await store.ensureConnection({
-      id: values.FONDS_COLLECTION_CONNECTION_ID,
-      provider: values.FONDS_COLLECTION_PROVIDER,
+      id: values.FONDS_CONNECTION_ID,
+      provider: values.FONDS_CONNECTION_PROVIDER,
     });
     await ensurePostgresSchema(authPool, "identity");
     const auth = await setupAuth(authPool, values);
@@ -633,8 +633,8 @@ export function setupReport({ generated, changed, schedule, deploy }) {
     changed.length ? `Updated ${changed.join(", ")}.` : "",
     schedule,
     `Deploy to apply the env file:\n  ${deploy}`,
-    generated.includes("FONDS_COLLECTION_SECRET")
-      ? "A new installation's first deploy also names its provider credentials file (FONDS_COLLECTION_CREDENTIALS_FILE)."
+    generated.includes("FONDS_REFRESH_SECRET")
+      ? "A new installation's first deploy also names its provider credentials file (FONDS_CONNECTION_CREDENTIALS_FILE)."
       : "",
   ]
     .filter(Boolean)

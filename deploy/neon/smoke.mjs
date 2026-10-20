@@ -142,7 +142,7 @@ export async function runSmoke(args) {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${environment.FONDS_COLLECTION_SECRET}`,
+            Authorization: `Bearer ${environment.FONDS_REFRESH_SECRET}`,
           },
           body: "{}",
         }),

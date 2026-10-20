@@ -242,7 +242,7 @@ describe.skipIf(!postgresUrl)("PostgreSQL provider credentials", () => {
     ]);
     expect(errors).toEqual([
       // Only the successful connect explains how scheduled collection starts.
-      "Scheduled collection runs only when the service sets FONDS_COLLECTION_SCHEDULE=daily (or hourly, or hours such as 9,13,18).\n",
+      "Scheduled collection runs only when the service sets FONDS_REFRESH_SCHEDULE=daily (or hourly, or hours such as 9,13,18).\n",
       "Could not read credentials: use a private current-owner file outside the repository through a descriptor of at least 3.\n",
       "Connection not found; initialize it first.\n",
       "These secrets do not match the database's installation; restore the state directory (fonds.env) backed up with this database\n",

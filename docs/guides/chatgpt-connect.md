@@ -44,7 +44,7 @@ before retrying. Normal read tools never start collection. Only an
 [operator retry](hosted-service.md#collection-refresh-and-scheduling)
 (`node server.js collect`, or `neon:smoke --collect` on Neon) that succeeds
 clears an authentication block. [Scheduled collection](hosted-service.md#scheduling) is
-off until the deployment sets `FONDS_COLLECTION_SCHEDULE`; verify one scheduled
+off until the deployment sets `FONDS_REFRESH_SCHEDULE`; verify one scheduled
 run on each new deployment.
 
 The server also advertises draft [MCP Events](hosted-service.md#mcp-events-and-webhook-delivery).

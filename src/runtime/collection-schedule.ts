@@ -20,9 +20,9 @@ export interface CollectionSchedule {
 }
 
 export interface CollectionScheduleSettings {
-  FONDS_COLLECTION_SCHEDULE?: string | undefined;
-  FONDS_COLLECTION_TIME?: string | undefined;
-  FONDS_COLLECTION_TIMEZONE?: string | undefined;
+  FONDS_REFRESH_SCHEDULE?: string | undefined;
+  FONDS_REFRESH_TIME?: string | undefined;
+  FONDS_REFRESH_TIMEZONE?: string | undefined;
 }
 
 const MINUTE = 60_000;
@@ -32,7 +32,7 @@ const ALL_HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 
 const pad = (value: number) => String(value).padStart(2, "0");
 
-/** The stored setting that keeps a generated `FONDS_COLLECTION_TIME`. */
+/** The stored setting that keeps a generated `FONDS_REFRESH_TIME`. */
 export const COLLECTION_TIME_SETTING = "collection_time";
 
 /** A random `HH:MM`, generated once per installation and then persisted. */
@@ -57,7 +57,7 @@ function scheduleHours(value: string | undefined) {
   const hours = text.split(",").map((part) => part.trim());
   if (!hours.every((hour) => /^\d{1,2}$/.test(hour) && Number(hour) <= 23)) {
     throw new CollectionScheduleError(
-      "FONDS_COLLECTION_SCHEDULE must be daily, hourly or hours 0-23 such as 9,13,18",
+      "FONDS_REFRESH_SCHEDULE must be daily, hourly or hours 0-23 such as 9,13,18",
     );
   }
   return [...new Set(hours.map(Number))].sort((a, b) => a - b);
@@ -71,7 +71,7 @@ function timeZoneName(value: string | undefined) {
     }).resolvedOptions().timeZone;
   } catch {
     throw new CollectionScheduleError(
-      "FONDS_COLLECTION_TIMEZONE must be an IANA time zone such as Europe/London",
+      "FONDS_REFRESH_TIMEZONE must be an IANA time zone such as Europe/London",
     );
   }
 }
@@ -79,26 +79,26 @@ function timeZoneName(value: string | undefined) {
 /**
  * The configured schedule, or undefined when scheduled collection is off:
  * absent or any value other than `daily`, `hourly` or an hour list.
- * `missingTime` explains how this host obtains `FONDS_COLLECTION_TIME`.
+ * `missingTime` explains how this host obtains `FONDS_REFRESH_TIME`.
  */
 export function parseCollectionSchedule(
   settings: CollectionScheduleSettings,
   missingTime: string,
 ): CollectionSchedule | undefined {
-  const hours = scheduleHours(settings.FONDS_COLLECTION_SCHEDULE);
+  const hours = scheduleHours(settings.FONDS_REFRESH_SCHEDULE);
   if (hours === undefined) {
     return undefined;
   }
-  if (!settings.FONDS_COLLECTION_TIME) {
+  if (!settings.FONDS_REFRESH_TIME) {
     throw new CollectionScheduleError(missingTime);
   }
-  const time = TIME.exec(settings.FONDS_COLLECTION_TIME);
+  const time = TIME.exec(settings.FONDS_REFRESH_TIME);
   if (!time) {
     throw new CollectionScheduleError(
-      "FONDS_COLLECTION_TIME must be a 24-hour HH:MM time",
+      "FONDS_REFRESH_TIME must be a 24-hour HH:MM time",
     );
   }
-  const timeZone = timeZoneName(settings.FONDS_COLLECTION_TIMEZONE);
+  const timeZone = timeZoneName(settings.FONDS_REFRESH_TIMEZONE);
   const minute = Number(time[2]);
   if (hours === "daily") {
     return { mode: "daily", hours: [Number(time[1])], minute, timeZone };

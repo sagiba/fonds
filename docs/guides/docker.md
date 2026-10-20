@@ -71,11 +71,11 @@ Nothing is collected until you choose a [schedule](hosted-service.md#scheduling)
 Add it to the `.env` file and recreate the service:
 
 ```sh
-echo FONDS_COLLECTION_SCHEDULE=daily >> .env
+echo FONDS_REFRESH_SCHEDULE=daily >> .env
 docker compose up -d
 ```
 
-`.env` also takes `FONDS_COLLECTION_TIMEZONE`; to pin `FONDS_COLLECTION_TIME`, set
+`.env` also takes `FONDS_REFRESH_TIMEZONE`; to pin `FONDS_REFRESH_TIME`, set
 it under the `fonds` service's `environment` in `compose.override.yaml`. No
 scheduler container is needed; each run is logged as `fonds_scheduled_collection`
 (`docker compose logs fonds`). Operation commands such as

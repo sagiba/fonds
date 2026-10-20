@@ -343,8 +343,8 @@ export function createLocalService(
 }
 
 /**
- * A static-token server's schedule from FONDS_COLLECTION_SCHEDULE,
- * FONDS_COLLECTION_TIME and FONDS_COLLECTION_TIMEZONE. Without a time, the
+ * A static-token server's schedule from FONDS_REFRESH_SCHEDULE,
+ * FONDS_REFRESH_TIME and FONDS_REFRESH_TIMEZONE. Without a time, the
  * installation's random one, which the database keeps so every process on it
  * shares it. Undefined when scheduled collection is off.
  */
@@ -359,10 +359,10 @@ export async function localSchedule(
   );
   return parseCollectionSchedule(
     {
-      FONDS_COLLECTION_SCHEDULE: env.FONDS_COLLECTION_SCHEDULE,
-      FONDS_COLLECTION_TIME: env.FONDS_COLLECTION_TIME || storedTime,
-      FONDS_COLLECTION_TIMEZONE: env.FONDS_COLLECTION_TIMEZONE,
+      FONDS_REFRESH_SCHEDULE: env.FONDS_REFRESH_SCHEDULE,
+      FONDS_REFRESH_TIME: env.FONDS_REFRESH_TIME || storedTime,
+      FONDS_REFRESH_TIMEZONE: env.FONDS_REFRESH_TIMEZONE,
     },
-    "FONDS_COLLECTION_SCHEDULE needs FONDS_COLLECTION_TIME",
+    "FONDS_REFRESH_SCHEDULE needs FONDS_REFRESH_TIME",
   );
 }

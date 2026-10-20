@@ -34,10 +34,10 @@ const environment = {
   FONDS_OWNER_ID: "synthetic-owner",
   DATABASE_URL_UNPOOLED:
     "postgresql://synthetic:synthetic@synthetic-target.neon.tech/neondb",
-  FONDS_COLLECTION_SECRET: operatorSecret,
-  FONDS_COLLECTION_CONNECTION_ID: "primary",
-  FONDS_COLLECTION_PROVIDER: "cal",
-  FONDS_COLLECTION_CREDENTIALS: JSON.stringify({
+  FONDS_REFRESH_SECRET: operatorSecret,
+  FONDS_CONNECTION_ID: "primary",
+  FONDS_CONNECTION_PROVIDER: "cal",
+  FONDS_CONNECTION_CREDENTIALS: JSON.stringify({
     username: "synthetic-user",
     password: "synthetic-password",
   }),
@@ -194,9 +194,9 @@ describe("Neon configuration", () => {
   it("selects Isracard with its own credential fields and an independent connection ID", () => {
     const config = neonConfiguration({
       ...environment,
-      FONDS_COLLECTION_PROVIDER: "isracard",
-      FONDS_COLLECTION_CONNECTION_ID: "second-card-account",
-      FONDS_COLLECTION_CREDENTIALS: JSON.stringify({
+      FONDS_CONNECTION_PROVIDER: "isracard",
+      FONDS_CONNECTION_ID: "second-card-account",
+      FONDS_CONNECTION_CREDENTIALS: JSON.stringify({
         username: "synthetic-user",
         password: "synthetic-password",
         cardSuffix: "001234",
@@ -210,10 +210,10 @@ describe("Neon configuration", () => {
   });
 
   it.each([
-    { FONDS_COLLECTION_PROVIDER: "unsupported" },
-    { FONDS_COLLECTION_PROVIDER: "constructor" },
-    { FONDS_COLLECTION_CREDENTIALS: "synthetic-private-invalid-json" },
-    { FONDS_COLLECTION_PROVIDER: "isracard" },
+    { FONDS_CONNECTION_PROVIDER: "unsupported" },
+    { FONDS_CONNECTION_PROVIDER: "constructor" },
+    { FONDS_CONNECTION_CREDENTIALS: "synthetic-private-invalid-json" },
+    { FONDS_CONNECTION_PROVIDER: "isracard" },
   ])(
     "rejects unsupported providers or invalid credentials without revealing values: %o",
     (override) => {
@@ -262,14 +262,14 @@ describe("Neon configuration", () => {
     expect(() =>
       neonConfiguration({
         ...environment,
-        FONDS_COLLECTION_CONNECTION_ID: " primary ",
+        FONDS_CONNECTION_ID: " primary ",
       }),
-    ).toThrow("FONDS_COLLECTION_CONNECTION_ID");
+    ).toThrow("FONDS_CONNECTION_ID");
   });
 
   it.each([
     { FONDS_GOOGLE_OWNER_EMAIL: "owner@synthetic.invalid" },
-    { FONDS_COLLECTION_CREDENTIALS: undefined },
+    { FONDS_CONNECTION_CREDENTIALS: undefined },
   ])("rejects incomplete optional groups: %o", (override) => {
     expect(() => neonConfiguration({ ...environment, ...override })).toThrow(
       /^Incomplete (Neon Google|collection) configuration$/,
@@ -285,16 +285,16 @@ describe("Neon configuration", () => {
       "FONDS_PUBLIC_ORIGIN",
       "FONDS_OWNER_ID",
       "FONDS_AUTH_SECRET",
-      "FONDS_COLLECTION_CONNECTION_ID",
-      "FONDS_COLLECTION_PROVIDER",
-      "FONDS_COLLECTION_SECRET",
+      "FONDS_CONNECTION_ID",
+      "FONDS_CONNECTION_PROVIDER",
+      "FONDS_REFRESH_SECRET",
       "FONDS_NEON_GOOGLE_AUTH_URL",
       "FONDS_GOOGLE_OWNER_EMAIL",
     ]) {
       vi.stubEnv(name, `synthetic-${name}`);
     }
-    vi.stubEnv("FONDS_COLLECTION_CREDENTIALS_FILE", file);
-    vi.stubEnv("FONDS_COLLECTION_PROVIDER", "cal");
+    vi.stubEnv("FONDS_CONNECTION_CREDENTIALS_FILE", file);
+    vi.stubEnv("FONDS_CONNECTION_PROVIDER", "cal");
     try {
       await writeFile(
         file,
@@ -307,7 +307,7 @@ describe("Neon configuration", () => {
       vi.resetModules();
       const { default: config } = await import("../../../neon.js");
       expect(config.functions?.fonds?.env).toMatchObject({
-        FONDS_COLLECTION_CREDENTIALS: JSON.stringify({
+        FONDS_CONNECTION_CREDENTIALS: JSON.stringify({
           username: "synthetic-user",
           password: "synthetic:pass",
         }),
@@ -341,7 +341,7 @@ describe("Neon configuration", () => {
           },
         ],
       ] as const) {
-        vi.stubEnv("FONDS_COLLECTION_PROVIDER", provider);
+        vi.stubEnv("FONDS_CONNECTION_PROVIDER", provider);
         await writeFile(file, JSON.stringify(credentials), { mode: 0o600 });
         vi.resetModules();
         await expect(import("../../../neon.js")).rejects.toThrow(
@@ -361,7 +361,7 @@ describe("Neon configuration", () => {
       const { default: selected } = await import("../../../neon.js");
       expect(
         JSON.parse(
-          selected.functions!.fonds!.env!.FONDS_COLLECTION_CREDENTIALS!,
+          selected.functions!.fonds!.env!.FONDS_CONNECTION_CREDENTIALS!,
         ),
       ).toMatchObject({ cardSuffix: "001234" });
       await chmod(file, 0o644);
@@ -379,16 +379,16 @@ describe("Neon configuration", () => {
       "FONDS_PUBLIC_ORIGIN",
       "FONDS_OWNER_ID",
       "FONDS_AUTH_SECRET",
-      "FONDS_COLLECTION_CONNECTION_ID",
-      "FONDS_COLLECTION_PROVIDER",
-      "FONDS_COLLECTION_SECRET",
+      "FONDS_CONNECTION_ID",
+      "FONDS_CONNECTION_PROVIDER",
+      "FONDS_REFRESH_SECRET",
       "FONDS_NEON_GOOGLE_AUTH_URL",
       "FONDS_GOOGLE_OWNER_EMAIL",
     ]) {
       vi.stubEnv(name, `synthetic-${name}`);
     }
-    vi.stubEnv("FONDS_COLLECTION_CREDENTIALS_FILE", undefined);
-    vi.stubEnv("FONDS_COLLECTION_SCHEDULE", undefined);
+    vi.stubEnv("FONDS_CONNECTION_CREDENTIALS_FILE", undefined);
+    vi.stubEnv("FONDS_REFRESH_SCHEDULE", undefined);
     try {
       const { default: config } = await import("../../../neon.js");
       // Literal on both sides: the declaration and the function's envelope
@@ -408,13 +408,13 @@ describe("Neon configuration", () => {
       // Omitted credential variables are merged by Neon, never cleared or guessed.
       expect(Object.keys(fonds?.env ?? {}).sort()).toEqual([
         "FONDS_AUTH_SECRET",
-        "FONDS_COLLECTION_CONNECTION_ID",
-        "FONDS_COLLECTION_PROVIDER",
-        "FONDS_COLLECTION_SECRET",
+        "FONDS_CONNECTION_ID",
+        "FONDS_CONNECTION_PROVIDER",
         "FONDS_GOOGLE_OWNER_EMAIL",
         "FONDS_NEON_GOOGLE_AUTH_URL",
         "FONDS_OWNER_ID",
         "FONDS_PUBLIC_ORIGIN",
+        "FONDS_REFRESH_SECRET",
       ]);
     } finally {
       vi.unstubAllEnvs();
@@ -426,15 +426,15 @@ describe("Neon configuration", () => {
       "FONDS_PUBLIC_ORIGIN",
       "FONDS_OWNER_ID",
       "FONDS_AUTH_SECRET",
-      "FONDS_COLLECTION_CONNECTION_ID",
-      "FONDS_COLLECTION_PROVIDER",
-      "FONDS_COLLECTION_SECRET",
+      "FONDS_CONNECTION_ID",
+      "FONDS_CONNECTION_PROVIDER",
+      "FONDS_REFRESH_SECRET",
       "FONDS_NEON_GOOGLE_AUTH_URL",
       "FONDS_GOOGLE_OWNER_EMAIL",
     ]) {
       vi.stubEnv(name, `synthetic-${name}`);
     }
-    vi.stubEnv("FONDS_COLLECTION_CREDENTIALS_FILE", undefined);
+    vi.stubEnv("FONDS_CONNECTION_CREDENTIALS_FILE", undefined);
     const trigger = async (settings: Record<string, string | undefined>) => {
       for (const [name, value] of Object.entries(settings)) {
         vi.stubEnv(name, value);
@@ -451,40 +451,40 @@ describe("Neon configuration", () => {
     try {
       expect(
         await trigger({
-          FONDS_COLLECTION_SCHEDULE: "daily",
-          FONDS_COLLECTION_TIME: "03:17",
-          FONDS_COLLECTION_TIMEZONE: undefined,
+          FONDS_REFRESH_SCHEDULE: "daily",
+          FONDS_REFRESH_TIME: "03:17",
+          FONDS_REFRESH_TIMEZONE: undefined,
         }),
       ).toEqual({ cron: "17 3 * * *", enabled: true });
       // Hourly runs at the installation's random minute.
-      expect(await trigger({ FONDS_COLLECTION_SCHEDULE: "hourly" })).toEqual({
+      expect(await trigger({ FONDS_REFRESH_SCHEDULE: "hourly" })).toEqual({
         cron: "17 * * * *",
         enabled: true,
       });
       expect(
         await trigger({
-          FONDS_COLLECTION_SCHEDULE: "9,13,18",
-          FONDS_COLLECTION_TIMEZONE: "Asia/Jerusalem",
+          FONDS_REFRESH_SCHEDULE: "9,13,18",
+          FONDS_REFRESH_TIMEZONE: "Asia/Jerusalem",
         }),
       ).toEqual({ cron: "17 7,11,16 * * *", enabled: true });
       // Off, like any unrecognized word, keeps the declared cron, whatever
       // the time.
       for (const value of ["off", "enabled"]) {
-        expect(await trigger({ FONDS_COLLECTION_SCHEDULE: value })).toEqual({
+        expect(await trigger({ FONDS_REFRESH_SCHEDULE: value })).toEqual({
           cron: "12 * * * *",
           enabled: false,
         });
       }
-      vi.stubEnv("FONDS_COLLECTION_TIME", undefined);
+      vi.stubEnv("FONDS_REFRESH_TIME", undefined);
       await expect(
-        trigger({ FONDS_COLLECTION_SCHEDULE: "daily" }),
+        trigger({ FONDS_REFRESH_SCHEDULE: "daily" }),
       ).rejects.toThrow(
-        "FONDS_COLLECTION_SCHEDULE is on but FONDS_COLLECTION_TIME is missing; rerun npm run neon:setup",
+        "FONDS_REFRESH_SCHEDULE is on but FONDS_REFRESH_TIME is missing; rerun npm run neon:setup",
       );
       await expect(
         trigger({
-          FONDS_COLLECTION_SCHEDULE: "9,24",
-          FONDS_COLLECTION_TIME: "03:17",
+          FONDS_REFRESH_SCHEDULE: "9,24",
+          FONDS_REFRESH_TIME: "03:17",
         }),
       ).rejects.toThrow(/hours 0-23/);
     } finally {
@@ -499,15 +499,15 @@ describe("Neon configuration", () => {
       "FONDS_PUBLIC_ORIGIN",
       "FONDS_OWNER_ID",
       "FONDS_AUTH_SECRET",
-      "FONDS_COLLECTION_CONNECTION_ID",
-      "FONDS_COLLECTION_PROVIDER",
-      "FONDS_COLLECTION_SECRET",
+      "FONDS_CONNECTION_ID",
+      "FONDS_CONNECTION_PROVIDER",
+      "FONDS_REFRESH_SECRET",
       "FONDS_NEON_GOOGLE_AUTH_URL",
       "FONDS_GOOGLE_OWNER_EMAIL",
     ]) {
       vi.stubEnv(name, `synthetic-${name}`);
     }
-    vi.stubEnv("FONDS_COLLECTION_CREDENTIALS_FILE", undefined);
+    vi.stubEnv("FONDS_CONNECTION_CREDENTIALS_FILE", undefined);
     try {
       const key = generateCredentialsKey();
       vi.stubEnv("FONDS_CREDENTIALS_KEY", key);

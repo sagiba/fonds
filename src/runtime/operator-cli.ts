@@ -217,7 +217,7 @@ const NAME_WIDTH = 12;
 const SYNOPSIS_CONTINUATION = " ".repeat(2 + NAME_WIDTH);
 
 const SCHEDULE_NOTE =
-  "Scheduled collection runs only when the service sets FONDS_COLLECTION_SCHEDULE=daily (or hourly, or hours such as 9,13,18).\n";
+  "Scheduled collection runs only when the service sets FONDS_REFRESH_SCHEDULE=daily (or hourly, or hours such as 9,13,18).\n";
 
 function summaryStatus(statuses: readonly string[]) {
   if (statuses.every((status) => status === "completed")) {
