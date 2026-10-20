@@ -71,9 +71,10 @@ changed: a failure then costs an `rc` number, not a version.
 
 ## One-time setup
 
-- **npm trusted publisher** on `fonds-finance`: repository `sagiba/fonds`,
-  workflow `release.yml`, environment `release`, with "Allow npm publish" and
-  "Allow npm dist-tag" both off, so CI can only stage. A new configuration
+- **npm trusted publisher** on `fonds-finance` (it must exist; a `0.0.1`
+  placeholder reserves it): repository `sagiba/fonds`, workflow `release.yml`,
+  environment `release`, "Allow npm publish" and "Allow npm dist-tag" off, so CI
+  can only stage. A new configuration
   expires unless a publish completes within two days, so create it just before
   the first candidate. After the first release, require two-factor
   authentication and disallow tokens.
