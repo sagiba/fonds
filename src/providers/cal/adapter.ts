@@ -2,7 +2,7 @@ import { parse, stringify } from "lossless-json";
 
 import type { SourceAdapter } from "../../domain/source-adapter.js";
 import { extractCal } from "./extract.js";
-import { calPostingEvidence } from "./posting-evidence.js";
+import { compatibleCalPostingGroups } from "./posting-evidence.js";
 import { normalizeCalScope, validateCalScope } from "./scope.js";
 
 export const calAdapter: SourceAdapter = {
@@ -13,7 +13,7 @@ export const calAdapter: SourceAdapter = {
   normalizeScope: normalizeCalScope,
   pendingPostingCandidates: true,
   automaticPosting: {
-    evidence: calPostingEvidence,
+    compatibleGroups: compatibleCalPostingGroups,
     pendingAmountBasis: "authorization",
     postedAmountBasis: "purchase_commitment",
   },

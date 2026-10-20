@@ -150,10 +150,13 @@ row's own facts, so selection and paging stay in SQL without database views.
 
 Automatic matching is a narrow, reversible, opt-in provider capability. A
 disappearing pending authorization keeps its service ID when a new posted identity
-with the same purchase date, card and signed purchase money arrives in the same
-fresh comparable capture, and every candidate in its group pairs (a complete
-group of indistinguishable twins pairs in a fixed arbitrary order); no conversion
-or guessed rate is used, and anything uncertain stays in review. The posted row is retained
+with the same purchase date, card and signed purchase money arrives in a fresh
+capture with comparable pending coverage and successful posted extraction. Shared
+code groups every plausible candidate before testing eligibility; every member
+must pair, and the adapter may reject the whole group using its source evidence.
+An adapter cannot widen the shared safeguards. Where its policy permits twins,
+indistinguishable rows pair in a fixed arbitrary order. No conversion or guessed
+rate is used. The posted row is retained
 with `supersededById`, and one revision commits `transaction.posted` and
 `transaction.linked` with decision evidence, but no `transaction.created` or
 `transaction.unlisted` for the pair. Billed lines of a retired purchase move to the
@@ -175,8 +178,9 @@ reason ([API](api.md#pending-to-posted-matching)):
 
 Providers opt in through [source-adapter.ts](../src/domain/source-adapter.ts), and
 each guide says whether it does. Provider code owns keys, mappings,
-comparability and horizons; shared code owns grouping, eligibility, lifecycle and
-annotation ownership and never branches on provider name. The rules live in
+comparability, horizons and source compatibility; shared code owns grouping,
+freshness, eligibility, lifecycle and annotation ownership and never branches on
+provider name. The rules live in
 [auto-posting.ts](../src/domain/plans/auto-posting.ts) and its tests.
 
 ## Annotations, reads and delivery

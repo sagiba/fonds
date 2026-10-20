@@ -932,9 +932,24 @@ describe("CAL extraction", () => {
 
 // The provider owns the source amount roles; the domain only consumes this declaration.
 describe("CAL automatic posting capability", () => {
+  it.each(["recent-01", "recent-02", "malformed-pending", "future-field"])(
+    "successful nonhistorical %s partitions are comparable",
+    (name) => {
+      const result = extractCal(fixture(name), context);
+      expect(result.historical).toBe(false);
+      const successful = result.partitions.filter(
+        (partition) => partition.success,
+      );
+      expect(successful.length).toBeGreaterThan(0);
+      for (const partition of successful) {
+        expect(partition.comparable).toBe(true);
+      }
+    },
+  );
+
   it("declares authorization to purchase-commitment continuation with the current parser", () => {
     expect(calAdapter.automaticPosting).toEqual({
-      evidence: expect.any(Function),
+      compatibleGroups: expect.any(Function),
       pendingAmountBasis: "authorization",
       postedAmountBasis: "purchase_commitment",
     });

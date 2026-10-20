@@ -78,10 +78,13 @@ database never receives it. No CLI command applies it.
   presence stays unknown. The CLI requests no optional transaction details, so
   wallet, merchant address and phone, and counterparty come only from captures
   that already hold one.
-- **Pending evidence.** Approvals and upcoming-charge summaries stay raw; no
-  approval ledger rows or posting matches are produced. Approval-bearing captures
-  report failed pending coverage: runs remain partial when posted extraction
-  succeeds and may fail otherwise. Collection uses no browser and downloads no PDFs.
+- **Pending approvals.** The discovered next billing period supplies pending
+  authorizations, using the original amount and currency. Their kind stays
+  unknown. A unique disappearing approval can keep its ID when a compatible
+  posted purchase arrives in the same card/month capture through the
+  [shared matching policy](../design.md#pending-to-posted-matching). Matching is
+  reversible and can misattribute an expired approval to an identical purchase.
+  Upcoming-charge summaries stay raw. Collection uses no browser and downloads no PDFs.
 
 ## What totals and history omit
 
@@ -104,9 +107,14 @@ database never receives it. No CLI command applies it.
 
 ## Absence and recovery
 
-Isracard months are never compared for absence: a row missing from a later
-capture keeps its presence, and a disappeared or reversed row needs owner action
-or a later source correction. Older captures never replace newer facts.
+Posted Isracard months are never compared for absence. Pending absence is compared
+only within the same billing month after a successful next-period snapshot;
+billing rollover does not infer disappearance. Matching approval keys retain
+positive observations across months. Invalid or colliding approval identities
+block snapshot absence inference while other supported rows remain visible.
+Missing posted rows and unresolved
+continuations need owner action or a later source correction; manual linking
+remains available. Older captures never replace newer facts.
 
 Each billing month is archived after its last request, with any failure inside
 it. A run that ends inside a month, such as a killed process, archives none of
@@ -121,14 +129,14 @@ completion acknowledgement or detail cache. Resolve a challenge or password
 change on Isracard's own site, run `connect` again if the credentials changed,
 wait out a rate limit, then rerun the refresh or the reported history range.
 
-A partial run caused solely by unsupported pending coverage is expected;
-retrying does not resolve that limitation.
+Unsupported approval shapes leave pending coverage incomplete; inspect the run's
+reported failures before retrying. A retry cannot resolve an unsupported shape.
 
 `contentFingerprint` ignores only the session `cardGuid` values, which every login
 renews. Collection remembers one capture per connection, so of a refresh's
 card-month captures only the last can be skipped as an unchanged repeat.
 
 Still unverified: hosted collection and EU-region egress, unattended operation,
-session lifetime, future periods, reuse of a card's final four digits, partner
-and co-branded cards, old cards missing from discovery, pending semantics and
+session lifetime, reuse of a card's final four digits, partner and co-branded
+cards, old cards missing from discovery, pending coverage across rollover and
 accounting meaning beyond the rows totals count.

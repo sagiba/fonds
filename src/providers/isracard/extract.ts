@@ -333,13 +333,20 @@ function exactKeys(value: unknown, keys: string): value is SourceRow {
   return object(value) && Object.keys(value).sort().join() === keys;
 }
 
-function isracardApprovals(value: unknown): boolean {
+function approvalContainer(
+  value: unknown,
+): value is SourceRow & { approvedTransactions: unknown[] } {
   return (
     exactKeys(value, "approvedTransactions,totalEstimatedAmount") &&
     Array.isArray(value.approvedTransactions) &&
-    value.approvedTransactions.every(object) &&
     isLosslessNumber(value.totalEstimatedAmount)
   );
+}
+
+function isracardApprovals(
+  value: unknown,
+): value is SourceRow & { approvedTransactions: SourceRow[] } {
+  return approvalContainer(value) && value.approvedTransactions.every(object);
 }
 
 /**
@@ -369,6 +376,147 @@ export function isracardPendingSummary(value: unknown): boolean {
         ),
     )
   );
+}
+
+function approvalIdentity(row: SourceRow, accountKey: string): string | null {
+  const location = isLosslessNumber(row.confirmationLocation)
+    ? integer(row.confirmationLocation)
+    : null;
+  const sequence = text(row.seqConfirmationNumber);
+  const timestamp = text(row.confirmationTimeStamp);
+  return location !== null &&
+    sequence !== null &&
+    timestamp !== null &&
+    sequence.trim() !== "" &&
+    timestamp.trim() !== "" &&
+    !/[\u0000-\u001f\u007f]/.test(sequence + timestamp)
+    ? `isracard:pending:${JSON.stringify([accountKey, location, sequence, timestamp])}`
+    : null;
+}
+
+/** The selected Next response owns an authorization snapshot, independently of posted vouchers. */
+function collectApprovals(
+  capture: IsracardCapture,
+  data: SourceRow | null,
+  rawApprovals: unknown,
+  context: ExtractionContext,
+  result: ExtractionResult,
+): void {
+  if (capture.isNextBillingDate !== true && rawApprovals == null) {
+    return;
+  }
+  const accountKey = isracardCardKey(capture.card);
+  const validEnvelope =
+    !result.historical &&
+    capture.isNextBillingDate === true &&
+    exactKeys(data, "approvals,currentTransactionsList,israelAbroadVouchers") &&
+    (data.israelAbroadVouchers === null || object(data.israelAbroadVouchers)) &&
+    (data.currentTransactionsList === null ||
+      isracardPendingSummary(data.currentTransactionsList)) &&
+    (data.approvals === null || approvalContainer(data.approvals));
+  let success = validEnvelope;
+  if (!validEnvelope) {
+    result.warnings.push("unsupported_approvals_preserved_raw");
+  } else if (approvalContainer(data.approvals)) {
+    const groups = new Map<
+      string,
+      { row: SourceRow; index: number; native: boolean }[]
+    >();
+    data.approvals.approvedTransactions.forEach((row, index) => {
+      if (!object(row)) {
+        success = false;
+        return;
+      }
+      const nativeKey = approvalIdentity(row, accountKey);
+      const baseKey =
+        nativeKey ??
+        `isracard:pending:missing-identity:${JSON.stringify([accountKey, sourceDate(row.purchaseDate)])}`;
+      const members = groups.get(baseKey) ?? [];
+      members.push({ row, index, native: nativeKey !== null });
+      groups.set(baseKey, members);
+    });
+    for (const [baseKey, members] of groups) {
+      for (const [occurrence, { row, index, native }] of members.entries()) {
+        const ambiguous = !native || members.length > 1;
+        const purchaseDate = sourceDate(row.purchaseDate);
+        const merchantName = text(row.businessName);
+        const iso = text(row.currencyIso);
+        const currency = iso !== null && CURRENCY_CODE.test(iso) ? iso : null;
+        const stated = isLosslessNumber(row.originalAmount)
+          ? minor(row.originalAmount, currency)
+          : null;
+        const details = emptyDetails();
+        details.issues.push("source_derived_amount_direction");
+        if (ambiguous) {
+          details.issues.push(
+            native ? "ambiguous_source_identity" : "incomplete_source_identity",
+          );
+        }
+        if (purchaseDate === null) {
+          details.issues.push("invalid_source_date");
+        }
+        if (merchantName === null || merchantName.trim() === "") {
+          details.issues.push("invalid_pending_merchant");
+        }
+        if (stated === null) {
+          details.issues.push("invalid_authorization_amount");
+        }
+        if (details.issues.length > 1) {
+          success = false;
+        }
+        details.sourceRefs.push({
+          runId: context.runId,
+          path: `$.responses.digital.data.approvals.approvedTransactions[${index}]`,
+        });
+        details.provider.isracard = {
+          identity: { baseKey, occurrenceCount: members.length },
+          rows: [json(row)],
+          billingMonth: capture.billingMonth,
+          monetaryEvidence: {
+            originalMinor: stated,
+            originalCurrency: currency,
+            convention:
+              "upstream signed originalAmount negated; authorization currency from currencyIso; kind not stated",
+          },
+        };
+        result.transactions.push({
+          sourceScope: accountKey,
+          cardKey: accountKey,
+          sourceKey: ambiguous
+            ? `${baseKey}:occurrence:${occurrence + 1}`
+            : baseKey,
+          sourceAliases: [],
+          identityStrength: ambiguous ? "ambiguous" : "native",
+          status: "pending",
+          description: null,
+          counterpartyName: null,
+          kind: "unknown",
+          merchantName,
+          merchantProviderId: null,
+          merchantCategoryCode: null,
+          transactionDate: purchaseDate,
+          bookingDate: null,
+          billingDate: null,
+          amountMinor: stated === null ? null : stated === 0 ? 0 : -stated,
+          currency: stated === null ? null : currency,
+          amountBasis: "authorization",
+          originalAmountMinor: null,
+          originalCurrency: null,
+          installmentCount: null,
+          details,
+        });
+      }
+    }
+  }
+  result.partitions.push({
+    accountKey,
+    status: "pending",
+    success,
+    comparable: success,
+  });
+  if (!success && validEnvelope) {
+    result.warnings.push("incomplete_pending_partition");
+  }
 }
 
 function collectDigital(
@@ -1664,15 +1812,7 @@ export function extractIsracard(
     object(digitalResponse) && object(digitalResponse.data)
       ? digitalResponse.data.approvals
       : undefined;
-  if (rawApprovals !== null && rawApprovals !== undefined) {
-    result.warnings.push("unsupported_approvals_preserved_raw");
-    result.partitions.push({
-      accountKey,
-      status: "pending",
-      success: false,
-      comparable: false,
-    });
-  }
+  collectApprovals(capture, digital, rawApprovals, context, result);
   const groups = new Map<string, Observation[]>();
   const voucherCounts = new Map<string, { digital: number; legacy: number }>();
   const numericVouchers = new Map<

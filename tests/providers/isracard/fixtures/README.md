@@ -35,6 +35,7 @@ total deliberately disagrees with its rows.
 Malformed, ambiguous and cross-generation cases are built inline from these files
 with invented values in the [extraction](../extraction.test.ts),
 [amount-basis](../amount-basis.test.ts),
+[pending extraction and lifecycle](../pending.test.ts),
 [installment](../installments.test.ts) and
 [collection](../collection.test.ts) tests. Record a new
 real-source pattern in the source notes first, then reproduce it here.

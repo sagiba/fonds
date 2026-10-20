@@ -245,7 +245,12 @@ describe("Isracard extraction", () => {
   it("projects established time, channel and location from rich observed field shapes while retaining discount and source-code evidence", () => {
     const capture = baseline("card-month-rich");
     const result = extract(capture);
-    expect(result.transactions).toHaveLength(7);
+    expect(
+      result.transactions.filter((row) => row.status === "posted"),
+    ).toHaveLength(7);
+    expect(
+      result.transactions.filter((row) => row.status === "pending"),
+    ).toHaveLength(2);
     expect(
       result.partitions.find((partition) => partition.status === "posted"),
     ).toMatchObject({ success: true });
@@ -354,6 +359,8 @@ describe("Isracard extraction", () => {
         result.transactions.map((row) => [row.merchantName, row.kind]),
       ),
     ).toEqual({
+      "Synthetic approval shop": "unknown",
+      "Synthetic foreign authorization": "unknown",
       "Synthetic discount shop": "purchase",
       "Synthetic recurring service": "fee",
       "Synthetic overseas ILS bill": "fee",
@@ -1739,7 +1746,7 @@ describe("Isracard extraction", () => {
   });
 
   it.each(["card-month-approvals", "card-month-rich"])(
-    "keeps unsupported approval evidence in %s separate from posted identities",
+    "keeps full approval evidence in %s separate from posted identities",
     (name) => {
       const capture = baseline(name);
       const source = capture.responses.digital;
@@ -1748,22 +1755,29 @@ describe("Isracard extraction", () => {
       updateDigital(withoutApprovals, (_rows, data) => {
         data.approvals = null;
       });
-      expect(result.transactions).toEqual(
-        extract(withoutApprovals).transactions,
+      const posted = result.transactions.filter(
+        (row) => row.status === "posted",
+      );
+      expect(posted).toEqual(
+        extract(withoutApprovals).transactions.filter(
+          (row) => row.status === "posted",
+        ),
       );
       expect(
-        result.transactions.flatMap((row) => row.details.sourceRefs),
+        posted.flatMap((row) => row.details.sourceRefs),
       ).not.toContainEqual(
         expect.objectContaining({ path: expect.stringContaining("approvals") }),
       );
-      expect(result.warnings).toContain("unsupported_approvals_preserved_raw");
-      expect(result.transactions.length).toBeGreaterThan(0);
-      expect(result.transactions.every((row) => row.status === "posted")).toBe(
-        true,
+      expect(result.warnings).not.toContain(
+        "unsupported_approvals_preserved_raw",
       );
+      expect(result.transactions.length).toBeGreaterThan(0);
+      expect(
+        result.transactions.filter((row) => row.status === "pending"),
+      ).toHaveLength(2);
       expect(
         result.partitions.find((partition) => partition.status === "pending"),
-      ).toMatchObject({ success: false, comparable: false });
+      ).toMatchObject({ success: true, comparable: true });
       expect(
         result.partitions.find((partition) => partition.status === "posted"),
       ).toMatchObject({ success: true, comparable: false });
@@ -1794,7 +1808,7 @@ describe("Isracard extraction", () => {
     ).toMatchObject({ success: false, comparable: false });
   });
 
-  it("accepts the observed approvals-only response as empty posted coverage without certifying pending", () => {
+  it("accepts the observed approvals-only response as empty posted coverage alongside a pending snapshot", () => {
     const capture = baseline("card-month-approvals");
     updateDigital(capture, (_rows, data) => {
       data.israelAbroadVouchers = null;
@@ -1809,14 +1823,19 @@ describe("Isracard extraction", () => {
     delete capture.responses.details;
     delete capture.legacyCardIndex;
     const result = extract(capture);
-    expect(result.transactions).toEqual([]);
-    expect(result.warnings).toContain("unsupported_approvals_preserved_raw");
+    expect(result.transactions).toHaveLength(2);
+    expect(result.transactions.every((row) => row.status === "pending")).toBe(
+      true,
+    );
+    expect(result.warnings).not.toContain(
+      "unsupported_approvals_preserved_raw",
+    );
     expect(result.warnings).not.toContain("unsupported_digital_empty_shape");
     expect(result.partitions).toEqual([
       expect.objectContaining({
         status: "pending",
-        success: false,
-        comparable: false,
+        success: true,
+        comparable: true,
       }),
       expect.objectContaining({
         status: "posted",
@@ -1851,7 +1870,7 @@ describe("Isracard extraction", () => {
       ).data.currentTransactionsList,
     ],
   ])(
-    "keeps unverified approval-bearing null-voucher shapes partial: approvals=%j summary=%j",
+    "keeps unsupported posted null-voucher shapes partial beside approval evidence: approvals=%j summary=%j",
     (approvals, currentTransactionsList) => {
       const capture = baseline("card-month-approvals");
       updateDigital(capture, (_rows, data) => {
@@ -1867,8 +1886,8 @@ describe("Isracard extraction", () => {
       expect(result.partitions).toEqual([
         expect.objectContaining({
           status: "pending",
-          success: false,
-          comparable: false,
+          success: currentTransactionsList !== null,
+          comparable: currentTransactionsList !== null,
         }),
         expect.objectContaining({
           status: "posted",
@@ -1975,7 +1994,11 @@ describe("Isracard extraction", () => {
           provider: "isracard",
         });
         const result = await ingestCapture(db, capture, 1);
-        expect(result.status).not.toBe("completed");
+        if (errorCode === "0") {
+          expect(result.status).toBe("completed");
+        } else {
+          expect(result.status).not.toBe("completed");
+        }
         const [run] = await db.orm.select().from(syncRuns).all();
         expect(run!.snapshot.responses[0]!.responseText).toBe(source);
         const archived = JSON.parse(
@@ -1985,11 +2008,13 @@ describe("Isracard extraction", () => {
         expect(run!.coverage).toContainEqual(
           expect.objectContaining({
             status: "pending",
-            success: false,
-            comparable: false,
+            success: errorCode === "0",
+            comparable: errorCode === "0",
           }),
         );
-        expect(await db.listTransactions({ status: "pending" })).toEqual([]);
+        expect(await db.listTransactions({ status: "pending" })).toHaveLength(
+          errorCode === "0" ? 2 : 0,
+        );
       } finally {
         await db.close();
       }
