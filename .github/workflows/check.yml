@@ -80,10 +80,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
-      # Isolated install, dependency graph and the SQLite launcher's HTTP/MCP;
-      # the postgres job runs the PostgreSQL launcher. Experimental targets
-      # (Turso, turso-web, D1) run in experimental.yml.
-      - run: npm run check:targets -- sqlite --runtime
 
   postgres:
     needs: changes
@@ -119,8 +115,6 @@ jobs:
           --outputFile=/tmp/fonds-postgres-results.json
       - name: Verify PostgreSQL coverage ran
         run: node scripts/check-postgres-tests.mjs /tmp/fonds-postgres-results.json
-      - name: Run the PostgreSQL launcher in an isolated install
-        run: npm run check:targets -- postgres --runtime
 
   # The npm package as a user installs it: the `fonds` command on SQLite
   # (demo, stdio MCP, loopback HTTP) and on PostgreSQL (commands, stdio MCP,

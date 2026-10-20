@@ -17,7 +17,7 @@ Set `FONDS_TEST_POSTGRES_URL` to that synthetic database’s published address. 
 
 `FONDS_TEST_REQUIRE_POSTGRES=1` enables `tests/storage/postgres-required.test.ts`: an absent/blank `FONDS_TEST_POSTGRES_URL` or a host other than `localhost`, `127.0.0.1`, `[::1]` or `host.docker.internal` fails, and a real `SELECT 1` must succeed with a three-second connection timeout. Without the require flag, this guard skips and local `npm run check` retains its optional PostgreSQL behavior. Setting a URL still enables the existing real-driver tests, which create and drop schemas and databases on it; the host check fails the run but does not stop other suites, so only ever export a disposable URL. The flag does not supply a default database.
 
-The `Check` workflow's `postgres` job runs the storage suites against a health-checked `postgres:18.6` service container with an invented password, a loopback test URL and only committed synthetic fixtures, then runs the PostgreSQL launcher from an isolated install (`npm run check:targets -- postgres --runtime`). To reproduce its storage run after setting the disposable test URL:
+The `Check` workflow's `postgres` job runs the storage suites against a health-checked `postgres:18.6` service container with an invented password, a loopback test URL and only committed synthetic fixtures, and the `package` job runs the installed npm package's PostgreSQL modes (`npm run check:npm`). To reproduce its storage run after setting the disposable test URL:
 
 ```sh
 export FONDS_TEST_REQUIRE_POSTGRES=1
@@ -99,7 +99,7 @@ npm run format:check
 npm run check:targets -- --runtime
 ```
 
-File serialization avoids unrelated test files competing with the intentionally expired libSQL transaction or transient rollback triggers. Individual tests still exercise concurrent writers, separate pools and expected-version/cursor races. Synthetic runtime files stay under `/tmp`. The isolated build verifier installs each target away from the repository’s `node_modules`, emits declarations, checks the compiled module graph and installed production dependencies, and exercises authenticated HTTP/MCP for each Node backend. `turso-web` is a bundled storage/application module and is checked for importability and absence of Node/native execution dependencies; it is not a deployed HTTP server. The experimental `d1-web` bundle gets the same checks, but only when named: `npm run check:targets -- d1-web`.
+File serialization avoids unrelated test files competing with the intentionally expired libSQL transaction or transient rollback triggers. Individual tests still exercise concurrent writers, separate pools and expected-version/cursor races. Synthetic runtime files stay under `/tmp`. `npm run check:npm` installs the npm package away from the repository and exercises its SQLite and PostgreSQL launchers; the isolated build verifier does the same for each experimental target's recipe, emitting declarations and checking the compiled module graph and installed production dependencies. `turso-web` is a bundled storage/application module and is checked for importability and absence of Node/native execution dependencies; it is not a deployed HTTP server. The experimental `d1-web` bundle gets the same checks, but only when named: `npm run check:targets -- d1-web`.
 
 ## Synthetic performance checks
 

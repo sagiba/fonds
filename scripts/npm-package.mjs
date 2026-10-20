@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { parseEnv, promisify } from "node:util";
 
 import { buildTarget, root, targets } from "./build-targets.mjs";
+import { verifyHttp } from "./target-smoke.mjs";
 
 const run = promisify(execFile);
 const destination = resolve(root, "dist/npm");
@@ -344,18 +345,10 @@ async function assertRecipeMatchesRoot() {
  */
 async function pack(stage) {
   await assertRecipeMatchesRoot();
-  await buildTarget("sqlite", {
-    output: stage,
-    recipe: "deploy/npm",
-    bundleDependencies: true,
-  });
+  await buildTarget("sqlite", { output: stage });
   // The PostgreSQL build sits beside it; the launcher picks one per command.
   const postgres = join(stage, "postgres");
-  await buildTarget("postgres", {
-    output: postgres,
-    recipe: "deploy/npm",
-    bundleDependencies: true,
-  });
+  await buildTarget("postgres", { output: postgres });
   const metafiles = [];
   for (const directory of [stage, postgres]) {
     metafiles.push(
@@ -401,6 +394,7 @@ async function pack(stage) {
     "cli.js",
     "server.js",
     "postgres/server.js",
+    "fonds.mjs",
     ...Object.keys(targets.sqlite.files),
   ].sort();
   const chunk = /^(?:postgres\/)?chunks\//;
@@ -503,6 +497,9 @@ function startHttp(command, args, env, listening = sqliteListening) {
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
+  const exited = new Promise((resolveExit) =>
+    child.once("exit", (code, signal) => resolveExit({ code, signal })),
+  );
   const url = new Promise((resolveUrl, reject) => {
     const timeout = setTimeout(
       () => reject(new Error(`HTTP server did not start: ${output}`)),
@@ -523,7 +520,32 @@ function startHttp(command, args, env, listening = sqliteListening) {
       reject(new Error(`HTTP server exited (${code}): ${output}`));
     });
   });
-  return { child, url };
+  return { child, url, exited, output: () => output };
+}
+
+/**
+ * SIGTERM must end a server cleanly within ten seconds, and it must never
+ * have printed its bearer token.
+ */
+async function stopGracefully(server, label, token) {
+  if (token) {
+    assert(!server.output().includes(token), `${label} logged its token`);
+  }
+  server.child.kill("SIGTERM");
+  let timeout;
+  const result = await Promise.race([
+    server.exited,
+    new Promise((resolveTimeout) => {
+      timeout = setTimeout(() => resolveTimeout("timeout"), 10_000);
+    }),
+  ]).finally(() => clearTimeout(timeout));
+  if (result === "timeout") {
+    server.child.kill("SIGKILL");
+  }
+  assert(
+    result !== "timeout" && result.code === 0 && result.signal === null,
+    `${label} did not shut down cleanly: ${JSON.stringify(result)}`,
+  );
 }
 
 /** A command's exit status and output, without rejecting on failure. */
@@ -639,23 +661,10 @@ async function checkPostgres(fonds, packed, scratch, serverUrl) {
       const { FONDS_API_TOKEN: token } = parseEnv(
         await readFile(join(state, "fonds.env"), "utf8"),
       );
-      const health = await fetch(`${url}/health`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      assert(
-        health.status === 200,
-        `PostgreSQL /health returned ${health.status}`,
-      );
-      assert(
-        (await health.json()).storage === "postgres",
-        "PostgreSQL storage",
-      );
-      assert(
-        (await fetch(`${url}/health`)).status === 401,
-        "PostgreSQL /health without a token",
-      );
+      await verifyHttp(url, "postgres", token);
+      await stopGracefully(loopback, "PostgreSQL loopback HTTP", token);
     } finally {
-      loopback.child.kill("SIGTERM");
+      loopback.child.kill("SIGKILL");
     }
 
     const port = await freePort();
@@ -684,8 +693,9 @@ async function checkPostgres(fonds, packed, scratch, serverUrl) {
         (await fetch(`${origin}/mcp`, { method: "POST" })).status === 401,
         "hosted /mcp without a grant",
       );
+      await stopGracefully(hosted, "hosted service");
     } finally {
-      hosted.child.kill("SIGTERM");
+      hosted.child.kill("SIGKILL");
     }
     const ambiguous = await outcome(fonds, ["serve"], {
       cwd: scratch,
@@ -784,13 +794,10 @@ async function checkInstalled(packed, scratch) {
     const { FONDS_API_TOKEN: token } = parseEnv(
       await readFile(join(home, "fonds.env"), "utf8"),
     );
-    const health = await fetch(`${url}/health`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    assert(health.status === 200, `HTTP /health returned ${health.status}`);
-    assert((await health.json()).storage === "sqlite", "HTTP storage");
+    await verifyHttp(url, "sqlite", token);
+    await stopGracefully(server, "SQLite loopback HTTP", token);
   } finally {
-    server.child.kill("SIGTERM");
+    server.child.kill("SIGKILL");
   }
   const sqliteHosted = await outcome(fonds, ["serve", "--hosted"], {
     cwd: scratch,
