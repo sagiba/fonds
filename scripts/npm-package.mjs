@@ -270,8 +270,13 @@ async function assertRecipeMatchesRoot() {
       )
         .then((text) => JSON.parse(text).version)
         .catch(() => undefined);
-      if (installed !== undefined && installed !== entry.version) {
-        stale.push(`  ${path}: ${installed} (lockfile ${entry.version})`);
+      // Only platform-specific optional packages may be absent.
+      if (
+        installed === undefined ? !entry.optional : installed !== entry.version
+      ) {
+        stale.push(
+          `  ${path}: ${installed ?? "missing"} (lockfile ${entry.version})`,
+        );
       }
     }
   }
