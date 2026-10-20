@@ -87,14 +87,14 @@ the [provider guide](docs/providers/cal.md) first. Then:
 ```sh
 node dist/cli.js init --connection my-cal --provider cal
 node dist/cli.js connect --connection my-cal
-node dist/cli.js collect --connection my-cal
+node dist/cli.js refresh --connection my-cal
 claude mcp add fonds -- node "$PWD/dist/server.js" --transport stdio
 ```
 
 Without `--db`, these use your private default ledger. `connect` asks for your
 login with hidden input and stores it encrypted, so later refreshes need no
 prompt; back up the [state directory](docs/database.md#state-directory-and-backup)
-holding its key together with the database. `collect` reads the provider's recent
+holding its key together with the database. `refresh` reads the provider's recent
 window; the provider guide covers history. `node dist/cli.js --help` lists every
 command; the [local guide](docs/guides/local-development.md) covers the data
 directory, HTTP and other clients.
@@ -133,7 +133,7 @@ them working.
   requests or block access. Login failures or challenges stop refreshes until you
   intervene and explicitly retry. Use only your own accounts. Automated access may
   violate your provider's terms or lead to access restrictions; check the terms
-  that apply to your account before collecting.
+  that apply to your account before refreshing.
 - **Double-check what matters.** Fonds leaves facts the source does not state
   unknown. Check your provider's own records before a financial decision.
 

@@ -31,8 +31,8 @@ const required = [
   "FONDS_PUBLIC_ORIGIN=https://fonds.synthetic.invalid",
   "FONDS_NEON_GOOGLE_AUTH_URL=https://ep-synthetic.neonauth.neon.tech/auth",
   "FONDS_GOOGLE_OWNER_EMAIL=owner@synthetic.invalid",
-  "FONDS_COLLECTION_CONNECTION_ID=primary",
-  "FONDS_COLLECTION_PROVIDER=cal",
+  "FONDS_CONNECTION_ID=primary",
+  "FONDS_CONNECTION_PROVIDER=cal",
 ].join("\n");
 
 describe("Neon setup env file", () => {
@@ -55,14 +55,14 @@ describe("Neon setup env file", () => {
       "FONDS_AUTH_SECRET",
       "FONDS_OWNER_ID",
       "FONDS_CREDENTIALS_KEY",
-      "FONDS_COLLECTION_SECRET",
-      "FONDS_COLLECTION_TIME",
+      "FONDS_REFRESH_SECRET",
+      "FONDS_REFRESH_TIME",
     ]);
     expect((await stat(path)).mode & 0o777).toBe(0o600);
     const saved = parseEnv(await readFile(path, "utf8"));
     expect(saved.FONDS_AUTH_SECRET?.length).toBeGreaterThanOrEqual(32);
-    expect(saved.FONDS_COLLECTION_SECRET).toMatch(/^[A-Za-z0-9_-]{32,256}$/);
-    expect(saved.FONDS_COLLECTION_TIME).toMatch(/^([01]\d|2[0-3]):[0-5]\d$/);
+    expect(saved.FONDS_REFRESH_SECRET).toMatch(/^[A-Za-z0-9_-]{32,256}$/);
+    expect(saved.FONDS_REFRESH_TIME).toMatch(/^([01]\d|2[0-3]):[0-5]\d$/);
 
     const second = await prepareEnvironmentFile(path);
     expect(second.generated).toEqual([]);
@@ -74,9 +74,9 @@ describe("Neon setup env file", () => {
       "FONDS_AUTH_SECRET=synthetic-auth-secret-00000000000000000000",
       "FONDS_OWNER_ID=synthetic-owner",
       `FONDS_CREDENTIALS_KEY=${"A".repeat(43)}`,
-      "FONDS_COLLECTION_SECRET=synthetic-collection-secret-000000000000",
-      "FONDS_COLLECTION_SCHEDULE=9,13,18",
-      "FONDS_COLLECTION_TIMEZONE=Asia/Jerusalem",
+      "FONDS_REFRESH_SECRET=synthetic-collection-secret-000000000000",
+      "FONDS_REFRESH_SCHEDULE=9,13,18",
+      "FONDS_REFRESH_TIMEZONE=Asia/Jerusalem",
     ].join("\n");
     await writeFile(path, `${required}\n${secrets}\n`, { mode: 0o600 });
     // A login link needs no collection time and never writes the file.
@@ -84,19 +84,19 @@ describe("Neon setup env file", () => {
     expect(linkOnly.generated).toEqual([]);
     expect(await readFile(path, "utf8")).toBe(`${required}\n${secrets}\n`);
     const added = await prepareEnvironmentFile(path);
-    expect(added.generated).toEqual(["FONDS_COLLECTION_TIME"]);
-    expect(added.values.FONDS_COLLECTION_SCHEDULE).toBe("9,13,18");
+    expect(added.generated).toEqual(["FONDS_REFRESH_TIME"]);
+    expect(added.values.FONDS_REFRESH_SCHEDULE).toBe("9,13,18");
 
     await writeFile(
       path,
-      `${required}\n${secrets}\nFONDS_COLLECTION_TIME=07:45\n`,
+      `${required}\n${secrets}\nFONDS_REFRESH_TIME=07:45\n`,
       {
         mode: 0o600,
       },
     );
     const pinned = await prepareEnvironmentFile(path);
     expect(pinned.generated).toEqual([]);
-    expect(pinned.values.FONDS_COLLECTION_TIME).toBe("07:45");
+    expect(pinned.values.FONDS_REFRESH_TIME).toBe("07:45");
   });
 
   it("names missing required settings without generating anything", async () => {
@@ -108,7 +108,7 @@ describe("Neon setup env file", () => {
       },
     );
     await expect(prepareEnvironmentFile(path)).rejects.toThrow(
-      "Add FONDS_NEON_GOOGLE_AUTH_URL, FONDS_GOOGLE_OWNER_EMAIL, FONDS_COLLECTION_CONNECTION_ID, FONDS_COLLECTION_PROVIDER",
+      "Add FONDS_NEON_GOOGLE_AUTH_URL, FONDS_GOOGLE_OWNER_EMAIL, FONDS_CONNECTION_ID, FONDS_CONNECTION_PROVIDER",
     );
     expect(await readFile(path, "utf8")).not.toContain("FONDS_AUTH_SECRET");
   });
@@ -170,7 +170,7 @@ const secrets = [
   "FONDS_AUTH_SECRET=synthetic-auth-secret-00000000000000000000",
   "FONDS_OWNER_ID=synthetic-owner",
   `FONDS_CREDENTIALS_KEY=${"A".repeat(43)}`,
-  "FONDS_COLLECTION_SECRET=synthetic-collection-secret-000000000000",
+  "FONDS_REFRESH_SECRET=synthetic-collection-secret-000000000000",
 ].join("\n");
 const target = [
   "--project-id",
@@ -271,13 +271,13 @@ describe("Neon setup schedule", () => {
     expect(tty.prompts[0]).toMatch(/\[off\]: $/);
     const saved = parseEnv(await readFile(path, "utf8"));
     expect(saved.FONDS_AUTH_SECRET).toBeDefined();
-    expect(saved.FONDS_COLLECTION_SCHEDULE).toBeUndefined();
-    expect(saved.FONDS_COLLECTION_TIMEZONE).toBeUndefined();
+    expect(saved.FONDS_REFRESH_SCHEDULE).toBeUndefined();
+    expect(saved.FONDS_REFRESH_TIMEZONE).toBeUndefined();
     expect((await stat(path)).mode & 0o777).toBe(0o600);
   });
 
   it("re-asks until each answer is valid and replaces only the schedule entries", async () => {
-    const before = `${required}\n${secrets}\nFONDS_COLLECTION_TIME=07:45\nFONDS_SYNTHETIC_EXTRA=kept\n`;
+    const before = `${required}\n${secrets}\nFONDS_REFRESH_TIME=07:45\nFONDS_SYNTHETIC_EXTRA=kept\n`;
     await written(before);
     const tty = terminal([
       "dialy",
@@ -294,31 +294,31 @@ describe("Neon setup schedule", () => {
     expect(tty.prompts).toHaveLength(7);
     const transcript = tty.transcript();
     expect(transcript).toContain(
-      "FONDS_COLLECTION_SCHEDULE must be off, daily, hourly or hours 0-23 such as 9,13,18.",
+      "FONDS_REFRESH_SCHEDULE must be off, daily, hourly or hours 0-23 such as 9,13,18.",
     );
     expect(transcript).toContain(
-      "FONDS_COLLECTION_SCHEDULE must be daily, hourly or hours 0-23 such as 9,13,18.",
+      "FONDS_REFRESH_SCHEDULE must be daily, hourly or hours 0-23 such as 9,13,18.",
     );
     expect(transcript).toContain(
-      "FONDS_COLLECTION_TIMEZONE must be an IANA time zone such as Europe/London.",
+      "FONDS_REFRESH_TIMEZONE must be an IANA time zone such as Europe/London.",
     );
     expect(transcript).toContain(
-      "FONDS_COLLECTION_TIME must be a 24-hour HH:MM time.",
+      "FONDS_REFRESH_TIME must be a 24-hour HH:MM time.",
     );
     expect(tty.prompts[6]).toMatch(/\[07:45\]: $/);
     const after = await readFile(path, "utf8");
     expect(parseEnv(after)).toEqual({
       ...parseEnv(before),
-      FONDS_COLLECTION_SCHEDULE: "9,13,18",
-      FONDS_COLLECTION_TIMEZONE: "Asia/Jerusalem",
-      FONDS_COLLECTION_TIME: "06:30",
+      FONDS_REFRESH_SCHEDULE: "9,13,18",
+      FONDS_REFRESH_TIMEZONE: "Asia/Jerusalem",
+      FONDS_REFRESH_TIME: "06:30",
     });
     expect(new Set(names(after)).size).toBe(names(after).length);
     expect((await stat(path)).mode & 0o777).toBe(0o600);
   });
 
   it("offers the file's values on a rerun, and Enter leaves the file byte-identical", async () => {
-    const before = `${required}\n${secrets}\nFONDS_COLLECTION_SCHEDULE=09,13,18\nFONDS_COLLECTION_TIMEZONE=Asia/Jerusalem\nFONDS_COLLECTION_TIME=07:45\n`;
+    const before = `${required}\n${secrets}\nFONDS_REFRESH_SCHEDULE=09,13,18\nFONDS_REFRESH_TIMEZONE=Asia/Jerusalem\nFONDS_REFRESH_TIME=07:45\n`;
     await written(before);
     const { ino } = await stat(path);
     const tty = terminal(["", "", ""]);
@@ -334,7 +334,7 @@ describe("Neon setup schedule", () => {
 
   it("asks only for the time when hourly, and suggests the machine's zone when daily", async () => {
     vi.stubEnv("TZ", "Asia/Tokyo");
-    const before = `${required}\n${secrets}\nFONDS_COLLECTION_TIME=07:45\n`;
+    const before = `${required}\n${secrets}\nFONDS_REFRESH_TIME=07:45\n`;
     await written(before);
     const hourly = terminal(["hourly", ""]);
     await expect(
@@ -343,7 +343,7 @@ describe("Neon setup schedule", () => {
     expect(hourly.prompts).toHaveLength(2);
     expect(parseEnv(await readFile(path, "utf8"))).toEqual({
       ...parseEnv(before),
-      FONDS_COLLECTION_SCHEDULE: "hourly",
+      FONDS_REFRESH_SCHEDULE: "hourly",
     });
 
     // A fresh choice: no schedule is active yet, so the machine's zone is
@@ -357,14 +357,14 @@ describe("Neon setup schedule", () => {
     expect(daily.prompts[1]).toMatch(/\[Asia\/Tokyo\]: $/);
     expect(parseEnv(await readFile(path, "utf8"))).toEqual({
       ...parseEnv(before),
-      FONDS_COLLECTION_SCHEDULE: "daily",
-      FONDS_COLLECTION_TIMEZONE: "Asia/Tokyo",
+      FONDS_REFRESH_SCHEDULE: "daily",
+      FONDS_REFRESH_TIMEZONE: "Asia/Tokyo",
     });
   });
 
   it("keeps an active schedule's UTC zone when the file names none", async () => {
     vi.stubEnv("TZ", "Asia/Tokyo");
-    const before = `${required}\n${secrets}\nFONDS_COLLECTION_SCHEDULE=daily\nFONDS_COLLECTION_TIME=07:45\n`;
+    const before = `${required}\n${secrets}\nFONDS_REFRESH_SCHEDULE=daily\nFONDS_REFRESH_TIME=07:45\n`;
     await written(before);
     const { ino } = await stat(path);
 
@@ -400,21 +400,21 @@ describe("Neon setup schedule", () => {
     ).rejects.toThrow(stopsAtDatabase);
     expect(changed.prompts[1]).toMatch(/\[UTC\]: $/);
     expect(await readFile(path, "utf8")).not.toContain(
-      "FONDS_COLLECTION_TIMEZONE",
+      "FONDS_REFRESH_TIMEZONE",
     );
   });
 
   it("corrects padded stored values that equal the answer once trimmed", async () => {
-    const padded = `${required}\n${secrets}\nFONDS_COLLECTION_SCHEDULE=" daily "\nFONDS_COLLECTION_TIMEZONE=" Asia/Tokyo "\nFONDS_COLLECTION_TIME=" 07:45 "\n`;
+    const padded = `${required}\n${secrets}\nFONDS_REFRESH_SCHEDULE=" daily "\nFONDS_REFRESH_TIMEZONE=" Asia/Tokyo "\nFONDS_REFRESH_TIME=" 07:45 "\n`;
     // The runtime refuses the padded time as stored.
     expect(() => parseCollectionSchedule(parseEnv(padded), "missing")).toThrow(
-      "FONDS_COLLECTION_TIME must be a 24-hour HH:MM time",
+      "FONDS_REFRESH_TIME must be a 24-hour HH:MM time",
     );
     const corrected = {
       ...parseEnv(padded),
-      FONDS_COLLECTION_SCHEDULE: "daily",
-      FONDS_COLLECTION_TIMEZONE: "Asia/Tokyo",
-      FONDS_COLLECTION_TIME: "07:45",
+      FONDS_REFRESH_SCHEDULE: "daily",
+      FONDS_REFRESH_TIMEZONE: "Asia/Tokyo",
+      FONDS_REFRESH_TIME: "07:45",
     };
 
     for (const flag of [
@@ -424,13 +424,13 @@ describe("Neon setup schedule", () => {
     ]) {
       const [name, value] = flag;
       const setting = {
-        "--time": "FONDS_COLLECTION_TIME",
-        "--timezone": "FONDS_COLLECTION_TIMEZONE",
-        "--schedule": "FONDS_COLLECTION_SCHEDULE",
+        "--time": "FONDS_REFRESH_TIME",
+        "--timezone": "FONDS_REFRESH_TIMEZONE",
+        "--schedule": "FONDS_REFRESH_SCHEDULE",
       }[name];
       // Only the flagged entry is padded, so the rest of the file is valid.
       await written(
-        `${required}\n${secrets}\nFONDS_COLLECTION_SCHEDULE=daily\nFONDS_COLLECTION_TIMEZONE=Asia/Tokyo\nFONDS_COLLECTION_TIME=07:45\n${setting}=" ${value} "\n`,
+        `${required}\n${secrets}\nFONDS_REFRESH_SCHEDULE=daily\nFONDS_REFRESH_TIMEZONE=Asia/Tokyo\nFONDS_REFRESH_TIME=07:45\n${setting}=" ${value} "\n`,
       );
       await expect(
         setup(["--env-file", path, ...target, ...flag], pipes().io),
@@ -457,7 +457,7 @@ describe("Neon setup schedule", () => {
   });
 
   it("writes padded answers trimmed, which the runtime then accepts", async () => {
-    const before = `${required}\n${secrets}\nFONDS_COLLECTION_TIME=07:45\n`;
+    const before = `${required}\n${secrets}\nFONDS_REFRESH_TIME=07:45\n`;
     await written(before);
     await expect(
       setup(
@@ -478,9 +478,9 @@ describe("Neon setup schedule", () => {
     const saved = parseEnv(await readFile(path, "utf8"));
     expect(saved).toEqual({
       ...parseEnv(before),
-      FONDS_COLLECTION_SCHEDULE: "9,13",
-      FONDS_COLLECTION_TIMEZONE: "Asia/Tokyo",
-      FONDS_COLLECTION_TIME: "06:30",
+      FONDS_REFRESH_SCHEDULE: "9,13",
+      FONDS_REFRESH_TIMEZONE: "Asia/Tokyo",
+      FONDS_REFRESH_TIME: "06:30",
     });
     expect(parseCollectionSchedule(saved, "missing")).toMatchObject({
       hours: [9, 13],
@@ -494,9 +494,9 @@ describe("Neon setup schedule", () => {
       setup(["--env-file", path, ...target], tty.io),
     ).rejects.toThrow(stopsAtDatabase);
     expect(parseEnv(await readFile(path, "utf8"))).toMatchObject({
-      FONDS_COLLECTION_SCHEDULE: "daily",
-      FONDS_COLLECTION_TIMEZONE: "Asia/Tokyo",
-      FONDS_COLLECTION_TIME: "06:30",
+      FONDS_REFRESH_SCHEDULE: "daily",
+      FONDS_REFRESH_TIMEZONE: "Asia/Tokyo",
+      FONDS_REFRESH_TIME: "06:30",
     });
   });
 
@@ -512,7 +512,7 @@ describe("Neon setup schedule", () => {
 
   it("accepts and refuses the same values as flags and prompts, as the runtime does", async () => {
     const values = parseEnv(
-      `${required}\n${secrets}\nFONDS_COLLECTION_TIME=07:45\n`,
+      `${required}\n${secrets}\nFONDS_REFRESH_TIME=07:45\n`,
     );
     // Each kind's prompt is reached with these answers, then the value under
     // test, then a valid fallback for when it is refused; later prompts take
@@ -550,15 +550,15 @@ describe("Neon setup schedule", () => {
     // Words the runtime silently reads as off; setup refuses them instead.
     const offWords = ["dialy", "Daily", "weekly", "daily=FONDS_OWNER_ID"];
     const settingName = {
-      schedule: "FONDS_COLLECTION_SCHEDULE",
-      timeZone: "FONDS_COLLECTION_TIMEZONE",
-      time: "FONDS_COLLECTION_TIME",
+      schedule: "FONDS_REFRESH_SCHEDULE",
+      timeZone: "FONDS_REFRESH_TIMEZONE",
+      time: "FONDS_REFRESH_TIME",
     };
     const runtime = (kind, text) =>
       parseCollectionSchedule(
         {
-          FONDS_COLLECTION_SCHEDULE: "daily",
-          FONDS_COLLECTION_TIME: "00:00",
+          FONDS_REFRESH_SCHEDULE: "daily",
+          FONDS_REFRESH_TIME: "00:00",
           [settingName[kind]]: text,
         },
         "missing",
@@ -593,7 +593,7 @@ describe("Neon setup schedule", () => {
     for (const text of offWords) {
       expect(runtime("schedule", text)).toBeUndefined();
       const message =
-        "FONDS_COLLECTION_SCHEDULE must be off, daily, hourly or hours 0-23 such as 9,13,18.";
+        "FONDS_REFRESH_SCHEDULE must be off, daily, hourly or hours 0-23 such as 9,13,18.";
       expect(() => viaFlag("schedule", text)).toThrow(message);
       const prompted = await viaPrompt("schedule", text);
       expect(prompted.transcript).toContain(message);
@@ -614,7 +614,7 @@ describe("Neon setup schedule", () => {
       await expect(
         setup(["--env-file", path, ...target, ...flag], pipes().io),
         flag.join(" "),
-      ).rejects.toThrow(/^FONDS_COLLECTION_(SCHEDULE|TIMEZONE|TIME) must be/);
+      ).rejects.toThrow(/^FONDS_REFRESH_(SCHEDULE|TIMEZONE|TIME) must be/);
     }
     expect(await readFile(path, "utf8")).toBe(`${required}\n`);
     // The env file refuses an unvalidated answer too.
@@ -622,12 +622,12 @@ describe("Neon setup schedule", () => {
       prepareEnvironmentFile(path, {
         schedule: () => ({ schedule: "daily\nFONDS_OWNER_ID=attacker" }),
       }),
-    ).rejects.toThrow("FONDS_COLLECTION_SCHEDULE must be");
+    ).rejects.toThrow("FONDS_REFRESH_SCHEDULE must be");
     expect(await readFile(path, "utf8")).toBe(`${required}\n`);
   });
 
   it("cannot be given another key through a pasted multi-line answer", async () => {
-    await written(`${required}\n${secrets}\nFONDS_COLLECTION_TIME=07:45\n`);
+    await written(`${required}\n${secrets}\nFONDS_REFRESH_TIME=07:45\n`);
     const tty = terminal(["daily\nFONDS_OWNER_ID=attacker", "UTC", ""]);
     await expect(
       setup(["--env-file", path, ...target], tty.io),
@@ -639,12 +639,12 @@ describe("Neon setup schedule", () => {
     expect(text.match(/^FONDS_OWNER_ID=/gm)).toHaveLength(1);
     expect(parseEnv(text)).toMatchObject({
       FONDS_OWNER_ID: "synthetic-owner",
-      FONDS_COLLECTION_SCHEDULE: "daily",
+      FONDS_REFRESH_SCHEDULE: "daily",
     });
   });
 
   it("never prompts with flags or without a terminal on both streams", async () => {
-    const before = `${required}\n${secrets}\nFONDS_COLLECTION_SCHEDULE=09,13,18\nFONDS_COLLECTION_TIMEZONE=Asia/Jerusalem\nFONDS_COLLECTION_TIME=07:45\n`;
+    const before = `${required}\n${secrets}\nFONDS_REFRESH_SCHEDULE=09,13,18\nFONDS_REFRESH_TIMEZONE=Asia/Jerusalem\nFONDS_REFRESH_TIME=07:45\n`;
     await written(before);
     const { ino } = await stat(path);
 
@@ -687,7 +687,7 @@ describe("Neon setup schedule", () => {
     ).rejects.toThrow(stopsAtDatabase);
     expect(parseEnv(await readFile(path, "utf8"))).toEqual({
       ...parseEnv(before),
-      FONDS_COLLECTION_SCHEDULE: "daily",
+      FONDS_REFRESH_SCHEDULE: "daily",
     });
     expect((await stat(path)).mode & 0o777).toBe(0o600);
 
@@ -696,13 +696,13 @@ describe("Neon setup schedule", () => {
     await expect(
       setup(["--env-file", path, ...target], pipes().io),
     ).rejects.toThrow(stopsAtDatabase);
-    expect(
-      parseEnv(await readFile(path, "utf8")).FONDS_COLLECTION_SCHEDULE,
-    ).toBe(undefined);
+    expect(parseEnv(await readFile(path, "utf8")).FONDS_REFRESH_SCHEDULE).toBe(
+      undefined,
+    );
   });
 
   it("never prompts for a login link", async () => {
-    const before = `${required}\n${secrets}\nFONDS_COLLECTION_TIME=07:45\n`;
+    const before = `${required}\n${secrets}\nFONDS_REFRESH_TIME=07:45\n`;
     await written(before);
     const tty = terminal(["daily", "UTC", ""]);
     await expect(
@@ -735,7 +735,7 @@ describe("Neon setup schedule", () => {
       deploy: "npm run neon:deploy -- --env /private/neon.env",
     });
     expect(report).toContain(
-      "Updated FONDS_COLLECTION_SCHEDULE, FONDS_COLLECTION_TIMEZONE, FONDS_COLLECTION_TIME.",
+      "Updated FONDS_REFRESH_SCHEDULE, FONDS_REFRESH_TIMEZONE, FONDS_REFRESH_TIME.",
     );
     expect(report).toContain("npm run neon:deploy -- --env /private/neon.env");
     const printed = `${tty.transcript()}\n${report}`;
@@ -743,17 +743,17 @@ describe("Neon setup schedule", () => {
       "FONDS_AUTH_SECRET",
       "FONDS_OWNER_ID",
       "FONDS_CREDENTIALS_KEY",
-      "FONDS_COLLECTION_SECRET",
+      "FONDS_REFRESH_SECRET",
     ]) {
       expect(printed).not.toContain(environment.values[name]);
     }
     expect(
       scheduleSummary({
-        FONDS_COLLECTION_SCHEDULE: "daily",
-        FONDS_COLLECTION_TIME: "07:05",
+        FONDS_REFRESH_SCHEDULE: "daily",
+        FONDS_REFRESH_TIME: "07:05",
       }),
     ).toBe("Scheduled refreshes: daily at 07:05 (UTC).");
-    expect(scheduleSummary({ FONDS_COLLECTION_TIME: "07:05" })).toBe(
+    expect(scheduleSummary({ FONDS_REFRESH_TIME: "07:05" })).toBe(
       "Scheduled refreshes: off.",
     );
   });

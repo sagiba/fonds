@@ -18,9 +18,9 @@ hosted setup, scheduling and network evidence.
 Supply credentials through private runtime configuration or the CLI credential
 interface. The credential JSON object contains `username` and `password`; the CLI
 also accepts a private `username:password` descriptor. `connect` stores them
-encrypted for later `collect` runs; see the
+encrypted for later `refresh` runs; see the
 [provider credentials table](../database.md#provider-credentials-table). Hosted
-collection uses the provider-neutral configuration in the
+refresh uses the provider-neutral configuration in the
 [hosted-service guide](../guides/hosted-service.md). No proxy is required. The
 fixed endpoints and headers are in [transport](../../src/providers/cal/transport.ts).
 
@@ -88,7 +88,7 @@ rejected as `implausible_empty` when the ledger still holds a recent posted row:
 the run is kept as failed and changes nothing. Accounts commit independently, so
 one invocation can be partial.
 
-Authentication challenges, invalid credentials and rate limits stop collection,
+Authentication challenges, invalid credentials and rate limits stop the refresh,
 and repeated network or invalid-response failures stop after a bounded budget
 and report the gap. Resolve a challenge or password change on CAL's own site,
 run `connect` again if the credentials changed, wait out a rate limit, then rerun

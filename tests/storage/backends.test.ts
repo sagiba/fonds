@@ -1064,8 +1064,8 @@ for (const backend of backends) {
       it("runs a due occurrence once across schedulers sharing the database", async () => {
         const schedule = parseCollectionSchedule(
           {
-            FONDS_COLLECTION_SCHEDULE: "hourly",
-            FONDS_COLLECTION_TIME: "00:05",
+            FONDS_REFRESH_SCHEDULE: "hourly",
+            FONDS_REFRESH_TIME: "00:05",
           },
           "unused",
         );

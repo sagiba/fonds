@@ -74,10 +74,10 @@ describe.skipIf(!postgresUrl)("hosted PostgreSQL collection targets", () => {
       FONDS_PUBLIC_ORIGIN: "https://fonds.synthetic.invalid",
       FONDS_AUTH_SECRET: "synthetic-auth-secret-00000000000000000000",
       FONDS_OWNER_ID: "synthetic-owner",
-      FONDS_COLLECTION_SECRET: "synthetic-collection-secret-000000000000000",
-      FONDS_COLLECTION_CONNECTION_ID: "env-cal",
-      FONDS_COLLECTION_PROVIDER: "cal",
-      FONDS_COLLECTION_CREDENTIALS: JSON.stringify({
+      FONDS_REFRESH_SECRET: "synthetic-collection-secret-000000000000000",
+      FONDS_CONNECTION_ID: "env-cal",
+      FONDS_CONNECTION_PROVIDER: "cal",
+      FONDS_CONNECTION_CREDENTIALS: JSON.stringify({
         username: "synthetic-env-user",
         password: "synthetic-env-password",
       }),
@@ -136,10 +136,10 @@ describe.skipIf(!postgresUrl)("hosted PostgreSQL collection targets", () => {
       FONDS_PUBLIC_ORIGIN: "https://fonds.synthetic.invalid",
       FONDS_AUTH_SECRET: "synthetic-auth-secret-00000000000000000000",
       FONDS_OWNER_ID: "synthetic-owner",
-      FONDS_COLLECTION_SECRET: "synthetic-collection-secret-000000000000000",
-      FONDS_COLLECTION_CONNECTION_ID: "env-cal",
-      FONDS_COLLECTION_PROVIDER: "cal",
-      FONDS_COLLECTION_CREDENTIALS: JSON.stringify({
+      FONDS_REFRESH_SECRET: "synthetic-collection-secret-000000000000000",
+      FONDS_CONNECTION_ID: "env-cal",
+      FONDS_CONNECTION_PROVIDER: "cal",
+      FONDS_CONNECTION_CREDENTIALS: JSON.stringify({
         username: "synthetic-env-user",
         password: "synthetic-env-password",
       }),
@@ -170,10 +170,10 @@ describe.skipIf(!postgresUrl)("hosted PostgreSQL collection targets", () => {
       FONDS_PUBLIC_ORIGIN: "https://fonds.synthetic.invalid",
       FONDS_AUTH_SECRET: "synthetic-auth-secret-00000000000000000000",
       FONDS_OWNER_ID: "synthetic-owner",
-      FONDS_COLLECTION_SECRET: "synthetic-collection-secret-000000000000000",
-      FONDS_COLLECTION_CONNECTION_ID: "env-cal",
-      FONDS_COLLECTION_PROVIDER: "cal",
-      FONDS_COLLECTION_CREDENTIALS: JSON.stringify({
+      FONDS_REFRESH_SECRET: "synthetic-collection-secret-000000000000000",
+      FONDS_CONNECTION_ID: "env-cal",
+      FONDS_CONNECTION_PROVIDER: "cal",
+      FONDS_CONNECTION_CREDENTIALS: JSON.stringify({
         username: "synthetic-env-user",
         password: "synthetic-env-password",
       }),

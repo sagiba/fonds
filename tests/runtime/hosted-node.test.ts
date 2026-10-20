@@ -337,11 +337,11 @@ describe("hosted collection schedule", () => {
 
   it("is off unless set, and parses daily, hourly and hour lists in a zone", () => {
     expect(schedule({})).toBeUndefined();
-    expect(schedule({ FONDS_COLLECTION_SCHEDULE: "off" })).toBeUndefined();
+    expect(schedule({ FONDS_REFRESH_SCHEDULE: "off" })).toBeUndefined();
     expect(
       schedule({
-        FONDS_COLLECTION_SCHEDULE: "13,9",
-        FONDS_COLLECTION_TIMEZONE: "Europe/London",
+        FONDS_REFRESH_SCHEDULE: "13,9",
+        FONDS_REFRESH_TIMEZONE: "Europe/London",
       }),
     ).toEqual({
       mode: "hours",
@@ -352,14 +352,14 @@ describe("hosted collection schedule", () => {
   });
 
   it("uses the stored random time unless the operator pins one", () => {
-    expect(schedule({ FONDS_COLLECTION_SCHEDULE: "daily" })).toMatchObject({
+    expect(schedule({ FONDS_REFRESH_SCHEDULE: "daily" })).toMatchObject({
       hours: [7],
       minute: 7,
     });
     expect(
       schedule({
-        FONDS_COLLECTION_SCHEDULE: "daily",
-        FONDS_COLLECTION_TIME: "22:45",
+        FONDS_REFRESH_SCHEDULE: "daily",
+        FONDS_REFRESH_TIME: "22:45",
       }),
     ).toMatchObject({ hours: [22], minute: 45 });
   });
@@ -367,19 +367,19 @@ describe("hosted collection schedule", () => {
   it("reports schedule mistakes before startup, without their values", () => {
     for (const [settings, message] of [
       [
-        { FONDS_COLLECTION_SCHEDULE: "9,99" },
-        "FONDS_COLLECTION_SCHEDULE must be daily, hourly or hours 0-23 such as 9,13,18",
+        { FONDS_REFRESH_SCHEDULE: "9,99" },
+        "FONDS_REFRESH_SCHEDULE must be daily, hourly or hours 0-23 such as 9,13,18",
       ],
       [
-        { FONDS_COLLECTION_SCHEDULE: "daily", FONDS_COLLECTION_TIME: "25:00" },
-        "FONDS_COLLECTION_TIME must be a 24-hour HH:MM time",
+        { FONDS_REFRESH_SCHEDULE: "daily", FONDS_REFRESH_TIME: "25:00" },
+        "FONDS_REFRESH_TIME must be a 24-hour HH:MM time",
       ],
       [
         {
-          FONDS_COLLECTION_SCHEDULE: "hourly",
-          FONDS_COLLECTION_TIMEZONE: "Nowhere/Synthetic",
+          FONDS_REFRESH_SCHEDULE: "hourly",
+          FONDS_REFRESH_TIMEZONE: "Nowhere/Synthetic",
         },
-        "FONDS_COLLECTION_TIMEZONE must be an IANA time zone such as Europe/London",
+        "FONDS_REFRESH_TIMEZONE must be an IANA time zone such as Europe/London",
       ],
     ] as const) {
       let error: unknown;
@@ -397,7 +397,7 @@ describe("hosted collection schedule", () => {
     const { scheduleSettings, connectionString, ...config } =
       hostedNodeConfiguration({
         ...database,
-        FONDS_COLLECTION_SCHEDULE: "daily",
+        FONDS_REFRESH_SCHEDULE: "daily",
       });
     expect(() =>
       createHostedService(config, {
@@ -406,7 +406,7 @@ describe("hosted collection schedule", () => {
           schedule: hostedSchedule(scheduleSettings, "01:02"),
         },
       }),
-    ).toThrow("FONDS_COLLECTION_SCHEDULE needs FONDS_COLLECTION_SECRET");
+    ).toThrow("FONDS_REFRESH_SCHEDULE needs FONDS_REFRESH_SECRET");
   });
 });
 

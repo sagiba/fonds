@@ -3,7 +3,7 @@
 Run the SQLite service locally, query it over loopback bearer HTTP, or connect a
 trusted local MCP client over stdio; both serve the same
 [operations](../api.md#operations) from `dist/server.js`. Synthetic development
-needs no provider credentials, and collection is opt-in. Hosted setup is in the
+needs no provider credentials, and refresh is opt-in. Hosted setup is in the
 [hosted-service guide](hosted-service.md).
 
 ## Start with synthetic data
@@ -101,7 +101,7 @@ uses `--db` or the default ledger.
 | `init`       | Creates the database if needed, binds it to the state directory, and adds a connection        |
 | `connect`    | Stores a connection's provider credentials encrypted, from hidden input or `--credentials-fd` |
 | `disconnect` | Removes stored credentials; later refreshes skip it; the ledger stays                         |
-| `collect`    | Collects now; without `--connection`, every connection with stored credentials, in turn       |
+| `refresh`    | Refreshes now; without `--connection`, every connection with stored credentials, in turn      |
 | `consume`    | Delivers the event feed to stdout as JSON lines and advances a consumer cursor                |
 | `ingest`     | Archives and applies one captured provider response offline                                   |
 | `backup`     | SQLite: a coherent copy of the ledger; on PostgreSQL use `pg_dump` and the state directory    |
@@ -109,15 +109,15 @@ uses `--db` or the default ledger.
 | `demo`       | SQLite: a separate ledger of synthetic CAL data                                               |
 
 Unavailable commands exit 3; otherwise 0 means success, 1 failure or `busy`, 2 partial
-collection. `collect` calls the provider through a refresh and prints a
-`collection_summary` of status and summed [counts](../api.md#refreshes);
+refresh. `refresh` calls the provider and prints a
+`refresh_summary` of status and summed [counts](../api.md#refreshes);
 `list-refreshes` keeps individual results. Without dates it rereads recent data;
 `--from`/`--to` request backfill. `--credentials-fd`, `--history-mode`,
 `--search-window-months` and `--call-budget` need `--connection`. Without stored
 credentials it prompts secretly or reads the private descriptor; provider guides
 list the fields.
 
-`collect --diagnostics` adds at most 200 structured stage/count entries, with
+`refresh --diagnostics` adds at most 200 structured stage/count entries, with
 `truncated` and `dropped` indicating omitted entries. It contains no financial
 values, provider fields or credentials. `--archive-days <days>` (1–30) opts into
 temporary raw-response retention in the database, subject to provider redactions;
@@ -160,10 +160,10 @@ use `/mcp` with the bearer header from private client configuration.
 
 The server offers [refreshes](../api.md#refreshes) on HTTP and stdio, and
 [scheduling](hosted-service.md#scheduling), as the
-[hosted service](hosted-service.md#collection-refresh-and-scheduling) does. Only
+[hosted service](hosted-service.md#refresh-and-scheduling) does. Only
 connections with credentials `connect` stored refresh (read at each refresh, so
 `connect` needs no restart); others answer `not_found`. An authentication block
-clears only when an operator `collect` succeeds. Refreshing calls the provider,
+clears only when an operator `refresh` succeeds. Refreshing calls the provider,
 so give the token, or a stdio host, only to a client you trust to do that;
 provider credentials and the token stay outside tool inputs and results.
 

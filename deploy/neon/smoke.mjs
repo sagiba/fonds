@@ -1,6 +1,6 @@
 // Post-deploy smoke checks against the public origin. Only unauthenticated
-// boundary behavior is checked by default; `--collect` additionally runs one
-// bounded operator collection using the private env file's collection secret.
+// boundary behavior is checked by default; `--refresh` additionally runs one
+// bounded operator refresh using the private env file's refresh secret.
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -93,7 +93,7 @@ export function smokeChecks(origin) {
     [
       // A complete, valid scheduled-refresh envelope: only Neon's ingress
       // stripping of the attestation header can reject it. If stripping
-      // regressed, this runs one recent collection and the check fails with
+      // regressed, this runs one recent refresh and the check fails with
       // status 200.
       "public callers cannot forge a native trigger",
       new Request(`${origin}/internal/triggers/recent`, {
@@ -123,7 +123,7 @@ export async function runSmoke(args) {
     args,
     options: {
       "env-file": { type: "string" },
-      collect: { type: "boolean", default: false },
+      refresh: { type: "boolean", default: false },
     },
   });
   const environment = parseEnv(
@@ -134,15 +134,15 @@ export async function runSmoke(args) {
   for (const [name, request, expectation] of smokeChecks(origin)) {
     results.push(await check(name, request, expectation));
   }
-  if (values.collect) {
+  if (values.refresh) {
     results.push(
       await check(
-        "operator collection completes",
-        new Request(`${origin}/internal/collect/recent`, {
+        "operator refresh completes",
+        new Request(`${origin}/internal/refresh/recent`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${environment.FONDS_COLLECTION_SECRET}`,
+            Authorization: `Bearer ${environment.FONDS_REFRESH_SECRET}`,
           },
           body: "{}",
         }),

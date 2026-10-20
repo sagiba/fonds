@@ -284,11 +284,11 @@ describe("collect on SQLite", () => {
       },
     };
     const result = await capture(() =>
-      runOperatorCli(failing, ["collect", "--db", dbPath]),
+      runOperatorCli(failing, ["refresh", "--db", dbPath]),
     );
     expect(result.status).toBe(EXIT_CODES.failed);
     expect(collectionSummarySchema.parse(JSON.parse(result.stdout))).toEqual({
-      type: "collection_summary",
+      type: "refresh_summary",
       status: "failed",
       captures: 0,
       unchanged: 0,
@@ -305,13 +305,13 @@ describe("collect on SQLite", () => {
   it("offers bounded sync diagnostics only when requested and validates archive duration", async () => {
     await run("init", "--connection", "diagnostic", "--provider", "cal");
     await connect("diagnostic", "INVENTED-DIAGNOSTIC");
-    const first = await run("collect", "--connection", "diagnostic");
+    const first = await run("refresh", "--connection", "diagnostic");
     expect(first.status).toBe(EXIT_CODES.ok);
     expect(
       collectionSummarySchema.parse(JSON.parse(first.stdout)),
     ).not.toHaveProperty("diagnostics");
     const second = await run(
-      "collect",
+      "refresh",
       "--connection",
       "diagnostic",
       "--diagnostics",
@@ -370,7 +370,7 @@ describe("collect on SQLite", () => {
     expect(second.stdout).not.toContain("INVENTED-");
     expect(second.stdout).not.toContain("SYNTHETIC-ACCOUNT");
     for (const days of ["0", "31", "1.5", "-1", "secret"]) {
-      expect(await run("collect", `--archive-days=${days}`)).toEqual({
+      expect(await run("refresh", `--archive-days=${days}`)).toEqual({
         status: EXIT_CODES.failed,
         stdout: "",
         stderr: "--archive-days must be an integer from 1 through 30.\n",
@@ -387,11 +387,11 @@ describe("collect on SQLite", () => {
     }
     await connect("first", "INVENTED-FIRST");
     await connect("second", "INVENTED-SECOND");
-    const all = await run("collect");
+    const all = await run("refresh");
     expect(all).toMatchObject({ status: EXIT_CODES.ok, stderr: "" });
     const summary = collectionSummarySchema.parse(JSON.parse(all.stdout));
     expect(summary).toMatchObject({
-      type: "collection_summary",
+      type: "refresh_summary",
       status: "completed",
       captures: 2,
       failures: 0,
@@ -402,7 +402,7 @@ describe("collect on SQLite", () => {
     ]);
     expect(all.stdout).not.toContain("INVENTED");
     const one = await run(
-      "collect",
+      "refresh",
       "--connection",
       "second",
       "--from",
@@ -418,12 +418,12 @@ describe("collect on SQLite", () => {
         requestedRange: { from: "2040-05-01", to: "2040-05-31" },
       },
     );
-    expect(await run("collect", "--call-budget", "5")).toEqual({
+    expect(await run("refresh", "--call-budget", "5")).toEqual({
       status: EXIT_CODES.failed,
       stdout: "",
       stderr: "--credentials-fd and the provider options need --connection.\n",
     });
-    expect(await run("collect", "--max-details", "0")).toEqual({
+    expect(await run("refresh", "--max-details", "0")).toEqual({
       status: EXIT_CODES.failed,
       stdout: "",
       stderr: "--credentials-fd and the provider options need --connection.\n",

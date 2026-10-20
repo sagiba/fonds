@@ -3,7 +3,7 @@
 Neon Functions/PostgreSQL is one host for the [hosted service](hosted-service.md),
 and the recommended free one: its managed Google sign-in needs no OAuth client.
 This guide covers only Neon's setup, deployment, native trigger and operations;
-login, collection, refresh and Events behave as the hosted-service guide
+login, refresh and Events behave as the hosted-service guide
 describes. Follow the [new installation](#new-installation) steps once, then
 [update the deployment](#update-an-existing-deployment) for later releases. Each
 installation uses its own Neon project, and one Function declared in
@@ -62,18 +62,18 @@ private env file outside Git:
 FONDS_ENV=/absolute/private/neon.env
 ```
 
-| Variable                                                 | Source                                                                                    |
-| -------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `FONDS_PUBLIC_ORIGIN`                                    | The Function URL's origin (printed by `neon functions get fonds` after the first deploy)  |
-| `FONDS_NEON_GOOGLE_AUTH_URL`                             | The branch's managed Neon Auth URL                                                        |
-| `FONDS_GOOGLE_OWNER_EMAIL`                               | The single allowed Google email                                                           |
-| `FONDS_AUTH_SECRET`                                      | Generated once by setup; signs Better Auth state                                          |
-| `FONDS_OWNER_ID`                                         | Generated once by setup; the sole Fonds owner ID                                          |
-| `FONDS_COLLECTION_CONNECTION_ID`                         | Explicit stored connection ID (examples use `primary`)                                    |
-| `FONDS_COLLECTION_PROVIDER`                              | Provider ID from the runtime composition, currently `cal` or `isracard`                   |
-| `FONDS_COLLECTION_SECRET`                                | Generated once by setup; bearer for the operator collect route                            |
-| `FONDS_COLLECTION_SCHEDULE`, `FONDS_COLLECTION_TIMEZONE` | Optional [schedule](hosted-service.md#scheduling); scheduled collection is off without it |
-| `FONDS_COLLECTION_TIME`                                  | Generated once by setup: this installation's random `HH:MM`; set it only to pin the time  |
+| Variable                                           | Source                                                                                   |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `FONDS_PUBLIC_ORIGIN`                              | The Function URL's origin (printed by `neon functions get fonds` after the first deploy) |
+| `FONDS_NEON_GOOGLE_AUTH_URL`                       | The branch's managed Neon Auth URL                                                       |
+| `FONDS_GOOGLE_OWNER_EMAIL`                         | The single allowed Google email                                                          |
+| `FONDS_AUTH_SECRET`                                | Generated once by setup; signs Better Auth state                                         |
+| `FONDS_OWNER_ID`                                   | Generated once by setup; the sole Fonds owner ID                                         |
+| `FONDS_CONNECTION_ID`                              | Explicit stored connection ID (examples use `primary`)                                   |
+| `FONDS_CONNECTION_PROVIDER`                        | Provider ID from the runtime composition, currently `cal` or `isracard`                  |
+| `FONDS_REFRESH_SECRET`                             | Generated once by setup; bearer for the operator refresh route                           |
+| `FONDS_REFRESH_SCHEDULE`, `FONDS_REFRESH_TIMEZONE` | Optional [schedule](hosted-service.md#scheduling); scheduled refresh is off without it   |
+| `FONDS_REFRESH_TIME`                               | Generated once by setup: this installation's random `HH:MM`; set it only to pin the time |
 
 The file is this installation's [state](../database.md#state-directory-and-backup),
 bound to its database. Treat the whole file as a secret: an owned regular `0600`
@@ -120,8 +120,8 @@ and `FUNCTION_ORIGIN` with your own values.
    ```sh
    env FONDS_PUBLIC_ORIGIN=https://placeholder.invalid \
      FONDS_OWNER_ID=placeholder FONDS_AUTH_SECRET=placeholder \
-     FONDS_COLLECTION_SECRET=placeholder FONDS_COLLECTION_CONNECTION_ID=primary \
-     FONDS_COLLECTION_PROVIDER=cal FONDS_NEON_GOOGLE_AUTH_URL=https://placeholder.invalid \
+     FONDS_REFRESH_SECRET=placeholder FONDS_CONNECTION_ID=primary \
+     FONDS_CONNECTION_PROVIDER=cal FONDS_NEON_GOOGLE_AUTH_URL=https://placeholder.invalid \
      FONDS_GOOGLE_OWNER_EMAIL=owner@example.invalid \
      npm run neon:deploy -- --project-id PROJECT_ID --branch BRANCH_ID --profile PROFILE
    ```
@@ -153,15 +153,15 @@ and `FUNCTION_ORIGIN` with your own values.
 7. Create the [private env file](#private-env-file) with the five variables setup
    does not generate: `FONDS_PUBLIC_ORIGIN` (the `FUNCTION_ORIGIN`),
    `FONDS_NEON_GOOGLE_AUTH_URL`, `FONDS_GOOGLE_OWNER_EMAIL`,
-   `FONDS_COLLECTION_CONNECTION_ID` and `FONDS_COLLECTION_PROVIDER`. Create its
+   `FONDS_CONNECTION_ID` and `FONDS_CONNECTION_PROVIDER`. Create its
    directory with mode `0700` and the file with mode `0600`, for example under
    `umask 077`.
 
 8. [Set up the schemas and the owner](#set-up-schemas-and-the-owner), then
    [deploy](#deploy) again with the env file and the provider credentials file,
    run the [smoke check](#verification-and-client-connection) and
-   [sign in as the owner](#owner-sign-in-and-recovery). Collection stays off
-   until you [turn the schedule on](#native-scheduled-collection).
+   [sign in as the owner](#owner-sign-in-and-recovery). Scheduled refresh stays off
+   until you [turn the schedule on](#native-scheduled-refresh).
 
 ## Configure managed Google and password policy
 
@@ -227,7 +227,7 @@ ends with the deploy command. Rerunning with the same answers changes nothing.
 Prepare the private env file and, for a new installation, the credentials file:
 
 ```sh
-FONDS_COLLECTION_CREDENTIALS_FILE="$HOME/provider-credentials.json" npm run neon:deploy -- --env "$FONDS_ENV" \
+FONDS_CONNECTION_CREDENTIALS_FILE="$HOME/provider-credentials.json" npm run neon:deploy -- --env "$FONDS_ENV" \
   --project-id PROJECT_ID --branch BRANCH_ID \
   --profile PROFILE
 ```
@@ -244,11 +244,11 @@ the same project, branch and profile options; it lists changes without values.
 
 Provider credentials live in a separate private JSON object with the fields the
 selected [provider guide](../README.md#providers) lists, uploaded only by a
-deploy whose `FONDS_COLLECTION_CREDENTIALS_FILE` names it. The **first deploy of
+deploy whose `FONDS_CONNECTION_CREDENTIALS_FILE` names it. The **first deploy of
 a new installation must include it**: setup always generates
-`FONDS_COLLECTION_SECRET`, and the target refuses a collection secret without a
+`FONDS_REFRESH_SECRET`, and the target refuses a refresh secret without a
 connection ID, provider and valid stored credentials. Afterwards name it only to
-upload or rotate credentials. Changing `FONDS_COLLECTION_PROVIDER` requires
+upload or rotate credentials. Changing `FONDS_CONNECTION_PROVIDER` requires
 uploading matching credentials in the same deploy; stored credentials are not
 converted between providers. An [ordinary deploy](#update-an-existing-deployment)
 omits the variable, and Neon keeps the stored credentials.
@@ -257,7 +257,7 @@ The file must be an owned, unlinked `0600` regular file (symlinks, FIFOs and
 files over 16 KiB are refused). `neon.ts` reads it in memory, and the selected
 provider validates its fields before anything is uploaded; the values never
 enter process arguments, the env file or the bundle. The Function receives
-`FONDS_COLLECTION_CREDENTIALS` and validates it without logging values; verify
+`FONDS_CONNECTION_CREDENTIALS` and validates it without logging values; verify
 its presence by variable name only
 ([environment semantics](https://neon.com/docs/compute/functions/environment-variables)).
 
@@ -282,13 +282,13 @@ npm run neon:smoke -- --env-file "$FONDS_ENV"
 Setup keeps existing values and applies pending
 [migrations](../database.md#migrations); the Function never migrates.
 
-## Native scheduled collection
+## Native scheduled refresh
 
 A Function has no long-lived process, so Neon's native cron trigger runs the
 [schedule](hosted-service.md#scheduling) instead of the Node host's embedded
-scheduler, at the installation's random `FONDS_COLLECTION_TIME`. If the schedule
-is on but the env file has no `FONDS_COLLECTION_TIME`, `neon.ts` stops the
-deploy and asks you to rerun setup, which adds it. To turn collection on, rerun
+scheduler, at the installation's random `FONDS_REFRESH_TIME`. If the schedule
+is on but the env file has no `FONDS_REFRESH_TIME`, `neon.ts` stops the
+deploy and asks you to rerun setup, which adds it. To turn the schedule on, rerun
 setup, answering its prompt or passing `--schedule daily` (it also adds the
 schedule tables to a database created before them), and deploy:
 
@@ -300,7 +300,7 @@ npm run neon:deploy -- --env "$FONDS_ENV" \
 ```
 
 Neon cron is UTC only. `neon.ts` converts the scheduled hours from
-`FONDS_COLLECTION_TIMEZONE` to UTC with that zone's offset on the day you
+`FONDS_REFRESH_TIMEZONE` to UTC with that zone's offset on the day you
 deploy, as one cron (`17 7,11,16 * * *` for `9,13,18` at minute 17 in Israel's
 winter time). A daylight-saving change therefore moves the local run time by
 an hour until the next deploy; redeploy after a change to restore it. Neon
@@ -317,8 +317,8 @@ that trigger
 ([native trigger behavior](https://neon.com/docs/compute/functions/triggers/schedule)).
 
 Schedule state is declared: `neon.ts` enables `scheduled-refresh` only when
-`FONDS_COLLECTION_SCHEDULE` turns a schedule on, so a new installation deploys
-it disabled and never collects before validation. To pause collection, rerun
+`FONDS_REFRESH_SCHEDULE` turns a schedule on, so a new installation deploys
+it disabled and never refreshes before validation. To pause the schedule, rerun
 setup with `--schedule off` and deploy. The CLI can inspect the trigger, or
 pause it immediately, but the next deploy re-enables it, and a queued occurrence
 can still arrive after disabling:
@@ -330,25 +330,25 @@ npx --yes neon@8.4.3 triggers disable TRIGGER_ID --project-id PROJECT_ID \
   --branch BRANCH_ID --profile PROFILE
 ```
 
-## Collection and manual refresh
+## Refresh and manual retry
 
-Collection behaves as the
-[hosted-service guide](hosted-service.md#collection-refresh-and-scheduling)
+Refreshes behave as the
+[hosted-service guide](hosted-service.md#refresh-and-scheduling)
 describes. A refresh that outlives Neon's 15-minute invocation continues in a
 new one through `POST /internal/refreshes/continue` with
-`FONDS_COLLECTION_SECRET`. The env-configured connection is the one in the
+`FONDS_REFRESH_SECRET`. The env-configured connection is the one in the
 private env file. When the file also holds `FONDS_CREDENTIALS_KEY`, `neon.ts`
-deploys it and every connection whose credentials `connect` stored is collected
-too. Hosted Isracard collection is not yet verified, so keep Isracard
-credentials out of a hosted deployment, or leave `FONDS_COLLECTION_SCHEDULE`
+deploys it and every connection whose credentials `connect` stored is refreshed
+too. Hosted Isracard refresh is not yet verified, so keep Isracard
+credentials out of a hosted deployment, or leave `FONDS_REFRESH_SCHEDULE`
 disabled, until it has been.
 
-The [operator retry](hosted-service.md#collection-refresh-and-scheduling) after
-resolving an authentication block posts with the private collection secret and
+The [operator retry](hosted-service.md#refresh-and-scheduling) after
+resolving an authentication block posts with the private refresh secret and
 really calls the provider:
 
 ```sh
-npm run neon:smoke -- --env-file "$FONDS_ENV" --collect
+npm run neon:smoke -- --env-file "$FONDS_ENV" --refresh
 ```
 
 ### Add a stored connection
@@ -378,7 +378,7 @@ Setup generates `FONDS_CREDENTIALS_KEY` with the env file's other secrets.
    ```
 
 3. If the key is new, [deploy](#deploy) so the Function receives it. The next
-   scheduled run collects the connection.
+   scheduled run refreshes the connection.
 
 Keep the key: credentials stored under another key cannot be decrypted, and each
 connection then needs `connect` again.
@@ -392,20 +392,20 @@ npm run neon:smoke -- --env-file "$FONDS_ENV"
 ```
 
 The smoke command checks the public authentication, discovery and trigger
-boundaries; without `--collect` it collects and writes nothing unless Neon's
+boundaries; without `--refresh` it calls no provider and writes nothing unless Neon's
 ingress stopped stripping the attestation header: then its forged-trigger probe
-runs one recent collection and fails. A real client login and read verify
+runs one recent refresh and fails. A real client login and read verify
 browser cookies, Origin, CSP and redirects: follow the
 [ChatGPT connection guide](chatgpt-connect.md) and record the deployed revision.
 
 Inspect structured logs by their operation/failure codes. Never copy credentials,
 financial payloads or complete authenticated URLs into troubleshooting output.
-The absence of a log error is not proof of collection completeness or delivery.
+The absence of a log error is not proof of refresh completeness or delivery.
 
 ## Recovery and maintenance
 
 Preserve the env file and the `financial`, `identity` and `operations` schemas
-together ([backup](../database.md#state-directory-and-backup)): recollection
+together ([backup](../database.md#state-directory-and-backup)): refreshing again
 cannot reconstruct owner annotations, old source observations, auth identities
 or consumer checkpoints. A code redeploy is not a recovery test. Verify the
 project's actual retention and recovery settings rather than a plan limit

@@ -54,9 +54,9 @@ const hostedNodeEnvironmentSchema = hostedEnvironmentSchema.extend({
     .regex(/^[A-Za-z0-9_-]{32,256}$/)
     .optional(),
   // Validated together by parseCollectionSchedule, with value-free messages.
-  FONDS_COLLECTION_SCHEDULE: z.string().optional(),
-  FONDS_COLLECTION_TIME: z.string().optional(),
-  FONDS_COLLECTION_TIMEZONE: z.string().optional(),
+  FONDS_REFRESH_SCHEDULE: z.string().optional(),
+  FONDS_REFRESH_TIME: z.string().optional(),
+  FONDS_REFRESH_TIMEZONE: z.string().optional(),
   // The number of trusted proxies in front of Fonds that each append to
   // X-Forwarded-For; almost always one.
   FONDS_TRUST_PROXY: z
@@ -76,9 +76,9 @@ export function hostedNodeConfiguration(env: NodeJS.ProcessEnv) {
     "hosted",
   );
   const scheduleSettings: CollectionScheduleSettings = {
-    FONDS_COLLECTION_SCHEDULE: values.FONDS_COLLECTION_SCHEDULE,
-    FONDS_COLLECTION_TIME: values.FONDS_COLLECTION_TIME,
-    FONDS_COLLECTION_TIMEZONE: values.FONDS_COLLECTION_TIMEZONE,
+    FONDS_REFRESH_SCHEDULE: values.FONDS_REFRESH_SCHEDULE,
+    FONDS_REFRESH_TIME: values.FONDS_REFRESH_TIME,
+    FONDS_REFRESH_TIMEZONE: values.FONDS_REFRESH_TIMEZONE,
   };
   // Fails before startup on a bad value; the database supplies a missing time.
   hostedSchedule(scheduleSettings, "00:00");
@@ -107,9 +107,9 @@ export function hostedSchedule(
     return parseCollectionSchedule(
       {
         ...settings,
-        FONDS_COLLECTION_TIME: settings.FONDS_COLLECTION_TIME || storedTime,
+        FONDS_REFRESH_TIME: settings.FONDS_REFRESH_TIME || storedTime,
       },
-      "FONDS_COLLECTION_SCHEDULE needs FONDS_COLLECTION_TIME",
+      "FONDS_REFRESH_SCHEDULE needs FONDS_REFRESH_TIME",
     );
   } catch (error) {
     throw error instanceof CollectionScheduleError

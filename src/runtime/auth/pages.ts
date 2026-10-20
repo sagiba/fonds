@@ -113,7 +113,7 @@ function consentPage(params: URLSearchParams) {
   const scopes = (params.get("scope") ?? "").split(" ");
   const permissions = [
     ...(scopes.includes("financial:read")
-      ? ["Read your connections, transactions, totals and collection status."]
+      ? ["Read your connections, transactions, totals and refresh status."]
       : []),
     ...(scopes.includes("financial:write")
       ? [

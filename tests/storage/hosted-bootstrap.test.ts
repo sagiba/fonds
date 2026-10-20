@@ -231,7 +231,7 @@ describe.skipIf(!postgresUrl)(
         vi
           .mocked(console.info)
           .mock.calls.filter(([line]) =>
-            String(line).includes('"event":"fonds_scheduled_collection"'),
+            String(line).includes('"event":"fonds_scheduled_refresh"'),
           ).length;
       const trigger = async () => {
         const state = parseEnv(await readFile(`${stateDir}/fonds.env`, "utf8"));
@@ -249,8 +249,8 @@ describe.skipIf(!postgresUrl)(
       const minute = new Date(Date.now() - 10 * 60_000).getUTCMinutes();
       const scheduled = {
         ...env,
-        FONDS_COLLECTION_SCHEDULE: "hourly",
-        FONDS_COLLECTION_TIME: `00:${String(minute).padStart(2, "0")}`,
+        FONDS_REFRESH_SCHEDULE: "hourly",
+        FONDS_REFRESH_TIME: `00:${String(minute).padStart(2, "0")}`,
       };
       try {
         let running = await startHostedNodeService(env);

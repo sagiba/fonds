@@ -75,8 +75,8 @@ link="$(compose exec -T fonds node /app/server.js login-link)"
 in_fonds '
 import { readFileSync } from "node:fs";
 import { parseEnv } from "node:util";
-const { FONDS_COLLECTION_SECRET: secret } = parseEnv(readFileSync("/data/fonds.env", "utf8"));
-const response = await fetch("http://localhost:8787/internal/collect/recent", {
+const { FONDS_REFRESH_SECRET: secret } = parseEnv(readFileSync("/data/fonds.env", "utf8"));
+const response = await fetch("http://localhost:8787/internal/refresh/recent", {
   method: "POST",
   headers: { Authorization: `Bearer ${secret}`, "Content-Type": "application/json" },
   body: "{}",
@@ -84,7 +84,7 @@ const response = await fetch("http://localhost:8787/internal/collect/recent", {
 const result = await response.json();
 // One refresh per target; with no targets there is none.
 if (response.status !== 200 || !Array.isArray(result.refreshes) || result.refreshes.length !== 0) process.exit(1);' ||
-  fail "operator collection with no connections"
+  fail "operator refresh with no connections"
 
 trigger='
 import { readFileSync } from "node:fs";
@@ -104,11 +104,11 @@ const { refreshes } = await response.json();
 if (response.status !== status || !Array.isArray(refreshes) || refreshes.length !== count) process.exit(1);'
 # The trigger's expected HTTP status and number of refreshes, such as [200, 0].
 trigger_expects() { in_fonds "${trigger//EXPECTED/$1}"; }
-runs() { "$1" logs fonds 2>/dev/null | grep -c '"event":"fonds_scheduled_collection"' || true; }
+runs() { "$1" logs fonds 2>/dev/null | grep -c '"event":"fonds_scheduled_refresh"' || true; }
 
 echo "== schedule off by default"
 trigger_expects '[200, 0]' || fail "external trigger"
-[ "$(runs compose)" = 0 ] || fail "collection without FONDS_COLLECTION_SCHEDULE"
+[ "$(runs compose)" = 0 ] || fail "refresh without FONDS_REFRESH_SCHEDULE"
 
 echo "== embedded schedule"
 # Hourly at a minute already past its start jitter, so the first tick runs it.
@@ -117,15 +117,15 @@ cat >"$override" <<YAML
 services:
   fonds:
     environment:
-      FONDS_COLLECTION_SCHEDULE: hourly
-      FONDS_COLLECTION_TIME: "00:$(printf %02d "$minute")"
+      FONDS_REFRESH_SCHEDULE: hourly
+      FONDS_REFRESH_TIME: "00:$(printf %02d "$minute")"
 YAML
 scheduled up -d --no-build --wait fonds
 for _ in $(seq 1 30); do
   [ "$(runs scheduled)" = 1 ] && break
   sleep 2
 done
-[ "$(runs scheduled)" = 1 ] || fail "embedded scheduled collection"
+[ "$(runs scheduled)" = 1 ] || fail "embedded scheduled refresh"
 # The trigger and a restart find the occurrence recorded and never rerun it.
 trigger_expects '[200, 0]' || fail "trigger with the embedded schedule"
 scheduled restart fonds >/dev/null

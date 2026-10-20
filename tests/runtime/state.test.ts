@@ -42,9 +42,9 @@ describe("state directory", () => {
     expect(Object.keys(first).sort()).toEqual([
       "FONDS_API_TOKEN",
       "FONDS_AUTH_SECRET",
-      "FONDS_COLLECTION_SECRET",
       "FONDS_CREDENTIALS_KEY",
       "FONDS_OWNER_ID",
+      "FONDS_REFRESH_SECRET",
       "FONDS_SCHEDULE_SECRET",
     ]);
     expect((await stat(path)).mode & 0o777).toBe(0o600);
@@ -149,23 +149,20 @@ describe("state directory", () => {
     // An operator removed the optional collection secret: it stays absent.
     await writeFile(
       path,
-      (await readFile(path, "utf8")).replace(
-        /^FONDS_COLLECTION_SECRET=.*\n/m,
-        "",
-      ),
+      (await readFile(path, "utf8")).replace(/^FONDS_REFRESH_SECRET=.*\n/m, ""),
     );
     const { env, installation } = await postgresInstallation(
       {
         FONDS_STATE_DIR: stateDir,
         FONDS_OWNER_ID: "from-env",
-        FONDS_COLLECTION_SECRET: "inherited-collection-secret-000000000000",
+        FONDS_REFRESH_SECRET: "inherited-collection-secret-000000000000",
         PORT: "1",
       },
       { create: true },
     );
     expect(env.FONDS_OWNER_ID).toBe(installation.secrets.FONDS_OWNER_ID);
     expect(env.FONDS_OWNER_ID).not.toBe("from-env");
-    expect("FONDS_COLLECTION_SECRET" in env).toBe(false);
+    expect("FONDS_REFRESH_SECRET" in env).toBe(false);
     expect(env.PORT).toBe("1");
   });
 });

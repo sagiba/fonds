@@ -139,7 +139,7 @@ describe.skipIf(!postgresUrl)("PostgreSQL operator CLI", () => {
     }
     // A stored connection is collected only once a schedule is turned on.
     expect(notes.join("")).toBe(
-      "Scheduled collection runs only when the service sets FONDS_COLLECTION_SCHEDULE=daily (or hourly, or hours such as 9,13,18).\n",
+      "Scheduled refresh runs only when the service sets FONDS_REFRESH_SCHEDULE=daily (or hourly, or hours such as 9,13,18).\n",
     );
   });
 
@@ -152,13 +152,13 @@ describe.skipIf(!postgresUrl)("PostgreSQL operator CLI", () => {
   });
 
   it("collects with stored credentials under the poller's lock and job status", async () => {
-    const first = await command("collect", "--connection", "cal-pg");
+    const first = await command("refresh", "--connection", "cal-pg");
     expect(first.status).toBe(0);
     // The same summary schema as SQLite's (tests/runtime/operator-cli.test.ts).
     expect(
       collectionSummarySchema.parse(JSON.parse(first.stdout)),
     ).toMatchObject({
-      type: "collection_summary",
+      type: "refresh_summary",
       status: "completed",
       captures: 1,
       failures: 0,
@@ -180,7 +180,7 @@ describe.skipIf(!postgresUrl)("PostgreSQL operator CLI", () => {
     try {
       let collecting: ReturnType<typeof command> | undefined;
       await holder.withCollectionLock("cal-pg", async () => {
-        collecting = command("collect", "--connection", "cal-pg");
+        collecting = command("refresh", "--connection", "cal-pg");
         await new Promise((resolve) => setTimeout(resolve, 500));
       });
       const retried = await collecting!;
@@ -216,7 +216,7 @@ describe.skipIf(!postgresUrl)("PostgreSQL operator CLI", () => {
     for (const args of [
       ["list-connections"],
       ["init", "--connection", "other", "--provider", "cal"],
-      ["collect", "--connection", "cal-pg"],
+      ["refresh", "--connection", "cal-pg"],
     ]) {
       expect(await command(...args)).toEqual({
         status: 1,
@@ -274,10 +274,10 @@ describe.skipIf(!postgresUrl)("PostgreSQL operator CLI", () => {
         )
       ).status,
     ).toBe(0);
-    const all = await command("collect");
+    const all = await command("refresh");
     expect(all.status).toBe(0);
     expect(collectionSummarySchema.parse(JSON.parse(all.stdout))).toEqual({
-      type: "collection_summary",
+      type: "refresh_summary",
       status: "completed",
       captures: 1,
       unchanged: 0,
@@ -334,7 +334,7 @@ describe.skipIf(!postgresUrl)("PostgreSQL operator CLI", () => {
     const commands = [
       ["list-connections"],
       ["connect", "--connection", "cal-pg"],
-      ["collect", "--connection", "cal-pg"],
+      ["refresh", "--connection", "cal-pg"],
     ];
     const versions = async () =>
       (
@@ -368,7 +368,7 @@ describe.skipIf(!postgresUrl)("PostgreSQL operator CLI", () => {
       ["failed", "failed", 1],
     ] as const) {
       collected.outcome = outcome;
-      const result = await command("collect", "--connection", "cal-pg");
+      const result = await command("refresh", "--connection", "cal-pg");
       expect(result.status).toBe(exitCode);
       expect(JSON.parse(result.stdout)).toMatchObject({ status });
       expect(result.stderr).not.toContain("synthetic provider outage");
@@ -391,7 +391,7 @@ describe.skipIf(!postgresUrl)("PostgreSQL operator CLI", () => {
     try {
       expect(
         await command(
-          "collect",
+          "refresh",
           "--connection",
           "cal-pg",
           "--credentials-fd",
@@ -411,7 +411,7 @@ describe.skipIf(!postgresUrl)("PostgreSQL operator CLI", () => {
   });
 
   it("runs operation commands with the same output as the application", async () => {
-    expect((await command("collect", "--connection", "cal-pg")).status).toBe(0);
+    expect((await command("refresh", "--connection", "cal-pg")).status).toBe(0);
     const store = openPostgresDatabase(
       financialPoolConfig(env.FONDS_DATABASE_URL!),
     );

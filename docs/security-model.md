@@ -95,7 +95,7 @@ exploit that uses them still is.
   use up another address's (not gain access).
 - **An issued access token survives revocation** until it expires (see
   [revocation](#revocation)).
-- **Collection uses providers' internal web APIs,** which can change or be blocked
+- **Refreshes use providers' internal web APIs,** which can change or be blocked
   at any time.
 
 ## Your responsibilities
