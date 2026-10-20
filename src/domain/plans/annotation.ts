@@ -10,7 +10,7 @@ import {
   jsonValueSchema,
 } from "../model.js";
 import { canonicalJson } from "../observations.js";
-import type { LedgerEvent, Transaction } from "../records.js";
+import { type LedgerEvent, nextVersion, type Transaction } from "../records.js";
 import { FinancialPlan } from "./state.js";
 
 export { ConflictError } from "../errors.js";
@@ -206,7 +206,7 @@ function commitAnnotation(
   }
   const value = {
     transactionId: row.id,
-    version: (previous?.version ?? 0) + 1,
+    version: nextVersion(previous?.version ?? 0),
     data,
     updatedAt: now,
   };

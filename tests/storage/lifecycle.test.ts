@@ -708,6 +708,74 @@ describe("owner-confirmed transaction lifecycle", () => {
     },
   );
 
+  async function expectVersionLimit(action: Promise<unknown>) {
+    const error = await action.then(
+      () => undefined,
+      (reason: unknown) => reason,
+    );
+    expect(error).toBeInstanceOf(ConflictError);
+    expect((error as Error).message).toBe("Version limit reached");
+  }
+
+  async function setVersion(id: string, version: number) {
+    await db.orm
+      .update(transactions)
+      .set({ version })
+      .where(eq(transactions.id, id))
+      .run();
+  }
+
+  it.each(["pending", "posted", "billed line", "carried approval"] as const)(
+    "refuses a link that would advance the %s past the version limit",
+    async (target) => {
+      const limit = Number.MAX_SAFE_INTEGER;
+      if (target === "pending" || target === "posted") {
+        await setVersion(target === "pending" ? pending.id : posted.id, limit);
+      } else if (target === "billed line") {
+        await db.orm.insert(transactions).values({
+          ...posted,
+          id: "line",
+          sourceKey: "line-key",
+          sourceAliases: [],
+          purchaseId: posted.id,
+          installmentNumber: 1,
+          details: emptyDetails(),
+          version: limit,
+        });
+      } else {
+        await db.editAnnotation({
+          transactionId: pending.id,
+          expectedVersion: 0,
+          expectedTransactionVersion: 1,
+          notes: "Approved purchase",
+          review: { status: "approved" },
+        });
+        await db.orm
+          .update(annotations)
+          .set({ version: limit })
+          .where(eq(annotations.transactionId, pending.id))
+          .run();
+      }
+      const before = await state();
+      await expectVersionLimit(db.linkPendingTransaction(await command()));
+      expect(await state()).toEqual(before);
+    },
+  );
+
+  it.each(["pending", "posted"] as const)(
+    "refuses an unlink that would advance the %s row past the version limit",
+    async (target) => {
+      await db.linkPendingTransaction(await command());
+      await setVersion(
+        target === "pending" ? pending.id : posted.id,
+        Number.MAX_SAFE_INTEGER,
+      );
+      const before = await state();
+      await expectVersionLimit(db.unlinkPendingTransaction(await command()));
+      expect(await state()).toEqual(before);
+    },
+  );
+
   it("immediately removes confirmed removals from other candidate lists and retains removed evidence", async () => {
     const other = await db.orm
       .insert(transactions)
