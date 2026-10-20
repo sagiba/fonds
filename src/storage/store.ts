@@ -60,6 +60,7 @@ import {
   extractRun,
   finishTransactionContent,
   planRun,
+  refreshFailureCodes,
   type RunInput,
   type SyncResult,
 } from "../domain/plans/sync.js";
@@ -482,7 +483,12 @@ function buildStore<Db>(
             cumulative[key] = Math.max(row[key], cumulative[key]);
           }
         }
-        const set = { ...fields, ...cumulative };
+        const set = {
+          ...fields,
+          ...cumulative,
+          // Its counts keep retried failures; no failure explains a completed refresh.
+          ...(fields.status === "completed" && { failureCodes: [] }),
+        };
         await commit(tx, connection, [
           ...(Object.keys(set).length
             ? [statements.updateRefresh(tx, id, set)]
@@ -960,7 +966,11 @@ function buildStore<Db>(
                   failureCodes: [
                     ...new Set([
                       ...refresh.failureCodes,
-                      ...(result.failureCode ? [result.failureCode] : []),
+                      ...refreshFailureCodes(
+                        result,
+                        run.snapshot.failures ?? [],
+                        extraction.extracted,
+                      ),
                     ]),
                   ].sort(),
                   requiresAttention:

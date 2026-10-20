@@ -1,4 +1,4 @@
-import type { ReconciliationFailureCode } from "../domain/model.js";
+import type { RefreshFailureCode } from "../domain/model.js";
 import {
   FAILURE_REASONS,
   type FailureReason,
@@ -87,7 +87,8 @@ export interface Refresh {
   /** Internal evidence checkpoint, committed with this refresh's accepted run. */
   hasAcceptedEvidence?: boolean;
   counts: RefreshCounts;
-  failureCodes: ReconciliationFailureCode[];
+  /** Committed with the runs that count as its failures; empty once completed. */
+  failureCodes: RefreshFailureCode[];
   /** Why it failed without a provider outcome; null otherwise. */
   failureReason: FailureReason | null;
   /** A missed skip's gap: `scheduledAt` is its first occurrence, `through` its last. */
@@ -157,7 +158,6 @@ export interface RefreshProgress {
   finishedAt?: string;
   requiresAttention?: boolean;
   counts?: RefreshCounts;
-  failureCodes?: ReconciliationFailureCode[];
   failureReason?: FailureReason;
   window?: { from: string; status: WindowStatus };
 }

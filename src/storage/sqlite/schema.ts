@@ -13,7 +13,7 @@ import {
 import type { Card } from "../../domain/cards.js";
 import type {
   AnnotationData,
-  ReconciliationFailureCode,
+  RefreshFailureCode,
   TransactionInput,
 } from "../../domain/model.js";
 import type {
@@ -414,7 +414,7 @@ export const refreshes = sqliteTable("refreshes", {
   unlisted: integer("unlisted").notNull(),
 
   failureCodes: text("failure_codes_json", { mode: "json" })
-    .$type<ReconciliationFailureCode[]>()
+    .$type<RefreshFailureCode[]>()
     .notNull(),
   failureReason: text("failure_reason", { enum: FAILURE_REASONS }),
   missedThrough: text("missed_through"),

@@ -1,6 +1,7 @@
 import { ConflictError } from "./errors.js";
 import type {
   AnnotationData,
+  CollectionFailureCode,
   JsonObject,
   StoredTransactionFacts,
 } from "./model.js";
@@ -26,13 +27,7 @@ export interface CollectionFailure {
   scope?: CollectionScope | undefined;
   /** Explicitly failed optional enrichment; omitted failures affect financial coverage. */
   affectsCoverage?: false | undefined;
-  code:
-    | "network_error"
-    | "authentication_failed"
-    | "authentication_challenge"
-    | "rate_limited"
-    | "budget_exhausted"
-    | "invalid_response";
+  code: CollectionFailureCode;
 }
 
 export interface FinancialResponse {

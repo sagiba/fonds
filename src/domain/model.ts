@@ -9,6 +9,26 @@ export type ReconciliationFailureCode = z.infer<
   typeof reconciliationFailureCodeSchema
 >;
 
+/** Why a provider could not collect a unit of work. */
+export const collectionFailureCodeSchema = z.enum([
+  "network_error",
+  "authentication_failed",
+  "authentication_challenge",
+  "rate_limited",
+  "budget_exhausted",
+  "invalid_response",
+]);
+
+export type CollectionFailureCode = z.infer<typeof collectionFailureCodeSchema>;
+
+/** Why a refresh's failed work failed: fixed codes that carry no source values. */
+export const refreshFailureCodeSchema = z.enum([
+  ...reconciliationFailureCodeSchema.options,
+  ...collectionFailureCodeSchema.options,
+]);
+
+export type RefreshFailureCode = z.infer<typeof refreshFailureCodeSchema>;
+
 export type JsonValue =
   null | boolean | number | string | JsonValue[] | JsonObject;
 

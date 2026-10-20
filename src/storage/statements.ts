@@ -16,7 +16,7 @@ import type {
 } from "../application/refreshes.js";
 import type { Account } from "../domain/accounts.js";
 import type { Card } from "../domain/cards.js";
-import type { ReconciliationFailureCode } from "../domain/model.js";
+import type { RefreshFailureCode } from "../domain/model.js";
 import type { FinancialPlan } from "../domain/plans/state.js";
 import type { PriorRun } from "../domain/plans/sync.js";
 import type { calculateTotals } from "../domain/read-model.js";
@@ -61,7 +61,7 @@ export interface RefreshRow {
   observed: number;
   unchangedTransactions: number;
   unlisted: number;
-  failureCodes: ReconciliationFailureCode[];
+  failureCodes: RefreshFailureCode[];
   failureReason: FailureReason | null;
   missedThrough: string | null;
   missedCount: number | null;
