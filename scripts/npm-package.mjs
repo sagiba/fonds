@@ -258,31 +258,43 @@ async function assertRecipeMatchesRoot() {
   const drifted = recipe
     .map(([path, entry]) => [packageName(path), entry.version])
     .filter(([name, version]) => !rootVersions.get(name)?.has(version));
-  // The tests run what is installed, which a stale node_modules can make
-  // differ from the root lockfile.
-  const recipeNames = new Set(recipe.map(([path]) => packageName(path)));
-  const stale = [];
-  for (const [path, entry] of await lockPackages("package-lock.json")) {
-    if (!entry.dev && recipeNames.has(packageName(path))) {
-      const installed = await readFile(
-        resolve(root, path, "package.json"),
-        "utf8",
-      )
-        .then((text) => JSON.parse(text).version)
-        .catch(() => undefined);
-      // Only platform-specific optional packages may be absent.
-      if (
-        installed === undefined ? !entry.optional : installed !== entry.version
-      ) {
-        stale.push(
-          `  ${path}: ${installed ?? "missing"} (lockfile ${entry.version})`,
-        );
-      }
-    }
+  // The tests run what Node resolves from node_modules, which a stale
+  // installation can make differ from the lockfile; npm ls reports that tree,
+  // nested copies included, and fails on missing, invalid or extraneous ones.
+  const tree = await run("npm", ["ls", "--all", "--omit=dev", "--json"], {
+    cwd: root,
+    maxBuffer: 64 * 1024 * 1024,
+  }).catch(() => {
+    throw new Error("node_modules differs from package-lock.json; run npm ci");
+  });
+  const recipeVersions = new Map();
+  for (const [path, entry] of recipe) {
+    const versions = recipeVersions.get(packageName(path)) ?? new Set();
+    recipeVersions.set(packageName(path), versions.add(entry.version));
   }
-  if (stale.length) {
+  const resolved = [];
+  const walk = (name, node) => {
+    // Absent optional packages, such as other platforms' binaries, have no version.
+    if (node.version) {
+      resolved.push([name, node.version]);
+    }
+    for (const [child, dependency] of Object.entries(node.dependencies ?? {})) {
+      walk(child, dependency);
+    }
+  };
+  for (const name of Object.keys(
+    JSON.parse(await readFile(resolve(root, "deploy/npm/package.json"), "utf8"))
+      .dependencies,
+  )) {
+    walk(name, JSON.parse(tree.stdout).dependencies?.[name] ?? {});
+  }
+  const unpublished = resolved.filter(
+    ([name, version]) => !recipeVersions.get(name)?.has(version),
+  );
+  if (unpublished.length) {
     throw new Error(
-      `node_modules differs from package-lock.json; run npm ci:\n${stale.join("\n")}`,
+      "The tested installation resolves versions the npm package does not install; run npm ci or update deploy/npm:\n" +
+        unpublished.map(([name, version]) => `  ${name}@${version}`).join("\n"),
     );
   }
   if (drifted.length) {
