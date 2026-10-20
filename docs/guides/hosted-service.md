@@ -12,7 +12,7 @@ The local-first SQLite service needs none of this; see [local development](local
 The PostgreSQL target serves the hosted service when `FONDS_PUBLIC_ORIGIN` is
 set; without it, it serves the loopback bearer API. Run `node server.js` from
 the `postgres` build target (`npm run build:targets -- postgres`), or the
-`fonds:postgres` image.
+[image](docker.md#the-hosted-stack).
 
 | Variable                                                                           | Meaning                                                                                                                                                                                                                                                                      |
 | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -79,7 +79,7 @@ recovers access. It is generated where the deployment lives, never sent:
 
 ```sh
 node server.js login-link                                 # any host, same environment
-docker compose exec fonds node /app/server.js login-link  # the compose stack
+docker compose exec fonds fonds login-link                # the compose stack
 npm run neon:setup -- login-link …                        # Neon, from the operator's laptop
 ```
 

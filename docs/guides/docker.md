@@ -1,17 +1,13 @@
 # Docker
 
-Two images come from the repository's `Dockerfile`. Each installs only its
-target's deploy manifest, so an image carries one database driver.
+The repository's `Dockerfile` builds one image, `docker build -t fonds .`, which
+installs the npm package; its entrypoint is the `fonds` command. SQLite is the
+default; a `postgresql://` `FONDS_DATABASE_URL` selects PostgreSQL, where
+`fonds serve --hosted` runs the [hosted service](hosted-service.md). It runs as
+the non-root `node` user (uid 1000) with data in `/data`.
+`scripts/docker-smoke.sh` builds it and checks both uses with synthetic state.
 
-| Image             | Build                                                | Runs                                                                                                    |
-| ----------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `fonds` (default) | `docker build -t fonds .`                            | The local-first SQLite CLI; `fonds serve` for MCP over stdio or loopback HTTP                           |
-| `fonds:postgres`  | `docker build --target postgres -t fonds:postgres .` | The [hosted service](hosted-service.md), and the [operator CLI](local-development.md#operator-commands) |
-
-Both run as the image's non-root `node` user (uid 1000) with data in `/data`.
-`scripts/docker-smoke.sh` builds both and checks them with synthetic state.
-
-## The SQLite image
+## SQLite
 
 The image sets `FONDS_HOME=/data`, so without `--db` the ledger is
 `/data/fonds.sqlite`, with its [state](../database.md#state-directory-and-backup)
@@ -43,7 +39,8 @@ published port cannot reach it; for loopback HTTP, run Node from a
 
 ## The hosted stack
 
-`compose.yaml` runs PostgreSQL 18 on a private network and the hosted service:
+`compose.yaml` runs PostgreSQL 18 on a private network and the image as the
+hosted service (`fonds serve --hosted`):
 
 ```sh
 docker compose up -d --build
@@ -62,9 +59,9 @@ and add a passkey on the account page, then add providers; `connect` prompts for
 the credentials with hidden input:
 
 ```sh
-docker compose exec fonds node /app/server.js login-link
-docker compose exec fonds node /app/server.js init --connection cal-main --provider cal
-docker compose exec fonds node /app/server.js connect --connection cal-main
+docker compose exec fonds fonds login-link
+docker compose exec fonds fonds init --connection cal-main --provider cal
+docker compose exec fonds fonds connect --connection cal-main
 ```
 
 Nothing is refreshed until you choose a [schedule](hosted-service.md#scheduling).
@@ -79,7 +76,7 @@ docker compose up -d
 it under the `fonds` service's `environment` in `compose.override.yaml`. No
 scheduler container is needed; each run is logged as `fonds_scheduled_refresh`
 (`docker compose logs fonds`). Operation commands such as
-`docker compose exec fonds node /app/server.js list-connections` use the same
+`docker compose exec fonds fonds list-connections` use the same
 database.
 
 ### Backup, restore and upgrades

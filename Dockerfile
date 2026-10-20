@@ -1,48 +1,38 @@
-# Two images from one build. Each final stage installs only its target's
-# deploy manifest, so an image carries a single database driver.
-#   docker build --target postgres -t fonds:postgres .   hosted service
-#   docker build -t fonds .                               SQLite (default, last stage)
+# One image: the npm package's `fonds` command. SQLite by default; with a
+# postgresql:// FONDS_DATABASE_URL, the PostgreSQL commands, local servers and
+# (`fonds serve --hosted`) the hosted service. The ledger and installation
+# state live in the /data volume.
+#   docker build -t fonds .
+# The `package` stage packs the npm tarball from source; a build that already
+# has a tested tarball supplies it instead, so the image installs those bytes:
+#   docker build --build-context package=<directory with fonds.tgz> -t fonds .
 
-FROM node:24.22.0-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS build
+FROM node:24.22.0-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS pack
 WORKDIR /src
 COPY package.json package-lock.json LICENSE NOTICE ./
 RUN npm ci --ignore-scripts --no-audit --no-fund
 COPY tsconfig.json tsconfig.build.json ./
 COPY scripts ./scripts
 COPY src ./src
+COPY deploy/npm ./deploy/npm
 COPY deploy/sqlite ./deploy/sqlite
-COPY deploy/postgres ./deploy/postgres
 COPY tests/providers/cal/fixtures/recent-01.json tests/providers/cal/fixtures/recent-02.json ./tests/providers/cal/fixtures/
-RUN node scripts/build-targets.mjs sqlite postgres
+RUN node scripts/npm-package.mjs && mkdir /package \
+  && cp dist/npm/fonds-finance-*.tgz /package/fonds.tgz
 
-# The hosted service: OAuth issuer, API/MCP, scheduled refresh and Events.
-FROM node:24.22.0-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS postgres
-ENV NODE_ENV=production HOST=0.0.0.0 PORT=8787 FONDS_STATE_DIR=/data
-WORKDIR /app
-COPY --from=build /src/dist/targets/postgres/ ./
-RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
-  && npm cache clean --force \
-  && install -d -m 0700 -o node -g node /data
-USER node
-VOLUME /data
-EXPOSE 8787
-# No subcommand serves (`--transport stdio` serves MCP over stdio); every
-# operator command (docs/guides/local-development.md#operator-commands) and
-# operation command runs against the same database and state directory.
-ENTRYPOINT ["node", "/app/server.js"]
+FROM scratch AS package
+COPY --from=pack /package/fonds.tgz /fonds.tgz
 
-# Local-first SQLite: the owner CLI, `serve` (stdio or loopback HTTP). The
-# default ledger and its state (fonds.env) live in the /data volume.
-FROM node:24.22.0-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS sqlite
-ENV NODE_ENV=production FONDS_HOME=/data
-WORKDIR /app
-COPY --from=build /src/dist/targets/sqlite/ ./
-RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
+FROM node:24.22.0-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5
+# HOST applies only to the hosted service; local servers bind loopback.
+ENV NODE_ENV=production FONDS_HOME=/data FONDS_STATE_DIR=/data HOST=0.0.0.0 PORT=8787
+RUN --mount=type=bind,from=package,target=/package \
+  npm install --global --ignore-scripts --no-audit --no-fund /package/fonds.tgz \
   && npm cache clean --force \
-  && ln -s /app/fonds.mjs /usr/local/bin/fonds \
   && install -d -m 0700 -o node -g node /data
 USER node
 WORKDIR /data
 VOLUME /data
+EXPOSE 8787
 ENTRYPOINT ["fonds"]
 CMD ["--help"]

@@ -49,7 +49,7 @@ count.
 - **ChatGPT:** a separate setup. Run a hosted instance with
   [Docker](docs/guides/docker.md) or [Neon](docs/guides/neon-deployment.md), then
   follow the [ChatGPT connection guide](docs/guides/chatgpt-connect.md).
-- **Containers:** the [local Docker image](docs/guides/docker.md#the-sqlite-image)
+- **Containers:** the [local Docker image](docs/guides/docker.md#sqlite)
   needs no Node install; a [quick tunnel](docs/guides/docker.md#quick-tunnel)
   gives temporary hosted access.
 
