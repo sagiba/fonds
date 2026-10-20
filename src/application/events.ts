@@ -13,7 +13,8 @@ const MAX_TTL_MS = 7 * DAY;
 const MAX_DUE_PER_PASS = 25;
 // Retry backoff caps at an hour, so where delivery passes run at least hourly
 // (the Node host runs one every minute) this tolerates about a day of receiver
-// downtime. A host that delivers only after scheduled runs retries once per run.
+// downtime. Without a regular pass, a host retries only when a run or an owner
+// write delivers.
 const MAX_ATTEMPTS = 24;
 const identifier = z.string().min(1).max(512);
 const argumentsSchema = z.object({ connectionId: identifier }).strict();

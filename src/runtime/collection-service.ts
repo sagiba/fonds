@@ -225,14 +225,100 @@ export function createCollectionService(options: CollectionServiceOptions) {
     // Each refresh also delivers changes made through the API since the last one.
     ...(events && {
       afterRefresh: async (signal: AbortSignal) => {
-        const outcome = await events.deliver({
-          limit: 100,
-          signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
-        });
-        log({ event: "fonds_event_delivery", ...outcome });
+        await deliveryPass(events, log)(signal);
       },
     }),
   });
+}
+
+/** How long one Events delivery pass may run, after a refresh or an owner write. */
+export const DELIVERY_PASS_MS = 30_000;
+
+/** One bounded delivery pass; a quiet one logs only when it sent or failed. */
+export function deliveryPass(
+  events: Pick<EventService, "deliver">,
+  log: OperationsLog,
+  boundMs = DELIVERY_PASS_MS,
+) {
+  return async (signal: AbortSignal, quiet = false) => {
+    const outcome = await events.deliver({
+      limit: 100,
+      signal: AbortSignal.any([signal, AbortSignal.timeout(boundMs)]),
+    });
+    if (!quiet || outcome.sent || outcome.failed) {
+      log({ event: "fonds_event_delivery", ...outcome });
+    }
+    return outcome;
+  };
+}
+
+export interface WriteDeliveryOptions {
+  /** Ends a pass at shutdown; none starts after it. */
+  signal: AbortSignal;
+  /** Keeps a host whose invocations end alive until a write's pass settles (Neon's waitUntil). */
+  background?: ((work: Promise<unknown>) => void) | undefined;
+  log: OperationsLog;
+}
+
+/**
+ * Delivery for owner writes, which no refresh follows. A write's pass starts
+ * after it has committed, outside its transaction, and never holds its
+ * response. One pass runs at a time; writes during it share the next one.
+ */
+export function writeDelivery(
+  pass: (signal: AbortSignal) => Promise<{ sent: number }>,
+  options: WriteDeliveryOptions,
+) {
+  const log = safeLog(options.log);
+  let waiting: (() => void)[] = [];
+  let running: Promise<void> | undefined;
+
+  async function cover() {
+    try {
+      // A subscription sends one batch per pass, which may be an older retried
+      // one; one more pass then sends what the write committed.
+      if ((await pass(options.signal)).sent > 0 && !options.signal.aborted) {
+        await pass(options.signal);
+      }
+    } catch {
+      log({ event: "fonds_write_delivery", status: "failed" });
+    }
+  }
+
+  async function drain() {
+    // Yields first, so `running` is set before this can finish.
+    await null;
+    while (waiting.length > 0) {
+      const covered = waiting;
+      waiting = [];
+      if (!options.signal.aborted) {
+        await cover();
+      }
+      for (const settle of covered) {
+        settle();
+      }
+    }
+    running = undefined;
+  }
+
+  return {
+    /** The application's `afterWrite`. */
+    afterWrite() {
+      if (options.signal.aborted) {
+        return;
+      }
+      const covered = new Promise<void>((resolve) => waiting.push(resolve));
+      running ??= drain();
+      // The write's invocation lives until the pass that covers it settles.
+      options.background?.(covered);
+    },
+    /** Waits until no pass runs or is requested. */
+    async settled() {
+      while (running) {
+        await running;
+      }
+    },
+  };
 }
 
 /** The embedded scheduler's paths over a refresh service. */
@@ -310,6 +396,11 @@ export function createLocalService(
     log: log,
     ...(options.providerFor && { providerFor: options.providerFor }),
   });
+  const deliver = deliveryPass(events, log);
+  const writes = writeDelivery((signal) => deliver(signal, true), {
+    signal: options.signal,
+    log,
+  });
   const scheduler = createEmbeddedScheduler({
     ...options.scheduler,
     schedule: options.schedule,
@@ -328,15 +419,17 @@ export function createLocalService(
   return {
     application: createApplication(backend.store, {
       refreshes: ownerRefreshes(refreshes),
+      afterWrite: writes.afterWrite,
     }),
     events,
     refreshes,
-    // Shutdown keeps the store open until refreshes record their state.
+    // Shutdown keeps the store open until refreshes and deliveries record their state.
     scheduler: {
       ...scheduler,
       settled: async () => {
         await scheduler.settled();
         await refreshes.settled();
+        await writes.settled();
       },
     },
   };
