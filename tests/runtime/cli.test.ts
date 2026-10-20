@@ -1913,7 +1913,7 @@ describe("stored provider credentials", () => {
     expect(
       await success("disconnect", "--db", dbPath, "--connection", "cal-cli"),
     ).toMatchObject({ credentials: "none" });
-    expect(await success("collect", "--db", dbPath)).toMatchObject({
+    expect(await success("refresh", "--db", dbPath)).toMatchObject({
       status: "completed",
       captures: 0,
     });
