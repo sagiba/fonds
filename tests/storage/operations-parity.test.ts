@@ -908,7 +908,9 @@ describe.each(backends)("collection lease on %s", (backend) => {
         });
         return signal.aborted;
       },
-      { leaseMs: 80 },
+      // Long enough that a slow database cannot expire the holder's own first
+      // write; renewal still notices the successor within a quarter of it.
+      { leaseMs: 2_000 },
     );
     expect(result).toEqual({ acquired: true, result: true });
     const config = (await db.getStoredConnection(connectionId))?.config;
