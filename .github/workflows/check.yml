@@ -84,6 +84,9 @@ jobs:
       # the postgres job runs the PostgreSQL launcher. Experimental targets
       # (Turso, turso-web, D1) run in experimental.yml.
       - run: npm run check:targets -- sqlite --runtime
+      # The npm package as a user installs it: the `fonds` command, demo,
+      # stdio MCP and loopback HTTP.
+      - run: npm run check:npm
 
   postgres:
     needs: changes

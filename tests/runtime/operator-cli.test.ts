@@ -113,6 +113,22 @@ describe("one operator CLI for every backend", () => {
     expect(shared(usages[1]!.stdout)).toBe(shared(usages[0]!.stdout));
   });
 
+  it("reports the package version on every entry point", async () => {
+    const { version } = JSON.parse(
+      readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+    ) as { version: string };
+    for (const result of await Promise.all([
+      entryPoints.sqlite(["--version"]),
+      entryPoints.postgres(["--version"]),
+    ])) {
+      expect(result).toEqual({
+        status: EXIT_CODES.ok,
+        stdout: `${version}\n`,
+        stderr: "",
+      });
+    }
+  });
+
   it.each([
     ...commands,
     ...operationDefinitions.map((definition) =>

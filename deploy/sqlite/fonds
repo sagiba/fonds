@@ -1,7 +1,0 @@
-#!/bin/sh
-# `fonds serve …` runs the SQLite HTTP/stdio server; anything else is the CLI.
-if [ "$1" = "serve" ]; then
-  shift
-  exec node /app/server.js "$@"
-fi
-exec node /app/cli.js "$@"

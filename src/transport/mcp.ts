@@ -8,6 +8,7 @@ import {
 
 import type { EventService } from "../application/events.js";
 import { type Application, publicError } from "../application/operations.js";
+import { FONDS_VERSION } from "../application/version.js";
 import { operationScope, permits } from "./auth.js";
 import { registerMcpEvents } from "./mcp-events.js";
 
@@ -30,7 +31,7 @@ export function createMcpServer(
 ): McpServer {
   const server = new McpServer({
     name: "fonds",
-    version: "0.1.0",
+    version: FONDS_VERSION,
   });
   if (events) {
     registerMcpEvents(server, events);

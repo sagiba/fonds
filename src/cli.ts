@@ -197,7 +197,8 @@ export async function main(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<number> {
   const asksForHelp =
-    ["--help", "help"].includes(argv[0] ?? "") || argv.includes("--help");
+    ["--help", "help", "--version"].includes(argv[0] ?? "") ||
+    argv.includes("--help");
   if (selectedBackend(env) === "postgres" && !asksForHelp) {
     process.stderr.write(
       "FONDS_DATABASE_URL selects PostgreSQL: run this command with the PostgreSQL target's node server.js, or unset it to use SQLite.\n",

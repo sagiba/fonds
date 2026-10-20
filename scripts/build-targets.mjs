@@ -12,6 +12,13 @@ export const targets = {
     // The owner CLI ships beside the server and obeys the same graph rules.
     cli: "src/cli.ts",
     driver: "@libsql/client/sqlite3",
+    // The `fonds` launcher and the synthetic captures src/runtime/demo.ts
+    // replays, so the npm package and image can run `fonds demo`.
+    files: {
+      "fonds.mjs": "deploy/sqlite/fonds.mjs",
+      "demo/recent-01.json": "tests/providers/cal/fixtures/recent-01.json",
+      "demo/recent-02.json": "tests/providers/cal/fixtures/recent-02.json",
+    },
   },
   postgres: { entry: "src/targets/postgres.ts", driver: "pg" },
   turso: { entry: "src/targets/turso.ts", driver: "@libsql/client" },
@@ -180,6 +187,9 @@ export async function buildTarget(
   // Apache-2.0 redistribution carries the license and notice with every artifact.
   for (const file of ["LICENSE", "NOTICE"]) {
     await cp(resolve(root, file), resolve(output, file));
+  }
+  for (const [file, source] of Object.entries(target.files ?? {})) {
+    await cp(resolve(root, source), resolve(output, file));
   }
   return {
     target: name,
