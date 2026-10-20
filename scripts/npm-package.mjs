@@ -2,9 +2,11 @@ import { execFile, spawn } from "node:child_process";
 import {
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rename,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -16,14 +18,128 @@ import { buildTarget, root, targets } from "./build-targets.mjs";
 const run = promisify(execFile);
 const destination = resolve(root, "dist/npm");
 
+/** Licenses whose terms bundled redistribution meets by carrying their text. */
+const permittedLicenses = new Set([
+  "0BSD",
+  "Apache-2.0",
+  "BlueOak-1.0.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "MIT",
+  "Unlicense",
+]);
+const legalFile = /^(?:licen[cs]e|copying|notice)(?:[.-].*)?$/i;
+
 /**
- * Packs the SQLite target as the npm package. The authored manifest stays
- * private, so this is the only way to produce a publishable tarball; the
- * target's lockfile ships as npm-shrinkwrap.json, which npm honours for
- * installed packages, so users get the dependency graph CI tested.
+ * The license and notice texts of every dependency esbuild copied into the
+ * bundle. Native modules stay installed packages and carry their own.
+ */
+async function thirdPartyNotices(metafile) {
+  const packages = new Map();
+  for (const output of Object.values(metafile.outputs)) {
+    for (const [path, contribution] of Object.entries(output.inputs)) {
+      const match = path.match(/^(.*node_modules\/(?:@[^/]+\/)?[^/]+)\//);
+      if (match && contribution.bytesInOutput > 0) {
+        packages.set(resolve(root, match[1]), true);
+      }
+    }
+  }
+  const sections = [];
+  for (const directory of [...packages.keys()].sort()) {
+    const manifest = JSON.parse(
+      await readFile(join(directory, "package.json"), "utf8"),
+    );
+    if (!permittedLicenses.has(manifest.license)) {
+      throw new Error(
+        `${manifest.name}@${manifest.version}: license ${manifest.license} needs review before bundling`,
+      );
+    }
+    const texts = [];
+    for (const file of (await readdir(directory)).sort()) {
+      if (legalFile.test(file)) {
+        texts.push(await readFile(join(directory, file), "utf8"));
+      }
+    }
+    sections.push(
+      [
+        `${manifest.name}@${manifest.version} (${manifest.license})`,
+        ...(texts.length
+          ? texts.map((text) => text.trim())
+          : ["The package ships no license file; see its license field."]),
+      ].join("\n\n"),
+    );
+  }
+  return {
+    count: sections.length,
+    text:
+      "Fonds bundles the following third-party packages. Their license and notice texts follow.\n\n" +
+      sections.join(`\n\n${"-".repeat(72)}\n\n`) +
+      "\n",
+  };
+}
+
+async function directorySize(path) {
+  let total = 0;
+  for (const entry of await readdir(path, { withFileTypes: true })) {
+    const child = join(path, entry.name);
+    total += entry.isDirectory()
+      ? await directorySize(child)
+      : (await stat(child)).size;
+  }
+  return total;
+}
+
+/**
+ * The bundle is built from the root installation the test suite runs, while
+ * the native modules install from the recipe's lockfile. Every package the
+ * recipe installs must be a version the root installation also has; lockfiles
+ * place packages differently, so versions are compared by package name.
+ */
+async function assertRecipeMatchesRoot() {
+  const lockPackages = async (path) =>
+    Object.entries(
+      JSON.parse(await readFile(resolve(root, path), "utf8")).packages,
+    ).filter(([path]) => path);
+  const packageName = (path) =>
+    path.slice(path.lastIndexOf("node_modules/") + 13);
+  const rootVersions = new Map();
+  for (const [path, entry] of await lockPackages("package-lock.json")) {
+    if (!entry.dev) {
+      const versions = rootVersions.get(packageName(path)) ?? new Set();
+      rootVersions.set(packageName(path), versions.add(entry.version));
+    }
+  }
+  const drifted = (await lockPackages("deploy/npm/package-lock.json"))
+    .map(([path, entry]) => [packageName(path), entry.version])
+    .filter(([name, version]) => !rootVersions.get(name)?.has(version));
+  if (drifted.length) {
+    throw new Error(
+      "deploy/npm/package-lock.json installs versions the root lockfile does not:\n" +
+        drifted
+          .map(
+            ([name, version]) =>
+              `  ${name}@${version} (root ${[...(rootVersions.get(name) ?? [])].join(", ") || "none"})`,
+          )
+          .join("\n"),
+    );
+  }
+}
+
+/**
+ * Packs the SQLite target as the npm package from the `deploy/npm` recipe:
+ * dependencies are bundled, so the package installs only native modules. The
+ * recipe manifest stays private, so this is the only way to produce a
+ * publishable tarball; its lockfile ships as npm-shrinkwrap.json, which npm
+ * honours for installed packages, so users get the graph CI tested.
  */
 async function pack(stage) {
-  await buildTarget("sqlite", { output: stage });
+  await assertRecipeMatchesRoot();
+  await buildTarget("sqlite", {
+    output: stage,
+    recipe: "deploy/npm",
+    bundleDependencies: true,
+  });
   const manifestPath = join(stage, "package.json");
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
   delete manifest.private;
@@ -32,6 +148,10 @@ async function pack(stage) {
     join(stage, "package-lock.json"),
     join(stage, "npm-shrinkwrap.json"),
   );
+  const notices = await thirdPartyNotices(
+    JSON.parse(await readFile(join(stage, "metafile.json"), "utf8")),
+  );
+  await writeFile(join(stage, "THIRD_PARTY_NOTICES"), notices.text);
   await mkdir(destination, { recursive: true });
   const { stdout } = await run(
     "npm",
@@ -42,16 +162,24 @@ async function pack(stage) {
   const expected = [
     "LICENSE",
     "NOTICE",
+    "THIRD_PARTY_NOTICES",
     "package.json",
     "npm-shrinkwrap.json",
     "cli.js",
     "server.js",
     ...Object.keys(targets.sqlite.files),
   ].sort();
-  const actual = packed.files.map((file) => file.path).sort();
-  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+  const paths = packed.files.map((file) => file.path);
+  const actual = paths.filter((path) => !path.startsWith("chunks/")).sort();
+  const strayChunks = paths.filter(
+    (path) => path.startsWith("chunks/") && !/^chunks\/[^/]+\.js$/.test(path),
+  );
+  if (
+    JSON.stringify(actual) !== JSON.stringify(expected) ||
+    strayChunks.length
+  ) {
     throw new Error(
-      `Unexpected package contents:\n  packed   ${actual.join(", ")}\n  expected ${expected.join(", ")}`,
+      `Unexpected package contents:\n  packed   ${paths.sort().join(", ")}\n  expected ${expected.join(", ")} and chunks/*.js`,
     );
   }
   return {
@@ -59,6 +187,8 @@ async function pack(stage) {
     version: packed.version,
     tarball: join(destination, packed.filename),
     integrity: packed.integrity,
+    packedBytes: packed.size,
+    bundledPackages: notices.count,
   };
 }
 
@@ -174,6 +304,9 @@ async function checkInstalled(packed, scratch) {
     { cwd: scratch },
   );
   const fonds = join(prefix, "bin", "fonds");
+  const installedBytes = await directorySize(
+    join(prefix, "lib", "node_modules", packed.name),
+  );
   const env = isolatedEnv(home);
   const fondsOutput = async (...args) =>
     (await run(fonds, args, { cwd: scratch, env })).stdout;
@@ -242,7 +375,13 @@ async function checkInstalled(packed, scratch) {
   } finally {
     server.child.kill("SIGTERM");
   }
-  return { installed: true, demo: true, stdioMcp: true, http: true };
+  return {
+    installed: true,
+    installedBytes,
+    demo: true,
+    stdioMcp: true,
+    http: true,
+  };
 }
 
 const scratch = await mkdtemp(join(tmpdir(), "fonds-npm-package-"));
