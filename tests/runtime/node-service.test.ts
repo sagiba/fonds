@@ -5,6 +5,8 @@ import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 
 import {
   Client,
@@ -187,6 +189,63 @@ it("drains an in-flight async operation before closing HTTP", async () => {
   }
 });
 
+/** A modern MCP subscription stream, which stays open until shutdown ends it. */
+function openSubscriptionStream(url: string, token: string) {
+  return fetch(`${url}/mcp`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+      "MCP-Protocol-Version": "2026-07-28",
+      "Mcp-Method": "subscriptions/listen",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "subscriptions/listen",
+      params: {
+        notifications: { toolsListChanged: true },
+        _meta: {
+          [PROTOCOL_VERSION_META_KEY]: "2026-07-28",
+          [CLIENT_INFO_META_KEY]: {
+            name: "synthetic-drain-test",
+            version: "1",
+          },
+          [CLIENT_CAPABILITIES_META_KEY]: {},
+        },
+      },
+    }),
+  });
+}
+
+it("ends MCP subscription streams on close after a garbage collection", async () => {
+  const token = "synthetic-mcp-gc-token-0000000000000000";
+  const db = await openDatabase(":memory:");
+  const service = await startNodeService(db, { token, port: 0 });
+  try {
+    const subscription = await openSubscriptionStream(service.url, token);
+    const reader = subscription.body!.getReader();
+    expect((await reader.read()).done).toBe(false);
+    // Collects whatever only weakly links the stream to the shutdown signal.
+    setFlagsFromString("--expose-gc");
+    const gc = runInNewContext("gc") as () => void;
+    for (let round = 0; round < 3; round += 1) {
+      gc();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const closing = service.close();
+    // A stream that stop() missed is cut at the drain deadline instead.
+    for (let chunk = await reader.read(); !chunk.done;) {
+      chunk = await reader.read();
+    }
+    await closing;
+  } finally {
+    await service.close();
+    await db.close();
+  }
+}, 15_000);
+
 it("ends MCP subscription streams but finishes accepted MCP calls on close", async () => {
   const token = "synthetic-mcp-drain-token-00000000000000";
   const db = await openDatabase(":memory:");
@@ -214,32 +273,7 @@ it("ends MCP subscription streams but finishes accepted MCP calls on close", asy
   const modern = client({ pin: "2026-07-28" });
   const legacy = client("legacy");
   try {
-    const subscription = await fetch(`${service.url}/mcp`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        Accept: "application/json, text/event-stream",
-        "MCP-Protocol-Version": "2026-07-28",
-        "Mcp-Method": "subscriptions/listen",
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "subscriptions/listen",
-        params: {
-          notifications: { toolsListChanged: true },
-          _meta: {
-            [PROTOCOL_VERSION_META_KEY]: "2026-07-28",
-            [CLIENT_INFO_META_KEY]: {
-              name: "synthetic-drain-test",
-              version: "1",
-            },
-            [CLIENT_CAPABILITIES_META_KEY]: {},
-          },
-        },
-      }),
-    });
+    const subscription = await openSubscriptionStream(service.url, token);
     expect(subscription.headers.get("content-type")).toContain(
       "text/event-stream",
     );

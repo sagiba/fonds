@@ -191,6 +191,11 @@ export function createHttpService(
   // Subscription streams stay open until their client leaves. stop() ends them
   // so a listener can drain while accepted MCP calls finish; close() ends those.
   const subscriptionStreams = new AbortController();
+  // A derived Request's signal follows its init signal only while the Request
+  // is reachable, and the MCP handler keeps only the signal. Each stream's body
+  // keeps its Request reachable while it is served, so a garbage collection
+  // cannot detach the stream from stop().
+  const subscriptionRequests = new WeakMap<ReadableStream, Request>();
   const publicOrigin = hosted ? hostedOrigin(options.publicOrigin) : undefined;
   const resource = publicOrigin ? `${publicOrigin}/mcp` : "local";
   const authorizationScopes = hosted
@@ -566,15 +571,15 @@ export function createHttpService(
     if (!FINANCIAL_SCOPES.some((scope) => permits(identity.scopes, scope))) {
       return authorize(context, "financial:read")!;
     }
-    const request = (await opensSubscriptionStream(context.req.raw))
+    const subscription = (await opensSubscriptionStream(context.req.raw))
       ? new Request(context.req.raw, {
           signal: AbortSignal.any([
             context.req.raw.signal,
             subscriptionStreams.signal,
           ]),
         })
-      : context.req.raw;
-    return mcp.fetch(request, {
+      : undefined;
+    const response = await mcp.fetch(subscription ?? context.req.raw, {
       authInfo: {
         token: "",
         clientId: identity.clientId,
@@ -582,6 +587,10 @@ export function createHttpService(
         extra: { identity: { ...identity, scopes: [...identity.scopes] } },
       },
     });
+    if (subscription && response.body) {
+      subscriptionRequests.set(response.body, subscription);
+    }
+    return response;
   });
   return {
     app,
