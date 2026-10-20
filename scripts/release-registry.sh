@@ -43,21 +43,30 @@ npm_channel() {
   echo "$tags" | awk -v tag="$2" -F ': ' '$1 == tag { print $2 }'
 }
 
-# Runs `docker buildx imagetools inspect` for a reference; status 3 when the
-# registry reports that it does not exist.
-image_inspect() {
+# Whether a reference exists: status 3 only when the registry reports that the
+# reference itself is not found. A raw inspection fetches only its top-level
+# manifest, so a missing image or config it names cannot pass for absence.
+image_exists() {
   local err status
   err="$(mktemp)"
-  docker buildx imagetools inspect "$@" 2>"$err" && status=0 || status=$?
+  docker buildx imagetools inspect --raw "$1" >/dev/null 2>"$err" && status=0 || status=$?
   if [ "$status" != 0 ]; then
-    if grep -q ': not found$' "$err"; then
+    if grep -qxF "ERROR: $1: not found" "$err"; then
       status=3
     else
       cat "$err" >&2
+      status=1
     fi
   fi
   rm -f "$err"
   return "$status"
+}
+
+# `docker buildx imagetools inspect` for an existing reference; status 3 when
+# it does not exist, and any error loading what it names fails.
+image_inspect() {
+  image_exists "$1" || return
+  docker buildx imagetools inspect "$@"
 }
 
 # The digest of the index a reference names.
