@@ -127,9 +127,9 @@ and `FUNCTION_ORIGIN` with your own values.
    ```
 
    Confirm that the deploy reports success. It uploads no provider credentials
-   and sets no schedule, so the `cal-hourly` trigger is created disabled. Until
-   the real deploy in step 8 the Function answers every request with 503: its
-   placeholder Auth URL is not the `https://….neon.tech` URL it requires.
+   and sets no schedule, so the `collect-hourly` trigger is created disabled.
+   Until the real deploy in step 8 the Function answers every request with 503:
+   its placeholder Auth URL is not the `https://….neon.tech` URL it requires.
 
 4. Read the Function's URL, printed as `invocation_url` (a deploy's text output
    may also list it under "Function URLs"). `FUNCTION_ORIGIN` below is that
@@ -227,8 +227,8 @@ FONDS_COLLECTION_CREDENTIALS_FILE="$HOME/provider-credentials.json" npm run neon
 ```
 
 `neon deploy` uploads [function.ts](../../deploy/neon/function.ts) with the
-declared variables and reconciles the `cal-hourly` cron trigger, a
-provider-neutral name for `/internal/triggers/recent`
+declared variables and reconciles the `collect-hourly` cron trigger for
+`/internal/triggers/recent`
 ([declarative deploy](https://neon.com/docs/compute/functions/deploy)). Each
 deploy updates that trigger in place by name; renaming it in `neon.ts` would add
 a second trigger rather than replace the first. `--no-env-pull` is part of the
@@ -311,7 +311,7 @@ smoke check verifies it. Only the project's own trigger configuration can name
 that trigger
 ([native trigger behavior](https://neon.com/docs/compute/functions/triggers/schedule)).
 
-Schedule state is declared: `neon.ts` enables `cal-hourly` only when
+Schedule state is declared: `neon.ts` enables `collect-hourly` only when
 `FONDS_COLLECTION_SCHEDULE` turns a schedule on, so a new installation deploys
 it disabled and never collects before validation. To pause collection, change
 that value and deploy. The CLI can inspect the trigger, or pause it immediately,

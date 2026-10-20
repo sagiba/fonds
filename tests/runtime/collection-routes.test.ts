@@ -35,7 +35,11 @@ const capture: CollectionEvent = {
 const payload = (invocation = "synthetic-occurrence") => ({
   version: 1,
   invocation_id: invocation,
-  trigger: { type: "schedule", id: "trigger-synthetic", name: "cal-hourly" },
+  trigger: {
+    type: "schedule",
+    id: "trigger-synthetic",
+    name: "collect-hourly",
+  },
   data: { scheduled_at: "2040-08-01T00:00:00Z" },
 });
 const request = (
@@ -64,7 +68,7 @@ describe("internal collection routes", () => {
   function setup(
     collect: ProviderCollector["collect"],
     options: Pick<CollectionRoutesOptions, "authenticateScheduledRequest"> = {
-      authenticateScheduledRequest: neonTriggerAuthenticator("cal-hourly"),
+      authenticateScheduledRequest: neonTriggerAuthenticator("collect-hourly"),
     },
     scheduledRun?: Parameters<typeof createCollectionRoutes>[2],
   ) {
