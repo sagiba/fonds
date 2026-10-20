@@ -462,10 +462,11 @@ function isAuthorizationRedirect(
   if (destination.origin === new URL(baseURL).origin) {
     return true;
   }
+  const callback = clientCallback ? URL.parse(clientCallback) : null;
   return Boolean(
-    clientCallback &&
-    destination.origin === new URL(clientCallback).origin &&
-    destination.pathname === new URL(clientCallback).pathname,
+    callback &&
+    destination.origin === callback.origin &&
+    destination.pathname === callback.pathname,
   );
 }
 
