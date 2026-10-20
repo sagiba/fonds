@@ -393,8 +393,10 @@ describe("Neon configuration", () => {
       const { default: config } = await import("../../../neon.js");
       // Literal on both sides: the declaration and the function's envelope
       // gate must name the same trigger, or every native invocation is denied.
-      expect(COLLECTION_TRIGGER_NAME).toBe("collect-hourly");
-      expect(Object.keys(config.triggers ?? {})).toEqual(["collect-hourly"]);
+      expect(COLLECTION_TRIGGER_NAME).toBe("scheduled-collection");
+      expect(Object.keys(config.triggers ?? {})).toEqual([
+        "scheduled-collection",
+      ]);
       expect(config.triggers?.[COLLECTION_TRIGGER_NAME]).toEqual({
         type: "schedule",
         function: "fonds",

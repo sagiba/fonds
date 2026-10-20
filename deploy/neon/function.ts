@@ -24,7 +24,7 @@ import { neonGoogleLogin } from "./neon-login.js";
  * Must match the trigger declared in the repository's neon.ts. Renaming it
  * gives deployed installations a second trigger instead of updating theirs.
  */
-export const COLLECTION_TRIGGER_NAME = "collect-hourly";
+export const COLLECTION_TRIGGER_NAME = "scheduled-collection";
 
 const emailSchema = z.string().regex(/^[^\s@]+@[^\s@]+$/);
 const scheduledAtSchema = z.iso.datetime({ offset: true });

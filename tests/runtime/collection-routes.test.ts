@@ -41,7 +41,7 @@ const payload = (invocation = "synthetic-occurrence") => ({
   trigger: {
     type: "schedule",
     id: "trigger-synthetic",
-    name: "collect-hourly",
+    name: "scheduled-collection",
   },
   data: { scheduled_at: "2040-08-01T00:00:00Z" },
 });
@@ -190,7 +190,7 @@ describe("internal collection routes", () => {
     ).toBe(202);
   });
 
-  it("admits an attested collect-hourly invocation through the deployed authenticator, and no other trigger", async () => {
+  it("admits an attested scheduled-collection invocation through the deployed authenticator, and no other trigger", async () => {
     const collect = vi.fn(async function* () {
       yield capture;
     });

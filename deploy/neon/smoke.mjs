@@ -91,10 +91,10 @@ export function smokeChecks(origin) {
         response.status === 400 && body?.error === "invalid_client",
     ],
     [
-      // A complete, valid collect-hourly envelope: only Neon's ingress
-      // stripping of the attestation header can reject it. If stripping
-      // regressed, this runs one recent collection and the check fails with
-      // status 200.
+      // A complete, valid scheduled-collection envelope: only Neon's
+      // ingress stripping of the attestation header can reject it. If
+      // stripping regressed, this runs one recent collection and the check
+      // fails with status 200.
       "public callers cannot forge a native trigger",
       new Request(`${origin}/internal/triggers/recent`, {
         method: "POST",
@@ -105,7 +105,11 @@ export function smokeChecks(origin) {
         body: JSON.stringify({
           version: 1,
           invocation_id: "forged-smoke",
-          trigger: { type: "schedule", id: "forged", name: "collect-hourly" },
+          trigger: {
+            type: "schedule",
+            id: "forged",
+            name: "scheduled-collection",
+          },
           data: { scheduled_at: new Date().toISOString() },
         }),
       }),
