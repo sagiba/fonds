@@ -4,6 +4,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  rename,
   rm,
   stat,
   symlink,
@@ -66,7 +67,11 @@ describe("state directory", () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     const winner =
       "FONDS_AUTH_SECRET=winner-secret-0000000000000000000000000\nFONDS_OWNER_ID=winner\nFONDS_CREDENTIALS_KEY=winner-key\n";
-    await writeFile(path, winner, { mode: 0o600 });
+    // A lock holder renames a complete file into place; a direct write would
+    // let the waiter read the file between its creation and its contents.
+    const temporary = join(stateDir, ".fonds-winner");
+    await writeFile(temporary, winner, { mode: 0o600 });
+    await rename(temporary, path);
     expect((await waiting).FONDS_OWNER_ID).toBe("winner");
     await rm(path);
     await expect(

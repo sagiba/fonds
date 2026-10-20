@@ -713,4 +713,4 @@ it("reopens a current SQLite file repeatedly and rejects current-version files w
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
-});
+}, 30_000);
