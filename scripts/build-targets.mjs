@@ -12,6 +12,8 @@ export const targets = {
     // The owner CLI ships beside the server and obeys the same graph rules.
     cli: "src/cli.ts",
     driver: "@libsql/client/sqlite3",
+    // Compiled code npm installs per platform; never bundled.
+    native: ["@libsql/client"],
     // The `fonds` launcher and the synthetic captures src/runtime/demo.ts
     // replays, so the npm package and image can run `fonds demo`.
     files: {
@@ -136,16 +138,26 @@ export function assertGraph(name, metafile) {
   }
 }
 
+/**
+ * Builds one target. `recipe` selects the manifest and lockfile shipped with
+ * it; `bundleDependencies` folds every dependency except the target's native
+ * modules into the output, for a recipe that depends on those alone.
+ */
 export async function buildTarget(
   name,
-  { sourceRoot = root, output = resolve(root, "dist/targets", name) } = {},
+  {
+    sourceRoot = root,
+    output = resolve(root, "dist/targets", name),
+    recipe = `deploy/${name}`,
+    bundleDependencies = false,
+  } = {},
 ) {
   const target = targets[name];
   if (!target) {
     throw new Error(`Unknown target: ${name}`);
   }
   const manifest = JSON.parse(
-    await readFile(resolve(root, "deploy", name, "package.json"), "utf8"),
+    await readFile(resolve(root, recipe, "package.json"), "utf8"),
   );
   await mkdir(output, { recursive: true });
   const result = await build({
@@ -157,11 +169,22 @@ export async function buildTarget(
     platform: target.web ? "browser" : "node",
     format: "esm",
     target: target.web ? "es2024" : "node24",
-    packages: target.web ? "bundle" : "external",
+    packages: target.web || bundleDependencies ? "bundle" : "external",
     conditions: target.web ? ["workerd", "browser"] : ["node"],
     outdir: output,
     metafile: true,
-    sourcemap: true,
+    // A bundled build's maps would be mostly dependency code; skip them.
+    sourcemap: !bundleDependencies,
+    ...(bundleDependencies && {
+      external: target.native ?? [],
+      // The entries share their dependencies through chunks.
+      splitting: true,
+      chunkNames: "chunks/[name]-[hash]",
+      // Bundled CommonJS dependencies still require Node built-ins.
+      banner: {
+        js: 'import { createRequire as fondsCreateRequire } from "node:module"; const require = fondsCreateRequire(import.meta.url);',
+      },
+    }),
   });
   assertGraph(name, result.metafile);
   const bytes = Object.values(result.metafile.outputs).reduce(
@@ -181,7 +204,7 @@ export async function buildTarget(
     JSON.stringify(manifest, null, 2) + "\n",
   );
   await cp(
-    resolve(root, "deploy", name, "package-lock.json"),
+    resolve(root, recipe, "package-lock.json"),
     resolve(output, "package-lock.json"),
   );
   // Apache-2.0 redistribution carries the license and notice with every artifact.
