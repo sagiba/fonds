@@ -139,10 +139,10 @@ interface OperatorCommand {
   run(context: CommandContext): Promise<number>;
 }
 
-/** The `collect` result on every backend. */
+/** The `refresh` result on every backend. */
 export const collectionSummarySchema = z
   .object({
-    type: z.literal("collection_summary"),
+    type: z.literal("refresh_summary"),
     status: z.enum(["completed", "partial", "failed", "busy", "blocked"]),
     captures: z.number().int().nonnegative(),
     unchanged: z.number().int().nonnegative(),
@@ -368,7 +368,7 @@ export const operatorCommands: readonly OperatorCommand[] = [
     name: "disconnect",
     synopsis: "--connection <id>",
     description:
-      "Remove the connection's stored provider credentials, so refreshes that start later skip it; one already running finishes. Credentials from FONDS_COLLECTION_CREDENTIALS are unaffected. Its transactions, annotations and events are kept; repeating it changes nothing.",
+      "Remove the connection's stored provider credentials, so refreshes that start later skip it; one already running finishes. Credentials from FONDS_CONNECTION_CREDENTIALS are unaffected. Its transactions, annotations and events are kept; repeating it changes nothing.",
     options: { connection: { type: "string" } },
     async run(context) {
       const connectionId = required(context.values, "connection");
@@ -387,12 +387,12 @@ export const operatorCommands: readonly OperatorCommand[] = [
     },
   },
   {
-    name: "collect",
+    name: "refresh",
     synopsis:
       "[--connection <id>] [--from YYYY-MM-DD --to YYYY-MM-DD] [--credentials-fd <number>]\n" +
       `${SYNOPSIS_CONTINUATION}[--history-mode monthly|search] [--search-window-months 1|3|6|12] [--call-budget 1-100] [--max-details 0-20] [--diagnostics] [--archive-days 1-30]`,
     description: [
-      "Collect from the provider now, as a refresh under the same lease as the server's.",
+      "Refresh from the provider now, under the same lease as the server's.",
       "Without --connection, every connection with stored credentials, in turn; the provider",
       "options and --credentials-fd need --connection. Credentials come from --credentials-fd,",
       "then the connection's stored credentials (see connect), then hidden terminal input.",
@@ -489,7 +489,7 @@ export const operatorCommands: readonly OperatorCommand[] = [
         },
       );
       print({
-        type: "collection_summary",
+        type: "refresh_summary",
         ...summary,
         ...(range && { requestedRange: range }),
         ...(diagnostics && { diagnostics: diagnostics.report() }),
@@ -719,7 +719,7 @@ ${operatorCommands.map(commandUsage).join("\n")}
 Use <command> --help for one command's description and flags. Supported providers:
 ${supportedProviders.join(", ")}; see docs/providers/ for credential fields, history
 controls, request budgets and limits.
-Exit codes: 0 success, 1 failure or busy, 2 partial collection, 3 not available on
+Exit codes: 0 success, 1 failure or busy, 2 partial refresh, 3 not available on
 this backend.
 `;
 }

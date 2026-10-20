@@ -141,7 +141,7 @@ export function bearerScheduleAuthenticator(
 }
 
 export const COLLECTION_TRIGGER_PATH = "/internal/triggers/recent";
-export const COLLECTION_OPERATOR_PATH = "/internal/collect/recent";
+export const COLLECTION_OPERATOR_PATH = "/internal/refresh/recent";
 
 export const COLLECTION_CONTINUE_PATH = "/internal/refreshes/continue";
 

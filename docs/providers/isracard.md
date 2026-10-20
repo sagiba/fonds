@@ -20,14 +20,14 @@ These commands are examples, not live-validation receipts:
 npm run build
 node dist/cli.js init --db /path/to/private/isracard.sqlite --connection isracard --provider isracard
 node dist/cli.js connect --db /path/to/private/isracard.sqlite --connection isracard
-node dist/cli.js collect --db /path/to/private/isracard.sqlite --connection isracard
-node dist/cli.js collect --db /path/to/private/isracard.sqlite --connection isracard \
+node dist/cli.js refresh --db /path/to/private/isracard.sqlite --connection isracard
+node dist/cli.js refresh --db /path/to/private/isracard.sqlite --connection isracard \
   --from 2026-09-01 --to 2026-09-30 --credentials-fd 3 3< /private/isracard.json
 ```
 
 The credential JSON object contains `username` (the login identity number),
 `password` and the six-digit `cardSuffix`. `connect` prompts for each with hidden
-input, or reads `--credentials-fd`, and stores them encrypted for later `collect`
+input, or reads `--credentials-fd`, and stores them encrypted for later `refresh`
 runs ([provider credentials table](../database.md#provider-credentials-table)).
 The npm/tsx launcher does not preserve descriptor 3; use the built CLI or
 `node --import tsx src/cli.ts`. The hosted target accepts the same object when
@@ -77,7 +77,7 @@ database never receives it. No CLI command applies it.
   Merchant city and a valid country code are kept; there is no MCC, and card
   presence stays unknown. Wallet, merchant address and phone, and counterparty
   require a voucher-bound optional legacy detail. The CLI defaults to
-  `--max-details 0`; opt in with, for example, `--max-details 5` on `collect`
+  `--max-details 0`; opt in with, for example, `--max-details 5` on `refresh`
   (range 0–20 attempts per collection window; a history backfill applies the cap
   to each month). Details share the request budget with statements and have no
   cache, so repeats can fetch them again. Co-branded cards have no supported

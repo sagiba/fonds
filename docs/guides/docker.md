@@ -22,10 +22,10 @@ owned by the user it runs as; a named volume satisfies that:
 docker volume create fonds-data
 docker run --rm -v fonds-data:/data fonds init --connection cal-main --provider cal
 docker run --rm -it -v fonds-data:/data fonds connect --connection cal-main
-docker run --rm -it -v fonds-data:/data fonds collect --connection cal-main
+docker run --rm -it -v fonds-data:/data fonds refresh --connection cal-main
 ```
 
-`connect` and `collect` prompt with hidden input, so they need `-it`. For a host
+`connect` and `refresh` prompt with hidden input, so they need `-it`. For a host
 directory instead, run as your own user so the ownership checks pass:
 `--user "$(id -u):$(id -g)" -v "$HOME/fonds-data:/data"`, with
 `chmod 700 "$HOME/fonds-data"`.

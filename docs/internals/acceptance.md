@@ -62,7 +62,7 @@ cover only their synthetic parts:
 
 Standalone candidate dismissal, resolution of ambiguous duplicate identities and
 refund-to-original links are not implemented. Collection has no separate live
-opt-in flag: `collect` rejects `--live` (`tests/runtime/cli.test.ts`). Historical facts are not immutable
+opt-in flag: `refresh` rejects `--live` (`tests/runtime/cli.test.ts`). Historical facts are not immutable
 because of their age, and a recent overlap window is not a completeness
 guarantee. Email and other delivery channels, bank
 collection, statement or PDF collection, distributed coordination beyond the

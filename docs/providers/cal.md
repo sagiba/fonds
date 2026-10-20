@@ -18,7 +18,7 @@ hosted setup, scheduling and network evidence.
 Supply credentials through private runtime configuration or the CLI credential
 interface. The credential JSON object contains `username` and `password`; the CLI
 also accepts a private `username:password` descriptor. `connect` stores them
-encrypted for later `collect` runs; see the
+encrypted for later `refresh` runs; see the
 [provider credentials table](../database.md#provider-credentials-table). Hosted
 collection uses the provider-neutral configuration in the
 [hosted-service guide](../guides/hosted-service.md). No proxy is required. The

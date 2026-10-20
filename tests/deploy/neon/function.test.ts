@@ -133,7 +133,7 @@ describe("Neon native trigger target dispatch", () => {
   );
 
   it.each([
-    "/internal/collect/recent",
+    "/internal/refresh/recent",
     "/v1/connections",
     "/internal/triggers/recent-extra",
   ])(

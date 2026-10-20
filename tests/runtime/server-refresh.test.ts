@@ -92,7 +92,7 @@ async function connection(connectionId = "synthetic-cal") {
   ).connection;
 }
 
-/** The CLI's collect in this process, against its own database handle. */
+/** The CLI's refresh in this process, against its own database handle. */
 async function cliCollect() {
   let stdout = "";
   const write = vi
@@ -103,7 +103,7 @@ async function cliCollect() {
     });
   try {
     const status = await main([
-      "collect",
+      "refresh",
       "--db",
       dbPath,
       "--connection",
@@ -194,7 +194,7 @@ describe("refresh on the local SQLite server", () => {
     cliHold.release();
     expect(await cli).toMatchObject({
       status: 0,
-      summary: { type: "collection_summary", status: "completed" },
+      summary: { type: "refresh_summary", status: "completed" },
     });
     expect(collector.calls).toBe(1);
     expect((await connection()).latestRefresh).toMatchObject({
@@ -202,7 +202,7 @@ describe("refresh on the local SQLite server", () => {
       counts: { captures: 1 },
     });
 
-    // Then the server refreshes, past the cooldown; a CLI collect meanwhile is busy.
+    // Then the server refreshes, past the cooldown; a CLI refresh meanwhile is busy.
     const db = await openDatabase(dbPath);
     await db.client.execute(
       "UPDATE refreshes SET finished_at = '2000-01-01T00:00:00.000Z'",

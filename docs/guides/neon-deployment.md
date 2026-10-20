@@ -348,7 +348,7 @@ resolving an authentication block posts with the private collection secret and
 really calls the provider:
 
 ```sh
-npm run neon:smoke -- --env-file "$FONDS_ENV" --collect
+npm run neon:smoke -- --env-file "$FONDS_ENV" --refresh
 ```
 
 ### Add a stored connection
@@ -392,7 +392,7 @@ npm run neon:smoke -- --env-file "$FONDS_ENV"
 ```
 
 The smoke command checks the public authentication, discovery and trigger
-boundaries; without `--collect` it collects and writes nothing unless Neon's
+boundaries; without `--refresh` it collects and writes nothing unless Neon's
 ingress stopped stripping the attestation header: then its forged-trigger probe
 runs one recent collection and fails. A real client login and read verify
 browser cookies, Origin, CSP and redirects: follow the

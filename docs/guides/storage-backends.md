@@ -22,7 +22,7 @@ Selecting a backend adds no copy of the financial rules.
 | PostgreSQL                  | A PostgreSQL server                                   | `pg` on a dedicated connection, with the [connection-row lock](../database.md#commit-boundaries)                                   |
 | D1 (experimental)           | Cloudflare D1, as a library only                      | One guarded atomic batch per store transaction; see [the D1 note](../internals/d1-storage.md)                                      |
 
-Refreshes, the CLI `collect`, scheduled collection and Events delivery behave the
+Refreshes, the CLI `refresh`, scheduled collection and Events delivery behave the
 same on SQLite and PostgreSQL: the SQLite server, the PostgreSQL launchers and the
 hosted service offer refreshes, and only the `get_refresh` read collects,
 [resuming](../api.md#refreshes) interrupted work. Turso and D1 share the SQLite

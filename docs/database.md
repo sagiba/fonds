@@ -299,7 +299,7 @@ To restore a SQLite ledger, with `DB` the ledger path (`--db`, or `fonds.sqlite`
 in the data directory) and `STATE` its state directory:
 
 1. Stop every Fonds process using the ledger: HTTP and stdio servers (including
-   those an MCP client starts), and any `collect` or `consume` run.
+   those an MCP client starts), and any `refresh` or `consume` run.
 2. Move the current ledger aside together with its `$DB-wal`, `$DB-shm` and
    `$DB-journal` files. A WAL file left beside a restored ledger is not its own.
 3. Copy the backup to the ledger path as a private file:

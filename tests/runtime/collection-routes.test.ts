@@ -116,7 +116,7 @@ describe("internal collection routes", () => {
       { "x-neon-trigger-invocation-id": "synthetic-occurrence" },
     ]) {
       for (const path of [
-        "/internal/collect/recent",
+        "/internal/refresh/recent",
         "/internal/refreshes/continue",
       ]) {
         expect(
@@ -140,7 +140,7 @@ describe("internal collection routes", () => {
     expect(
       (
         await routes.handleRequest(
-          request("/internal/collect/recent", {
+          request("/internal/refresh/recent", {
             ...operator,
             Origin: "https://attacker.invalid",
           }),
@@ -150,7 +150,7 @@ describe("internal collection routes", () => {
     expect(
       (
         await routes.handleRequest(
-          request("/internal/collect/recent", operator, {
+          request("/internal/refresh/recent", operator, {
             connectionId: "untrusted",
           }),
         )
@@ -159,7 +159,7 @@ describe("internal collection routes", () => {
     expect(
       (
         await routes.handleRequest(
-          request("/internal/collect/recent", operator, {
+          request("/internal/refresh/recent", operator, {
             padding: "x".repeat(8193),
           }),
         )
@@ -167,7 +167,7 @@ describe("internal collection routes", () => {
     ).toBe(413);
     expect(collect).not.toHaveBeenCalled();
     const response = await routes.handleRequest(
-      request("/internal/collect/recent", operator),
+      request("/internal/refresh/recent", operator),
     );
     expect(response?.status).toBe(200);
     expect(await response!.json()).toMatchObject({

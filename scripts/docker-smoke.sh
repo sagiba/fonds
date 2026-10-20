@@ -76,7 +76,7 @@ in_fonds '
 import { readFileSync } from "node:fs";
 import { parseEnv } from "node:util";
 const { FONDS_REFRESH_SECRET: secret } = parseEnv(readFileSync("/data/fonds.env", "utf8"));
-const response = await fetch("http://localhost:8787/internal/collect/recent", {
+const response = await fetch("http://localhost:8787/internal/refresh/recent", {
   method: "POST",
   headers: { Authorization: `Bearer ${secret}`, "Content-Type": "application/json" },
   body: "{}",

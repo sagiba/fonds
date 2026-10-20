@@ -584,11 +584,11 @@ describe("offline CLI", () => {
 
   it("validates missing or malformed arguments before creating a database", async () => {
     for (const args of [
-      ["collect", "--connection", "synthetic-cli"],
-      ["collect"],
-      ["collect", "--connection", "synthetic-cli", "--history-mode", "search"],
+      ["refresh", "--connection", "synthetic-cli"],
+      ["refresh"],
+      ["refresh", "--connection", "synthetic-cli", "--history-mode", "search"],
       [
-        "collect",
+        "refresh",
         "--connection",
         "synthetic-cli",
         "--history-mode",
@@ -599,14 +599,14 @@ describe("offline CLI", () => {
         "2040-06-01",
       ],
       [
-        "collect",
+        "refresh",
         "--connection",
         "synthetic-cli",
         "--search-window-months",
         "3",
       ],
       [
-        "collect",
+        "refresh",
         "--connection",
         "synthetic-cli",
         "--history-mode",
@@ -619,7 +619,7 @@ describe("offline CLI", () => {
         "2040-06-01",
       ],
       [
-        "collect",
+        "refresh",
         "--connection",
         "synthetic-cli",
         "--history-mode",
@@ -632,7 +632,7 @@ describe("offline CLI", () => {
         "2040-06-01",
       ],
       [
-        "collect",
+        "refresh",
         "--connection",
         "synthetic-cli",
         "--history-mode",
@@ -644,9 +644,9 @@ describe("offline CLI", () => {
         "--to",
         "2040-06-01",
       ],
-      ["collect", "--connection", "synthetic-cli", "--from", "2040-01-01"],
+      ["refresh", "--connection", "synthetic-cli", "--from", "2040-01-01"],
       [
-        "collect",
+        "refresh",
         "--connection",
         "synthetic-cli",
         "--from",
@@ -655,7 +655,7 @@ describe("offline CLI", () => {
         "2040-03-01",
       ],
       [
-        "collect",
+        "refresh",
         "--connection",
         "synthetic-cli",
         "--from",
@@ -663,7 +663,7 @@ describe("offline CLI", () => {
         "--to",
         "2040-02-01",
       ],
-      ["collect", "--connection", "synthetic-cli", "--credentials-fd", "0"],
+      ["refresh", "--connection", "synthetic-cli", "--credentials-fd", "0"],
       ["ingest", "--connection", "synthetic-cli"],
       [
         "annotate",
@@ -779,9 +779,9 @@ describe("offline CLI", () => {
       "synthetic-cli",
     );
     expect(statSync(dbPath).mode & 0o077).toBe(0);
-    // collect is always live, so --live is not one of its options.
+    // refresh is always live, so --live is not one of its options.
     const liveFlag = await run(
-      "collect",
+      "refresh",
       "--live",
       "--db",
       dbPath,
@@ -790,7 +790,7 @@ describe("offline CLI", () => {
     );
     expect(liveFlag).toMatchObject({ status: 1, stdout: "" });
     const noTerminal = await run(
-      "collect",
+      "refresh",
       "--db",
       dbPath,
       "--connection",
@@ -799,7 +799,7 @@ describe("offline CLI", () => {
     expect(noTerminal.stderr).toContain("interactive terminal");
     expect(noTerminal.stdout).toBe("");
     const secretArgument = await run(
-      "collect",
+      "refresh",
       "--db",
       dbPath,
       "--connection",
@@ -819,7 +819,7 @@ describe("offline CLI", () => {
       await seeded.close();
     }
     const unsupported = await run(
-      "collect",
+      "refresh",
       "--db",
       dbPath,
       "--connection",
@@ -847,7 +847,7 @@ describe("offline CLI", () => {
     expect(unsupportedIngest.stdout).toBe("");
     chmodSync(dbPath, 0o644);
     const publicDatabase = await run(
-      "collect",
+      "refresh",
       "--db",
       dbPath,
       "--connection",
@@ -858,7 +858,7 @@ describe("offline CLI", () => {
     chmodSync(dbPath, 0o600);
     chmodSync(directory, 0o755);
     const publicDirectory = await run(
-      "collect",
+      "refresh",
       "--db",
       dbPath,
       "--connection",
@@ -883,7 +883,7 @@ describe("offline CLI", () => {
       ["--search-window-months", "3"],
     ]) {
       const result = await run(
-        "collect",
+        "refresh",
         "--db",
         dbPath,
         "--connection",
@@ -939,7 +939,7 @@ describe("offline CLI", () => {
       ],
     ] as const) {
       const result = await run(
-        "collect",
+        "refresh",
         "--db",
         dbPath,
         "--connection",
@@ -964,7 +964,7 @@ describe("offline CLI", () => {
     for (const maxDetails of ["0", "7", "20"]) {
       const fd = openSync(credentialPath, "r");
       await run(
-        "collect",
+        "refresh",
         "--db",
         dbPath,
         "--connection",
@@ -1003,7 +1003,7 @@ describe("offline CLI", () => {
     );
     const fd = openSync(credentialPath, "r");
     const result = await run(
-      "collect",
+      "refresh",
       "--db",
       dbPath,
       "--connection",
@@ -1242,7 +1242,7 @@ describe("offline CLI", () => {
       );
       const fd = openSync(credentialPath, "r");
       const result = await run(
-        "collect",
+        "refresh",
         "--db",
         dbPath,
         "--connection",
@@ -1258,7 +1258,7 @@ describe("offline CLI", () => {
       expect(result.stderr).toBe("");
       // A ranged refresh requests one calendar month at a time, newest first.
       expect(JSON.parse(result.stdout)).toMatchObject({
-        type: "collection_summary",
+        type: "refresh_summary",
         status: partial ? "partial" : "completed",
         captures: 6,
         failures: partial ? 6 : 0,
@@ -1318,7 +1318,7 @@ describe("offline CLI", () => {
       );
       const fd = openSync(credentialPath, "r");
       const result = await run(
-        "collect",
+        "refresh",
         "--db",
         dbPath,
         "--connection",
@@ -1329,7 +1329,7 @@ describe("offline CLI", () => {
       expect(result.status).toBe(partial ? 2 : 0);
       expect(result.stderr).toBe("");
       expect(JSON.parse(result.stdout)).toEqual({
-        type: "collection_summary",
+        type: "refresh_summary",
         status: partial ? "partial" : "completed",
         captures: 1,
         unchanged: 0,
@@ -1386,7 +1386,7 @@ describe("offline CLI", () => {
     try {
       const result = spawnCli(
         [
-          "collect",
+          "refresh",
           "--db",
           dbPath,
           "--connection",
@@ -1428,7 +1428,7 @@ describe("offline CLI", () => {
       });
       const fd = openSync(credentialPath, "r");
       const args = [
-        "collect",
+        "refresh",
         "--db",
         dbPath,
         "--connection",
@@ -1762,7 +1762,7 @@ describe("stored provider credentials", () => {
     for (const value of Object.values(calCredentials)) {
       expect(database.includes(value)).toBe(false);
     }
-    await success("collect", "--db", dbPath, "--connection", "cal-cli");
+    await success("refresh", "--db", dbPath, "--connection", "cal-cli");
     expect(collectorState.calls).toMatchObject([
       { credentials: calCredentials },
     ]);
@@ -1795,7 +1795,7 @@ describe("stored provider credentials", () => {
         fd,
       ),
     );
-    await success("collect", "--db", dbPath, "--connection", "isracard-cli");
+    await success("refresh", "--db", dbPath, "--connection", "isracard-cli");
     expect(collectorState.isracardCalls).toMatchObject([
       { credentials: isracardCredentials },
     ]);
@@ -1817,7 +1817,7 @@ describe("stored provider credentials", () => {
     const override = { username: "INVENTED-OTHER", password: "INVENTED-PW" };
     await withCredentialFile(override, (fd) =>
       success(
-        "collect",
+        "refresh",
         "--db",
         dbPath,
         "--connection",
@@ -1848,7 +1848,7 @@ describe("stored provider credentials", () => {
       "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     );
     expect(
-      await run("collect", "--db", dbPath, "--connection", "cal-cli"),
+      await run("refresh", "--db", dbPath, "--connection", "cal-cli"),
     ).toMatchObject({ status: 0 });
     vi.stubEnv("FONDS_CREDENTIALS_KEY", undefined);
     // A lost state directory is never regenerated beside an existing ledger.
@@ -1856,7 +1856,7 @@ describe("stored provider credentials", () => {
     mkdirSync(replacement, { mode: 0o700 });
     vi.stubEnv("FONDS_STATE_DIR", replacement);
     expect(
-      await run("collect", "--db", dbPath, "--connection", "cal-cli"),
+      await run("refresh", "--db", dbPath, "--connection", "cal-cli"),
     ).toEqual({
       status: 1,
       stdout: "",
@@ -1878,7 +1878,7 @@ describe("stored provider credentials", () => {
       ).status,
     ).toBe(0);
     expect(
-      await run("collect", "--db", dbPath, "--connection", "cal-cli"),
+      await run("refresh", "--db", dbPath, "--connection", "cal-cli"),
     ).toEqual({
       status: 1,
       stdout: "",

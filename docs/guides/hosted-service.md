@@ -121,7 +121,7 @@ On Neon, `--env-file` supplies the private env file instead
 
 ## Collection, refresh and scheduling
 
-Owner/model requests, schedules, operator retries and CLI `collect` create recorded
+Owner/model requests, schedules, operator retries and CLI `refresh` create recorded
 [refreshes](../api.md#refreshes). The
 [design](../design.md#collection-and-evidence) defines rereads and commits. Each
 refresh first recovers unfinished ingestion. Each start resolves targets from the
@@ -146,11 +146,11 @@ list the connection's refreshes before retrying.
 
 Authentication failure or challenge marks the refresh `requiresAttention` and
 blocks ordinary and scheduled refreshes until an operator retry succeeds. After
-resolving it, POST `{}` to `/internal/collect/recent` on the public origin with
+resolving it, POST `{}` to `/internal/refresh/recent` on the public origin with
 `Authorization: Bearer <FONDS_REFRESH_SECRET>`, or run
-`node server.js collect --connection …`. The route refreshes every target past
+`node server.js refresh --connection …`. The route refreshes every target past
 the block and the cooldown, really calling each provider; the Neon runbook wraps
-it as `neon:smoke --collect`. An `implausible_empty` rejection
+it as `neon:smoke --refresh`. An `implausible_empty` rejection
 ([design](../design.md#identity-corrections-and-absence)) is logged in
 `fonds_refresh` but sets no attention block: the cooldown still applies, and
 scheduled collection can retry. The [provider guides](../README.md#providers)
