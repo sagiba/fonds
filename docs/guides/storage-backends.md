@@ -102,7 +102,8 @@ database or [migrate](../database.md#migrations) a supported one, check
 connectivity and serve on `127.0.0.1` with bearer authentication. They create no
 provider connection and do not expose themselves publicly; they contact a provider
 on startup only to resume an interrupted refresh. PostgreSQL TLS options belong to the driver
-configuration and host.
+configuration and host; a `Pool` passed to `openPostgresDatabase` is ended by the
+returned store's `close()`.
 
 ## Verification
 

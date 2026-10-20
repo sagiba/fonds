@@ -41,7 +41,8 @@ Transaction poolers (PgBouncer in transaction mode, Neon's `-pooler` endpoints)
 break them; Fonds rejects `-pooler.` URLs.
 
 On `SIGTERM` or `SIGINT` the service interrupts running refreshes, which keep the
-captures they already fetched and resume on the next start
+captures they already fetched and resume on the next start, and gives accepted
+requests five seconds before closing their connections
 ([node-service.ts](../../src/runtime/node-service.ts)).
 
 ### Client addresses
@@ -132,7 +133,9 @@ refreshes run one after another under the connection's
 [collection lease](../../src/application/collection-lock.ts), so manual,
 scheduled and CLI collection never run at once across processes. Each month, or
 the recent window, is bounded at ten minutes. Starting any launcher never
-collects by itself, apart from resuming refreshes a stopped process left active.
+collects by itself, apart from resuming refreshes a stopped process left active:
+every long-running server does so from startup and each minute, with or without a
+schedule.
 A lost or expired client request is not proof the provider work did not run;
 list the connection's refreshes before retrying.
 

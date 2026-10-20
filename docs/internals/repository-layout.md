@@ -104,7 +104,7 @@ run with `CI=1` so a missing snapshot cannot be silently recreated.
 
 `scripts/` holds target builders, the documentation checks, the Docker smoke
 test and the opt-in synthetic benchmark (`npm run benchmark:reconciliation`).
-Scripts and `deploy/neon/` are linted and typechecked, and none ships in the
+Scripts and `deploy/neon/` are linted, their TypeScript files are typechecked, and none ships in the
 production build. `npm run build` cleans `dist/` first so removed modules cannot
 survive as stale output.
 

@@ -303,8 +303,10 @@ starts each occurrence at its exact minute, without the Node host's start
 jitter. The schedule also sets when Events
 [delivery](hosted-service.md#mcp-events-and-webhook-delivery) retries on Neon.
 
-The trigger route accepts only Neon's native attestation
-([function.ts](../../deploy/neon/function.ts)). Neon's ingress strips
+The function routes `/internal/triggers/recent` ahead of the public Host/Origin
+guard, and accepts it only with the reserved native attestation header, a valid
+envelope naming the `cal-hourly` trigger, a scheduled timestamp, and at most 8 KiB
+of JSON ([function.ts](../../deploy/neon/function.ts)). Neon's ingress strips
 client-supplied `X-Neon-*` headers, so an external spoof must return 403; the
 smoke check verifies it. Only the project's own trigger configuration can name
 that trigger

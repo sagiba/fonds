@@ -144,7 +144,7 @@ row's own facts, so selection and paging stay in SQL without database views.
 ## Pending-to-posted matching
 
 Automatic matching is a narrow, reversible, opt-in provider capability: a
-disappearing pending authorization keeps its service ID when a posted identity
+disappearing pending authorization keeps its service ID when a new posted identity
 with the same purchase date, card and signed purchase money arrives in the same
 fresh comparable capture, and every candidate in its group pairs (a complete
 group of indistinguishable twins pairs in a fixed arbitrary order). No conversion or
