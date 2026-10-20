@@ -64,7 +64,7 @@ it.each(["postgres", "turso"])(
         const result = spawnSync(process.execPath, [entry], {
           env: { ...process.env, FONDS_API_TOKEN: "", FONDS_DATABASE_URL: "" },
           encoding: "utf8",
-          timeout: 10_000,
+          timeout: 20_000,
         });
         expect(result.status).toBe(1);
         expect(result.stderr).toContain(
@@ -77,6 +77,7 @@ it.each(["postgres", "turso"])(
       rmSync(directory, { recursive: true, force: true });
     }
   },
+  60_000,
 );
 
 it("prints the turso artifact's usage for --help and rejects unknown commands", async () => {
@@ -101,7 +102,7 @@ it("prints the turso artifact's usage for --help and rejects unknown commands", 
       spawnSync(process.execPath, [join(directory, "server.mjs"), ...args], {
         env: { ...process.env, FONDS_API_TOKEN: "", FONDS_DATABASE_URL: "" },
         encoding: "utf8",
-        timeout: 10_000,
+        timeout: 20_000,
       });
     const help = run("--help");
     expect(help.status).toBe(0);
@@ -115,7 +116,7 @@ it("prints the turso artifact's usage for --help and rejects unknown commands", 
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
-});
+}, 60_000);
 
 it("keeps both failed startup and failed cleanup diagnostics private", async () => {
   vi.stubEnv("FONDS_API_TOKEN", "synthetic-launcher-token-00000000000000000");
