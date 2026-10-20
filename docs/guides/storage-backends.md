@@ -42,7 +42,7 @@ npm run build:targets -- turso # or sqlite, postgres, turso-web, d1-web
 
 Each command builds only the named target under `dist/targets/<target>/`. With no
 target argument, the script builds all targets except the experimental `d1-web`.
-SQLite and PostgreSQL ship as the `fonds` package and image. For an experimental
+SQLite and PostgreSQL ship as the `fonds-finance` package and image. For an experimental
 target, install its directory's manifest and lockfile:
 
 ```sh

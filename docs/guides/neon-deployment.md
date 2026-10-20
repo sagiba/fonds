@@ -269,7 +269,7 @@ only when you intend to replace what runs there; try a release on a separate
 project first when it changes setup, schemas or login.
 
 ```sh
-git checkout vX.Y.Z
+git fetch --tags && git checkout vX.Y.Z
 npm ci
 npm run neon:setup -- --env-file "$FONDS_ENV" \
   --project-id PROJECT_ID --branch-id BRANCH_ID --profile PROFILE

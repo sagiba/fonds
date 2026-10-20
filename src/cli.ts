@@ -139,8 +139,8 @@ private data directory: $FONDS_HOME, otherwise the platform's per-user data dire
 0700 on first use. The state directory, FONDS_STATE_DIR or else the data directory,
 holds ${STATE_FILE}, the installation's secrets, generated once. A database is bound to
 the state it was created with and refused with any other; back up the database and the
-state directory together (docs/database.md#state-directory-and-backup). With
-FONDS_DATABASE_URL set to a PostgreSQL URL, use the PostgreSQL target's node server.js.`,
+state directory together (docs/database.md#state-directory-and-backup). A
+postgresql:// FONDS_DATABASE_URL makes fonds use PostgreSQL instead.`,
     globalOptions: { db: { type: "string" } },
     forbiddenDirectory: repositoryRoot,
     async open(globals, mode) {
