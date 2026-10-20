@@ -14,6 +14,10 @@ import type {
 } from "../../src/domain/source-adapter.js";
 import { createRefreshService } from "../../src/runtime/refresh-service.js";
 import * as postgresSchema from "../../src/storage/postgres/schema.js";
+import {
+  prepareRun,
+  runEvidenceDigest,
+} from "../../src/storage/run-evidence.js";
 import * as sqliteSchema from "../../src/storage/sqlite/schema.js";
 import {
   backends,
@@ -111,6 +115,17 @@ describe.each(backends)("operations parity on %s", (backend) => {
         status: "started",
         collectorVersion: "synthetic",
         parserVersion: synthetic.parserVersion,
+        evidenceDigest: await runEvidenceDigest(
+          prepareRun(
+            {
+              runId: `archived-${sourceKey}`,
+              connectionId,
+              collectorVersion: "synthetic",
+              responses: [response],
+            },
+            synthetic,
+          ),
+        ),
         snapshot: {
           schemaVersion: 1,
           responses: [
