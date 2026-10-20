@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  COLLECTION_TRIGGER_NAME,
   neonTriggerAuthenticator,
+  REFRESH_TRIGGER_NAME,
 } from "../../deploy/neon/function.js";
 import type {
   CollectionEvent,
@@ -41,7 +41,7 @@ const payload = (invocation = "synthetic-occurrence") => ({
   trigger: {
     type: "schedule",
     id: "trigger-synthetic",
-    name: "scheduled-collection",
+    name: "scheduled-refresh",
   },
   data: { scheduled_at: "2040-08-01T00:00:00Z" },
 });
@@ -71,9 +71,8 @@ describe("internal collection routes", () => {
   function setup(
     collect: ProviderCollector["collect"],
     options: Pick<CollectionRoutesOptions, "authenticateScheduledRequest"> = {
-      authenticateScheduledRequest: neonTriggerAuthenticator(
-        COLLECTION_TRIGGER_NAME,
-      ),
+      authenticateScheduledRequest:
+        neonTriggerAuthenticator(REFRESH_TRIGGER_NAME),
     },
     scheduledRun?: Parameters<typeof createCollectionRoutes>[2],
   ) {
@@ -190,7 +189,7 @@ describe("internal collection routes", () => {
     ).toBe(202);
   });
 
-  it("admits an attested scheduled-collection invocation through the deployed authenticator, and no other trigger", async () => {
+  it("admits an attested scheduled-refresh invocation through the deployed authenticator, and no other trigger", async () => {
     const collect = vi.fn(async function* () {
       yield capture;
     });

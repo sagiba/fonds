@@ -24,7 +24,7 @@ import { neonGoogleLogin } from "./neon-login.js";
  * Must match the trigger declared in the repository's neon.ts. Renaming it
  * gives deployed installations a second trigger instead of updating theirs.
  */
-export const COLLECTION_TRIGGER_NAME = "scheduled-collection";
+export const REFRESH_TRIGGER_NAME = "scheduled-refresh";
 
 const emailSchema = z.string().regex(/^[^\s@]+@[^\s@]+$/);
 const scheduledAtSchema = z.iso.datetime({ offset: true });
@@ -118,7 +118,7 @@ export function createNeonService(env: NodeJS.ProcessEnv) {
     // new one, and the runtime keeps each alive until its refresh settles.
     refreshExecution: { background: waitUntil, budgetMs: 14 * 60_000 },
     scheduler: {
-      authenticate: neonTriggerAuthenticator(COLLECTION_TRIGGER_NAME),
+      authenticate: neonTriggerAuthenticator(REFRESH_TRIGGER_NAME),
       internalIngress: true,
     },
   });

@@ -2,9 +2,9 @@ import { Pool } from "pg";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  COLLECTION_TRIGGER_NAME,
   createNeonService,
   neonConfiguration,
+  REFRESH_TRIGGER_NAME,
 } from "../../../deploy/neon/function.js";
 import { generateCredentialsKey } from "../../../src/runtime/credential-vault.js";
 
@@ -393,11 +393,9 @@ describe("Neon configuration", () => {
       const { default: config } = await import("../../../neon.js");
       // Literal on both sides: the declaration and the function's envelope
       // gate must name the same trigger, or every native invocation is denied.
-      expect(COLLECTION_TRIGGER_NAME).toBe("scheduled-collection");
-      expect(Object.keys(config.triggers ?? {})).toEqual([
-        "scheduled-collection",
-      ]);
-      expect(config.triggers?.[COLLECTION_TRIGGER_NAME]).toEqual({
+      expect(REFRESH_TRIGGER_NAME).toBe("scheduled-refresh");
+      expect(Object.keys(config.triggers ?? {})).toEqual(["scheduled-refresh"]);
+      expect(config.triggers?.[REFRESH_TRIGGER_NAME]).toEqual({
         type: "schedule",
         function: "fonds",
         cron: "12 * * * *",
@@ -443,7 +441,7 @@ describe("Neon configuration", () => {
       }
       vi.resetModules();
       const { default: config } = await import("../../../neon.js");
-      const declared = config.triggers?.[COLLECTION_TRIGGER_NAME];
+      const declared = config.triggers?.[REFRESH_TRIGGER_NAME];
       return declared?.type === "schedule"
         ? { cron: declared.cron, enabled: declared.enabled }
         : undefined;
