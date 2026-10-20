@@ -68,7 +68,6 @@ import type { Connection, ConnectionConfig } from "../domain/records.js";
 import { PROVIDER_STOP_REASONS } from "../domain/refreshes.js";
 import type { SourceAdapter } from "../domain/source-adapter.js";
 import {
-  assertSameEvidence,
   contentDigest,
   prepareRun,
   replayResult,
@@ -658,16 +657,8 @@ function buildStore<Db>(
         }
         const existing = (await statements.runState(tx, run.runId))[0];
         if (existing) {
-          if (existing.evidenceDigest !== null) {
-            if (existing.evidenceDigest !== digest) {
-              throw new Error("Run ID already refers to different evidence");
-            }
-          } else {
-            assertSameEvidence(
-              (await statements.run(tx, run.runId))[0]!,
-              run,
-              digest,
-            );
+          if (existing.evidenceDigest !== digest) {
+            throw new Error("Run ID already refers to different evidence");
           }
         } else {
           const retained = retainedRun(run, adapter, digest);
@@ -985,9 +976,7 @@ function buildStore<Db>(
           ...[...new Map(deferred.map((row) => [row.id, row])).values()].map(
             (row) => statements.upsertDeferredEvidence(tx, row),
           ),
-          ...(archived.bodyRetention === "legacy"
-            ? []
-            : statements.finishRunEvidence(tx, id, archived.bodyExpiresAt)),
+          ...statements.finishRunEvidence(tx, id, archived.bodyExpiresAt),
         ]);
         return result;
       })
@@ -1015,11 +1004,9 @@ function buildStore<Db>(
       stage: "archive",
       outcome: "completed",
       reason:
-        archived.bodyRetention === "legacy"
-          ? "legacy_body_retained"
-          : archived.bodyExpiresAt === null
-            ? "body_released"
-            : "debug_body_retained",
+        archived.bodyExpiresAt === null
+          ? "body_released"
+          : "debug_body_retained",
     });
     // Expiration is maintenance after the atomic financial commit; failure cannot undo it.
     try {

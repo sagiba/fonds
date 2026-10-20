@@ -123,7 +123,7 @@ export const syncRuns = sqliteTable("sync_runs", {
       failures?: CollectionFailure[];
     }>()
     .notNull(),
-  evidenceDigest: text("evidence_digest"),
+  evidenceDigest: text("evidence_digest").notNull(),
   coverage: text("coverage_json", { mode: "json" })
     .$type<Partition[]>()
     .notNull(),
@@ -148,7 +148,7 @@ export const syncRunBodies = sqliteTable("sync_run_bodies", {
       failures?: CollectionFailure[];
     }>()
     .notNull(),
-  retention: text({ enum: ["legacy", "staged", "debug"] }).notNull(),
+  retention: text({ enum: ["staged", "debug"] }).notNull(),
   expiresAt: text("expires_at"),
 });
 

@@ -41,7 +41,6 @@ export const syncDiagnosticSchema = z.object({
       "capture_replayed",
       "body_released",
       "debug_body_retained",
-      "legacy_body_retained",
       "evidence_deferred",
       "collection_failure",
       "card_discovery",

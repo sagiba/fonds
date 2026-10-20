@@ -282,20 +282,51 @@ for (const [backend, open, enabled] of subjects) {
       }
     });
 
-    it("refuses a database newer than the code without changing it", async () => {
-      const subject = await current();
-      const newer = subject.migrations.length + 1;
+    it.each([1, 2])(
+      "refuses a database %i migrations newer than the code without changing it",
+      async (ahead) => {
+        const subject = await current();
+        const newer = subject.migrations.length + ahead;
+        try {
+          await subject.query(
+            backend === "postgres"
+              ? `INSERT INTO schema_migrations(version) VALUES (${newer})`
+              : `PRAGMA user_version = ${newer}`,
+          );
+          await expect(subject.initialize()).rejects.toThrow(
+            `Database schema is at migration ${newer}, newer than this Fonds release (migration ${subject.migrations.length})`,
+          );
+          expect(await subject.version()).toBe(newer);
+          await kept(subject);
+        } finally {
+          await subject.close();
+        }
+      },
+    );
+
+    it("refuses an incompatible database at the initial version without resetting its data", async () => {
+      const subject = await open();
       try {
-        await subject.query(
+        const connection =
+          /CREATE TABLE connections \([\s\S]*?\n\)(?: STRICT)?;/.exec(
+            subject.migrations[0]!.sql,
+          )![0];
+        const marker =
           backend === "postgres"
-            ? `INSERT INTO schema_migrations(version) VALUES (${newer})`
-            : `PRAGMA user_version = ${newer}`,
-        );
-        await expect(subject.initialize()).rejects.toThrow(
-          `Database schema is at migration ${newer}, newer than this Fonds release (migration ${subject.migrations.length})`,
-        );
-        expect(await subject.version()).toBe(newer);
+            ? "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now());"
+            : "";
+        await subject.migrate([
+          { version: 1, name: "0001_initial", sql: `${connection}\n${marker}` },
+        ]);
+        await subject.query(sentinel);
+        await subject.withoutDdl(async () => {
+          await expect(subject.initialize()).rejects.toThrow("Unsupported");
+        });
+        expect(await subject.version()).toBe(1);
         await kept(subject);
+        await expect(
+          subject.query("SELECT id FROM transactions"),
+        ).rejects.toThrow();
       } finally {
         await subject.close();
       }

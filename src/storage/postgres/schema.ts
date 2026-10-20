@@ -123,7 +123,7 @@ export const syncRuns = pgTable("sync_runs", {
     responses: Omit<FinancialResponse, "responseText">[];
     failures?: CollectionFailure[];
   }>()("metadata_json").notNull(),
-  evidenceDigest: text("evidence_digest"),
+  evidenceDigest: text("evidence_digest").notNull(),
   coverage: jsonText<Partition[]>()("coverage_json").notNull(),
   warnings: jsonText<string[]>()("warnings_json").notNull(),
   appliedAt: text("applied_at"),
@@ -142,7 +142,7 @@ export const syncRunBodies = pgTable("sync_run_bodies", {
     responses: FinancialResponse[];
     failures?: CollectionFailure[];
   }>()("snapshot_json").notNull(),
-  retention: text({ enum: ["legacy", "staged", "debug"] }).notNull(),
+  retention: text({ enum: ["staged", "debug"] }).notNull(),
   expiresAt: text("expires_at"),
 });
 

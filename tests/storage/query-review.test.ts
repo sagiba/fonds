@@ -34,6 +34,7 @@ describe("public review state and scalar totals", () => {
         collectorVersion: "synthetic",
         parserVersion: "synthetic",
         snapshot: { schemaVersion: 1, responses: [] },
+        evidenceDigest: "0".repeat(64),
         coverage: [],
         warnings: [],
       })

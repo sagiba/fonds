@@ -87,9 +87,9 @@ database.
 Back up the `postgres` and `state` volumes
 [together](../database.md#state-directory-and-backup). Stop the stack for a
 consistent copy, or use `pg_dump` inside the `postgres` container plus a copy of
-`/data/fonds.env`. To upgrade, pull the new revision and run
-`docker compose up -d --build`; the next start applies its
-[migrations](../database.md#migrations).
+`/data/fonds.env`. Check [schema compatibility](../database.md#migrations).
+Recreate incompatible pre-release storage explicitly; then pull the revision and
+run `docker compose up -d --build`.
 
 ## Quick tunnel
 

@@ -34,8 +34,8 @@ including totals by currency and checking a receipt in a separate inbox.
 ## Who can use it today?
 
 Fonds is for people comfortable running their own software. It is pre-release:
-the API may still change, and databases upgrade in place through numbered
-[migrations](docs/database.md#migrations). There is no ready-made budgeting UI,
+the API may change, and earlier database layouts require explicit
+[recreation](docs/database.md#migrations). There is no ready-made budgeting UI,
 payment processing or bank-account integration; you bring your own assistant or
 client. CAL supports local and hosted refresh, including opt-in schedules;
 Isracard supports local refresh through the CLI, and its hosted refresh is

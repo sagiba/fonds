@@ -27,6 +27,7 @@ it("loads lifecycle annotations by scoped join beyond SQLite's parameter limit",
         collectorVersion: "synthetic",
         parserVersion: "synthetic",
         snapshot: { schemaVersion: 1, responses: [] },
+        evidenceDigest: "0".repeat(64),
         coverage: [],
         warnings: [],
       })

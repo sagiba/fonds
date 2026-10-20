@@ -83,14 +83,13 @@ Candidate IDs and source references inside JSON are references, not foreign keys
 ## What the financial tables hold
 
 - **`connections`** hold provider, label and open, versioned configuration with
-  internal cursors. Unknown configuration keys survive; legacy capture caches are ignored.
+  internal cursors. Unknown configuration keys survive.
 - **`accounts` and `cards`** are unique by connection and private provider key.
   Card attributes are private, allowlisted facts.
 - **`sync_runs`** hold receipts: scope, times, versions, coverage, warnings, input
   digest and applied marker.
-  **`sync_run_bodies`** holds recovery staging, expiring opt-in debug bodies and
-  legacy archives. Later ingestion prunes expired debug bodies; legacy archives
-  and unfinished recovery are preserved.
+  **`sync_run_bodies`** holds recovery staging and expiring opt-in debug bodies.
+  Later ingestion prunes expired debug bodies; unfinished recovery is preserved.
 - **`transactions`** hold current transactions, private identity, lifecycle and
   canonical money/basis. Source identity is not unique. Mapped scalars have named
   columns; explanatory text, FX steps and source issues have typed JSON columns.
@@ -130,7 +129,7 @@ summed exactly in application code with no stored total column
   domain validation.
 - Body-free receipts avoid historical body loads and PostgreSQL JSON decoding of
   embedded NUL. Merchant contact/location scalars use reversible escaping when
-  needed, preserving legacy NUL and literal escapes across drivers.
+  needed, preserving NUL and literal escapes across drivers.
 - PostgreSQL sequences give captures and transactions deterministic order where
   SQLite uses rowid.
 - Application code supplies IDs, versions, timestamps and empty documents. SQL
@@ -228,17 +227,18 @@ modify live auth rows as part of financial API work.
 
 ## Migrations
 
-Every backend reaches its schema through numbered forward migrations from `0001`,
-without gaps, so a ledger upgrades in place: [SQLite](../migrations/) for local
-SQLite and libSQL, and [PostgreSQL](../migrations/postgres/), one version for
-`financial` and `operations`. A released migration is never edited; a change is
-the next file. SQLite migrates when a file opens, and libSQL and PostgreSQL at
-initialization, which every PostgreSQL entry point performs. One transaction,
-under SQLite's write lock or a PostgreSQL advisory lock, reads the version,
-refuses a newer database, applies and records each pending migration, and checks
-the live declarations against the latest generated manifest. An up-to-date
-database runs no migration and writes no version; any failure leaves the previous
-version.
+This pre-release initializes empty storage from one `0001` baseline for
+[SQLite/libSQL](../migrations/) and [PostgreSQL](../migrations/postgres/), covering
+`financial` and `operations`. Earlier pre-release layouts are unsupported: stop Fonds, explicitly recreate the database or volume, then
+initialize it again. This baseline reset is only before the first release;
+after release, published migrations stay immutable and changes append numbered
+forward migrations without gaps.
+
+SQLite initializes on opening, libSQL and PostgreSQL at provisioning. One
+transaction under SQLite's write lock or a PostgreSQL advisory lock checks the
+recorded version and live declarations against the generated manifest. A matching version is insufficient. Unsupported layouts are refused, never erased automatically; failed initialization rolls back. A matching
+database runs no migration SQL or version write. Restore requires this compatible
+schema and its matching installation secrets.
 
 D1 applies [its copies](../migrations/d1/), the SQLite files plus the connection
 revision, with Wrangler and checks neither version nor declarations. Better

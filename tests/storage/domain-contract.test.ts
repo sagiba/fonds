@@ -107,7 +107,7 @@ describe("shared storage domain", () => {
         status: "started",
         collectorVersion: "synthetic-v1",
         parserVersion: calAdapter.parserVersion,
-        evidenceDigest: null,
+        evidenceDigest: "0".repeat(64),
         bodyAvailable: true,
         bodyRetention: "staged",
         bodyExpiresAt: null,

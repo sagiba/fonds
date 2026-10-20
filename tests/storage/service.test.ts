@@ -564,6 +564,7 @@ describe("local SQLite service integration", () => {
         collectorVersion: "synthetic",
         parserVersion: "synthetic",
         snapshot: { schemaVersion: 1, responses: [] },
+        evidenceDigest: "0".repeat(64),
         coverage: [],
         warnings: [],
       })

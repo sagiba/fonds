@@ -82,30 +82,6 @@ export function runEvidenceDigest(
   });
 }
 
-export function assertSameEvidence(
-  existing: Run,
-  run: ReturnType<typeof prepareRun>,
-  digest: string,
-) {
-  if (existing.evidenceDigest !== null) {
-    if (existing.evidenceDigest !== digest) {
-      throw new Error("Run ID already refers to different evidence");
-    }
-    return;
-  }
-  if (
-    existing.connectionId !== run.connectionId ||
-    existing.collectorVersion !==
-      (run.collectorVersion ?? DEFAULT_COLLECTOR_VERSION) ||
-    JSON.stringify(existing.snapshot.responses) !==
-      JSON.stringify(run.responses) ||
-    JSON.stringify(existing.snapshot.failures ?? []) !==
-      JSON.stringify(run.failures)
-  ) {
-    throw new Error("Run ID already refers to different evidence");
-  }
-}
-
 export function replayResult(run: Run): SyncResult {
   if (run.status === "started") {
     throw new Error("Applied run has invalid status");

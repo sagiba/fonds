@@ -116,9 +116,9 @@ export interface Run {
   /** The refresh that archived this run; null for offline ingestion. */
   refreshId: string | null;
   /** Immutable input identity remains verifiable after a staged body is released. */
-  evidenceDigest: string | null;
+  evidenceDigest: string;
   bodyAvailable: boolean;
-  bodyRetention: "legacy" | "staged" | "debug" | null;
+  bodyRetention: "staged" | "debug" | null;
   bodyExpiresAt: string | null;
 }
 

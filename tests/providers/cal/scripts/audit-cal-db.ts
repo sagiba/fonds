@@ -508,11 +508,14 @@ function audit(path: string, includeInventory: boolean, workDirectory: string) {
   try {
     stage = "read_runs";
     const runs = database
-      .prepare("SELECT status, snapshot_json, warnings_json FROM sync_runs")
+      .prepare(
+        "SELECT r.status, coalesce(b.snapshot_json,r.metadata_json) AS snapshot_json, r.warnings_json, b.run_id IS NOT NULL AS body_available FROM sync_runs r LEFT JOIN sync_run_bodies b ON b.run_id=r.id",
+      )
       .iterate() as Iterable<{
       status: unknown;
       snapshot_json: unknown;
       warnings_json: unknown;
+      body_available: number;
     }>;
     for (const run of runs) {
       counts.add("runs");
@@ -549,6 +552,10 @@ function audit(path: string, includeInventory: boolean, workDirectory: string) {
       }
       for (const response of snapshot.responses as unknown[]) {
         counts.add("responses");
+        if (!run.body_available) {
+          counts.add("response_bodies_unavailable");
+          continue;
+        }
         try {
           if (!object(response) || typeof response.responseText !== "string") {
             throw new TypeError();

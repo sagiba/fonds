@@ -98,7 +98,7 @@ included, from `FONDS_STATE_DIR`
 
 Supply these through the host's secret mechanism, never in tool arguments,
 prompts, repository files or logs. The launchers initialize an empty dedicated
-database or [migrate](../database.md#migrations) a supported one, check
+database or validate the [current baseline](../database.md#migrations), check
 connectivity and serve on `127.0.0.1` with bearer authentication. They create no
 provider connection and do not expose themselves publicly; they contact a provider
 on startup only to resume an interrupted refresh. PostgreSQL TLS options belong to the driver

@@ -81,8 +81,8 @@ exploit that uses them still is.
   responses are stored as plain data in your database. Only stored provider
   credentials are encrypted.
 - **Evidence can contain personal data.** Completed ingestion retains allowlisted
-  evidence and receipts. Recovery bodies, optional debug archives and existing
-  archives can include holder data, subject to the
+  evidence and receipts. Recovery bodies and optional debug archives can include
+  holder data, subject to the
   [documented exceptions](design.md#personal-data).
 - **Assistants see what they read.** An authorized client receives the records its
   grant permits; with ChatGPT or Claude, that data goes to the assistant's
