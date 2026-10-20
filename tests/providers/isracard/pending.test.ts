@@ -94,6 +94,7 @@ function extract(source = capture()) {
 function facts(source: IsracardCapture) {
   return extract(source).transactions.map((row) => ({
     ...row,
+    counterpartyName: row.counterpartyName ?? null,
     ...parsedLedgerFacts(row),
     ...storedPaymentContext(row, undefined),
     cardId: "synthetic-card",

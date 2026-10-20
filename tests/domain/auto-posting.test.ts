@@ -76,6 +76,7 @@ function facts({
 }: TransactionInput): StoredTransactionFacts {
   return {
     ...input,
+    counterpartyName: input.counterpartyName ?? null,
     ...unknownLedgerFacts(cardKey),
     installmentNumber: installmentNumber ?? null,
     purchaseId: purchaseKey ?? null,

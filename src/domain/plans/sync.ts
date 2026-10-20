@@ -100,6 +100,7 @@ const failureSchema = z
     accountKey: z.string().min(1).nullable(),
     endpoint: z.string().min(1),
     scope: scopeSchema.optional(),
+    affectsCoverage: z.literal(false).optional(),
     code: z.enum([
       "network_error",
       "authentication_failed",
@@ -136,6 +137,7 @@ export const runSchema = z
     (run) =>
       !run.failures.some(
         (failure) =>
+          failure.affectsCoverage !== false &&
           failure.accountKey !== null &&
           run.responses.some(
             (response) => response.accountKey === failure.accountKey,
@@ -159,7 +161,7 @@ export interface SyncResult {
 }
 
 /** Bump when shared reconciliation rules change, independently of archived parser versions. */
-export const RECONCILIATION_POLICY_VERSION = "auto-posting-v8";
+export const RECONCILIATION_POLICY_VERSION = "auto-posting-v9";
 
 export function reconciliationFailure(warnings: readonly string[]) {
   const failureCode = reconciliationFailureCodeSchema.options.find((code) =>
@@ -492,7 +494,7 @@ function trackCollectionHealth(adapter: SourceAdapter) {
       }
     }
     for (const failure of run.snapshot.failures ?? []) {
-      if (failure.accountKey === null) {
+      if (failure.affectsCoverage !== false && failure.accountKey === null) {
         fail(`collection:${scopeKey(adapter, failure.scope)}`, attemptTime);
       }
     }
@@ -1148,7 +1150,7 @@ export function extractRun(run: Run, adapter: SourceAdapter) {
   );
   const failures = run.snapshot.failures ?? [];
   for (const failure of failures) {
-    if (failure.accountKey === null) {
+    if (failure.affectsCoverage === false || failure.accountKey === null) {
       continue;
     }
     for (const status of scopeStatuses(failure.scope)) {
@@ -1337,7 +1339,11 @@ export function planRun(
           purchaseKey,
         );
       }
-      return { facts: withoutInstallmentFx(resolved), purchaseKey };
+      return {
+        facts: withoutInstallmentFx(resolved),
+        purchaseKey,
+        counterpartyAbsent: input.counterpartyName === undefined,
+      };
     });
     const inputs = prepared.map(({ facts }) => facts);
     const seenIds = new Set<string>();
@@ -1403,7 +1409,7 @@ export function planRun(
     const reviewedGroups = new Set<string>();
     // Purchases are planned before billed lines, so a line resolves to a
     // purchase first seen in this capture whatever the adapter's row order.
-    for (const { facts: input, purchaseKey } of [
+    for (const { facts: input, purchaseKey, counterpartyAbsent } of [
       ...prepared.filter((entry) => entry.purchaseKey === null),
       ...prepared.filter((entry) => entry.purchaseKey !== null),
     ]) {
@@ -1691,6 +1697,17 @@ export function planRun(
           });
         }
       } else {
+        if (
+          counterpartyAbsent &&
+          input.identityStrength === "native" &&
+          previous.identityStrength === "native" &&
+          !input.details.issues.includes("ambiguous_identity") &&
+          !previous.details.issues.includes("ambiguous_identity") &&
+          input.kind === "transfer" &&
+          previous.kind === "transfer"
+        ) {
+          input.counterpartyName = previous.counterpartyName;
+        }
         // A capture that restates a purchase with live billed lines as
         // anything but a plan contradicts them. The accepted facts keep the
         // plan's own facts, so the purchase and its lines are never both

@@ -422,8 +422,8 @@ describe("streamed collection application boundary", () => {
       expect(await runs()).toBe(stored + 3);
     });
 
-    it("re-ingests identical content once after auto-posting-v7 to v8 without changing the parser", async () => {
-      expect(RECONCILIATION_POLICY_VERSION).toBe("auto-posting-v8");
+    it("re-ingests identical content once after auto-posting-v8 to v9 without changing the parser", async () => {
+      expect(RECONCILIATION_POLICY_VERSION).toBe("auto-posting-v9");
       const fingerprintUnder = (policyVersion: string) =>
         createHash("sha256")
           .update(
@@ -449,7 +449,7 @@ describe("streamed collection application boundary", () => {
         ...config,
         lastCapture: {
           ...lastCapture,
-          fingerprint: fingerprintUnder("auto-posting-v7"),
+          fingerprint: fingerprintUnder("auto-posting-v8"),
         },
       }));
       expect((await collect([read("B")])).unchanged).toBe(0);

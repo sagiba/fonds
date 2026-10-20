@@ -117,6 +117,7 @@ export interface ProviderCollectionOptions {
   historyMode?: "monthly" | "search";
   searchWindowMonths?: 1 | 3 | 6 | 12;
   callBudget?: number;
+  maxDetails?: number;
   onDiagnostic?: (diagnostic: object) => void;
 }
 

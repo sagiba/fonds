@@ -194,6 +194,7 @@ describe("shared storage domain", () => {
       ).transactions[0]!;
       const original: Transaction = {
         ...input,
+        counterpartyName: input.counterpartyName ?? null,
         ...unknownLedgerFacts(cardKey),
         id: "earlier",
         connectionId: connection.id,

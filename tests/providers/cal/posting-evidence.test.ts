@@ -53,7 +53,11 @@ function retained(
     .transactions.find((row) => row.status === status)!;
   const { cardKey: _cardKey, ...facts } = row;
   facts.details.provider.cal = { rows: rows as JsonObject[] };
-  return { ...facts, ...unknownLedgerFacts("synthetic-card-id") };
+  return {
+    ...facts,
+    counterpartyName: facts.counterpartyName ?? null,
+    ...unknownLedgerFacts("synthetic-card-id"),
+  };
 }
 
 describe("CAL automatic posting evidence", () => {

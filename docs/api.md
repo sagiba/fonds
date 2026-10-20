@@ -187,6 +187,10 @@ separate from collection. `refreshId` names the refresh that archived the run, o
 is `null` for offline ingestion or a deleted refresh. Source responses and
 coverage details are excluded. `list_sync_runs` does not start collection.
 
+Optional enrichment failures remain visible in status and failure counts without
+marking transaction coverage incomplete; authentication can still require owner
+attention.
+
 ## Account
 
 `{id, connectionId, type, institutionName, mask, displayName, createdAt, lastSeenAt}`:

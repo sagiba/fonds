@@ -16,10 +16,15 @@ export const calProvider: ProviderDefinition = {
     parse: (value) => usernamePasswordCredentialsSchema.parse(value),
     fields: { username: "Provider username", password: "Provider password" },
   },
-  validateCollectionOptions({ callBudget }) {
+  validateCollectionOptions({ callBudget, maxDetails }) {
     if (callBudget !== undefined) {
       throw new ProviderConfigurationError(
         "--call-budget is not supported by this provider.",
+      );
+    }
+    if (maxDetails !== undefined) {
+      throw new ProviderConfigurationError(
+        "--max-details is not supported by this provider.",
       );
     }
   },

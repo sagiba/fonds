@@ -30,6 +30,7 @@ export function collectionControls(values: {
   "history-mode"?: string | undefined;
   "search-window-months"?: string | undefined;
   "call-budget"?: string | undefined;
+  "max-details"?: string | undefined;
   "credentials-fd"?: string | undefined;
 }) {
   let range: CollectionRange | undefined;
@@ -94,5 +95,12 @@ export function collectionControls(values: {
     "credentials-fd",
     3,
   );
+  const maxDetails = integerOption(values["max-details"], "max-details", 0);
+  if (maxDetails !== undefined) {
+    if (maxDetails > 20) {
+      throw new CommandInputError("--max-details must be at most 20.");
+    }
+    options.maxDetails = maxDetails;
+  }
   return { range, options, credentialFd };
 }

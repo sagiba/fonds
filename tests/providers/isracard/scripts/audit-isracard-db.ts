@@ -329,11 +329,12 @@ const ENDPOINT_CLASSES = new Map<string, string>([
 ]);
 /** Exact parser and collector versions this repository has used for Isracard. */
 const KNOWN_VERSIONS = new Set([
-  ...[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(
+  ...[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(
     (version) => `isracard-v${version}`,
   ),
   "isracard-web-v1",
   "isracard-web-v2",
+  "isracard-web-v3",
   "offline-v1",
 ]);
 const KNOWN_USER_VERSIONS = new Set([0, 1, 2, 3, 4]);
@@ -474,14 +475,7 @@ const DOCUMENTED_FIELDS: [string, string[]][] = [
       "branch",
       "cardChargeLast",
       "cardChargeNext",
-      "cardStatusDate",
-      "isBlock",
-      "isBusinessCard",
-      "isDigital",
-      "isPremium",
-      "issuingDate",
       "limitData",
-      "validUntilDate",
     ],
   ],
   [`${CARD}.billingAccount`, ["mask", "providerKey"]],
