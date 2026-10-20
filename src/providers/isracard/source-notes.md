@@ -347,8 +347,8 @@ and every code had one label. That label is the evidence for a kind:
   (`dealSumType` `1` for ILS, `T` for USD) and zero-voucher summaries; the abroad
   list carries `TOTAL FOR DATE` rows whose sums include the `CASH ADVANCE FEE`
   lines.
-- **Policy:** `dealSumType` `1` rows and all-zero-voucher lines (summaries,
-  `TOTAL FOR DATE` and fee lines) stay raw and create no rows. A disagreeing
+- **Policy:** Domestic `T` totals stay raw regardless of voucher, alongside
+  `1` rows and all-zero-voucher lines. A disagreeing
   total is a warning, never a failure, and an agreeing one does not prove no row
   is missing; equal card totals never justify skipping transactions.
 - **Checks:** [amount basis] "source totals"; [extraction] "keeps known legacy

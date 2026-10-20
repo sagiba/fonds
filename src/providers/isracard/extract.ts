@@ -609,6 +609,7 @@ function collectLegacy(
           : row.voucherNumberRatz;
         const artifact =
           token(row.dealSumType) === "1" ||
+          (field === "txnIsrael" && token(row.dealSumType) === "T") ||
           /^0+$/.test(token(rawVoucher) ?? "");
         if (field !== "txnInfo") {
           lines.push({ row, foreign, artifact });

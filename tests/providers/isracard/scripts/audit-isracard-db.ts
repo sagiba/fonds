@@ -329,7 +329,7 @@ const ENDPOINT_CLASSES = new Map<string, string>([
 ]);
 /** Exact parser and collector versions this repository has used for Isracard. */
 const KNOWN_VERSIONS = new Set([
-  ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((version) => `isracard-v${version}`),
+  ...[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((version) => `isracard-v${version}`),
   "isracard-web-v1",
   "isracard-web-v2",
   "offline-v1",

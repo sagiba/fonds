@@ -1275,6 +1275,146 @@ describe("Isracard extraction", () => {
     expect(capture.responses.legacy).toContain("ARTIFACT-VOUCHER");
   });
 
+  it.each(["txnAbroad", "txnInfo"])(
+    "does not extend domestic T-total classification to %s",
+    (partition) => {
+      const capture = baseline();
+      updateDigital(capture, (rows) => {
+        rows.length = 0;
+      });
+      updateLegacy(capture, (rows, data) => {
+        rows.length = 0;
+        const entry = data.Index0 as { CurrentCardTransactions: Row[] };
+        entry.CurrentCardTransactions[0]![partition] = [
+          {
+            dealSumType: "T",
+            voucherNumberRatz: "SYNTHETIC-NONDOMESTIC-T",
+            voucherNumberRatzOutbound: "SYNTHETIC-NONDOMESTIC-T",
+            fullPurchaseDate: "11/06/2040",
+            fullPurchaseDateOutbound: "11/06/2040",
+            paymentSum: "7.25",
+            paymentSumOutbound: "7.25",
+            currencyId: "USD",
+          },
+        ];
+      });
+      const result = extract(capture);
+      expect(result.transactions).toHaveLength(1);
+      expect(result.transactions[0]!.sourceKey).toContain(
+        "SYNTHETIC-NONDOMESTIC-T",
+      );
+      expect(result.transactions[0]!.details.sourceRefs).toContainEqual({
+        runId: "synthetic-isracard-run",
+        path: `$.responses.legacy.CardsTransactionsListBean.Index0.CurrentCardTransactions[0].${partition}[0]`,
+      });
+      expect(result.warnings).not.toContain(
+        "legacy_statement_artifacts_preserved_raw",
+      );
+    },
+  );
+
+  it("keeps a colliding domestic USD total from blocking a purchase correction or moving its annotation", async () => {
+    const capture = baseline();
+    delete capture.responses.details;
+    updateDigital(capture, (rows) => {
+      Object.assign(rows[0]!, {
+        billingAmount: 7.25,
+        billingAmountCurrency: 19,
+        originalAmount: 7.25,
+        originalCurrencyIso: "USD",
+      });
+    });
+    updateLegacy(capture, (rows) => {
+      rows.splice(
+        0,
+        rows.length,
+        {
+          fullPurchaseDate: "11/06/2040",
+          voucherNumberRatz: "VOUCHER-1",
+          fullSupplierNameHeb: "Synthetic purchase",
+          paymentSum: "7.25",
+          currencyId: "USD",
+        },
+        {
+          fullPurchaseDate: "12/06/2040",
+          voucherNumberRatz: "SYNTHETIC-USD-2",
+          fullSupplierNameHeb: "Synthetic second purchase",
+          paymentSum: "7.25",
+          currencyId: "USD",
+        },
+        {
+          fullPurchaseDate: "11/06/2040",
+          voucherNumberRatz: "000000000",
+          dealSumType: "T",
+          paymentSum: "14.50",
+          currencyId: "USD",
+        },
+      );
+    });
+    const db = await openDatabase(":memory:");
+    try {
+      await db.ensureConnection({
+        id: "synthetic-isracard",
+        provider: "isracard",
+      });
+      await ingestCapture(db, capture, 0);
+      const before = (await db.listTransactions()).find(
+        (row) => row.transactionDate === "2040-06-11",
+      )!;
+      expect(before).toMatchObject({
+        amountMinor: -725,
+        currency: "USD",
+        amountBasis: "purchase_commitment",
+        identityStrength: "native",
+      });
+      await db.editAnnotation({
+        transactionId: before.id,
+        expectedVersion: 0,
+        notes: "Synthetic purchase note",
+      });
+      updateDigital(capture, (rows) => {
+        Object.assign(rows[0]!, { billingAmount: 8.25, originalAmount: 8.25 });
+      });
+      updateLegacy(capture, (rows) => {
+        rows[0]!.paymentSum = "8.25";
+        Object.assign(rows[2]!, {
+          voucherNumberRatz: "VOUCHER-1",
+          paymentSum: "15.50",
+        });
+      });
+      const parsed = extract(capture);
+      expect(parsed.transactions).toHaveLength(2);
+      expect(parsed.warnings).not.toContain("legacy_total_mismatch");
+      expect(parsed.warnings).not.toContain("ambiguous_posted_identity");
+      expect(await ingestCapture(db, capture, 1)).toMatchObject({
+        created: 0,
+        updated: 1,
+      });
+      const after = await db.getTransaction(before.id);
+      expect(after).toMatchObject({
+        id: before.id,
+        amountMinor: -825,
+        currency: "USD",
+        amountBasis: "purchase_commitment",
+        identityStrength: "native",
+        version: before.version + 1,
+        annotation: { data: { notes: "Synthetic purchase note" } },
+      });
+      expect(await db.listTransactions()).toHaveLength(2);
+      expect(await db.getTotals()).toMatchObject({
+        totals: [{ currency: "USD", amountMinor: -825 }],
+      });
+      const runs = await db.orm.select().from(syncRuns).all();
+      const archived = JSON.parse(
+        runs.find((run) => run.id === "synthetic-review-1")!.snapshot
+          .responses[0]!.responseText,
+      ) as IsracardCapture;
+      expect(archived.responses.legacy).toBe(capture.responses.legacy);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("does not promote monthly installment billing into a purchase commitment or a billed line", () => {
     const capture = baseline();
     delete capture.responses.legacy;
