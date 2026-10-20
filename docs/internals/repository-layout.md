@@ -1,30 +1,28 @@
 # Repository layout and maintenance
 
-Fonds is one TypeScript ESM application. The directory structure expresses code
-ownership and dependency direction. The root package owns development, testing and
-compilation; `deploy/<target>/` manifests describe installations with a selected
-database driver, and `deploy/neon/` holds the Neon host recipe. These are
-deployment recipes for the same source, not separately versioned packages. Start
-with the [contribution guide](../../CONTRIBUTING.md) and [AGENTS.md](../../AGENTS.md);
-this page owns the layer map, structural conventions and generated-artifact
-maintenance.
+Fonds is one TypeScript ESM application whose directories express code ownership
+and dependency direction. The root package owns development, testing and
+compilation; `deploy/` holds deployment recipes for the same source, not
+separately versioned packages. Start with the
+[contribution guide](../../CONTRIBUTING.md) and [AGENTS.md](../../AGENTS.md); this
+page owns the layer map, structural conventions and generated-artifact maintenance.
 
 ## Source layout
 
 ```text
 src/
-  domain/                 Financial model, records, money, projections and provider contracts
+  domain/                 Validated financial model, retained records, exact money, public projections, source contracts
     plans/                Pure reconciliation, annotation and lifecycle decisions
-  application/            Operations, collection/delivery orchestration and storage contract
-  providers/
+  application/            Public operations, query inputs, collection/delivery orchestration, financial-store.ts contract
+  providers/              Provider-specific requests, extraction and full source capture
     cal/                  CAL transport, collection, scope normalization and extraction
     isracard/             Isracard protocol, billing-month captures and conservative extraction
-  storage/
+  storage/                Consistent reads, SQL execution, transactions and persistence codecs
     sqlite/               Local SQLite driver, shared statements, schema and file recovery
     postgres/             PostgreSQL store, schema, migration and declaration validation
     turso.ts              Interactive libSQL adapter
     d1.ts                 Experimental Cloudflare D1 adapter (guarded write batches)
-  transport/              HTTP/MCP handling and trusted authentication contract
+  transport/              HTTP/MCP serialization, request validation and trusted authentication contract
   runtime/                Node startup, credential input, provider composition, HTTP I/O, shared polling, webhooks
                           and the host-neutral hosted service
     auth/                 Hosted Better Auth and login/consent pages
@@ -36,54 +34,48 @@ src/
 The two root executables keep their source and compiled paths, `dist/cli.js` and
 `dist/server.js`, and their repository-root calculation for private-file checks.
 Top-level `src/` is reserved for executable entry points. Use descriptive
-kebab-case filenames, add a provider under `providers/<name>/`, and put a helper
-with its owner rather than in a catch-all `utils`, `common` or `types` directory.
+kebab-case filenames. Add a provider under `providers/<name>/`, exporting its
+`ProviderDefinition` from `provider.ts` for the static registry in
+`runtime/providers.ts`. Put a helper with its owner rather than in a catch-all
+`utils`, `common` or `types` directory.
 
 ## Module ownership and imports
 
-| Area                                        | Owns                                                                                                                       | Dependencies within this service                         |
-| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| `domain/`                                   | Validated financial model, retained record types, source contracts, exact arithmetic, public projections and pure planners | Its own modules                                          |
-| `application/`                              | Public operations, collection and change delivery, query inputs, `financial-store.ts` contract                             | Domain and its own modules                               |
-| `providers/`                                | Provider-specific requests and extraction; full source capture                                                             | Domain and its own modules                               |
-| `storage/`                                  | Consistent reads, SQL execution, transactions and persistence codecs                                                       | Domain, application contracts and its own implementation |
-| `transport/`                                | HTTP/MCP serialization, trusted identity contract and request validation                                                   | Application and domain                                   |
-| `runtime/`, root executables and `targets/` | Credential input, startup and wiring concrete implementations together                                                     | The modules required by the selected executable          |
+| Area                                        | Dependencies within this service                         |
+| ------------------------------------------- | -------------------------------------------------------- |
+| `domain/`                                   | Its own modules                                          |
+| `application/`, `providers/`                | Domain and its own modules                               |
+| `storage/`                                  | Domain, application contracts and its own implementation |
+| `transport/`                                | Application and domain                                   |
+| `runtime/`, root executables and `targets/` | The modules required by the selected executable          |
 
-`application/operations.ts` defines each operation once; HTTP routes, MCP tools
-and CLI commands derive from it. `domain/source-adapter.ts` owns the provider
-contracts, and each provider exports its `ProviderDefinition` from
-`providers/<name>/provider.ts`, selected through the static registry in
-`runtime/providers.ts`. Files named `node-*.ts` are the only provider modules
-allowed Node built-ins; portable provider code never imports them, and the runtime
-injects them. Host recipes live outside `src/`, so the application build never
-contains them, and lint keeps `@neon/*`, `@neondatabase/*` and `deploy/` paths out
-of `src/`.
+`runtime/`, the root executables and `targets/` own credential input, startup
+and wiring concrete implementations together. Each operation is defined once in
+`application/operations.ts`; HTTP routes, MCP tools and CLI commands derive from
+it. Within those dependencies, the
+[ESLint configuration](../../eslint.config.mjs) enforces static import
+boundaries, including type-only imports and re-exports, and
+`tests/tooling/module-boundaries.test.mjs` verifies them:
 
-ESLint checks static import boundaries, including type-only imports and
-re-exports. Portable domain, application and provider modules may use local
-contracts, Zod and `lossless-json`; any other external dependency needs a boundary
-review, and Node globals are rejected there. `tests/tooling/module-boundaries.test.mjs`
-verifies rejected and permitted dependencies, and target graph checks inspect the
-compiled graph; web bundles reject concrete provider imports. The static rule does
-not detect dynamically constructed imports. Use direct module imports,
-`import type` and `.js` relative specifiers: NodeNext models the emitted ESM paths,
-so no path aliases or runtime barrels are needed.
+- Portable domain, application and provider modules may use local contracts, Zod
+  and `lossless-json`, and no Node globals; any other external dependency needs
+  a boundary review.
+- Only provider files named `node-*.ts` may use Node built-ins; portable provider
+  code never imports them, and the runtime injects them.
+- Host recipes live outside `src/`, so the application build never contains them;
+  `src/` never imports `@neon/*`, `@neondatabase/*` or `deploy/` paths.
+- Only the dialect `statements.ts` modules under `storage/sqlite/` and
+  `storage/postgres/` (including `d1-statements.ts`) construct Drizzle queries,
+  because Drizzle's table and builder types are dialect-specific. Shared storage
+  modules never import concrete adapters, drivers or runtime modules.
 
-### Storage workflows and SQL files
+The SQLite schema, migration and manifest modules stay free of the native driver:
+only the local opener imports `@libsql/client/sqlite3`, and Turso cannot import it.
 
-`storage/store.ts` implements every backend's workflows against `Statements<Db>`,
-a domain-shaped contract for unexecuted Drizzle statements, and builds the
-lease-fenced store a collection uses under the
-[collection lock](../../src/application/collection-lock.ts). Only
-`storage/sqlite/statements.ts`, `storage/sqlite/d1-statements.ts` and
-`storage/postgres/statements.ts` construct Drizzle queries, because Drizzle's table
-and builder types are dialect-specific; lint rejects builder calls elsewhere.
-Local SQLite and Turso share the libSQL builders, schema and `sqlite/client.ts`;
-D1 adds only its revision-aware reads and write guard. The SQLite schema,
-migration and manifest modules stay free of the native driver: only the local
-opener imports `@libsql/client/sqlite3`, and Turso cannot import it. Shared storage
-modules never import concrete drivers or runtime modules.
+Target graph checks inspect the compiled graph, and web bundles reject concrete
+provider imports. The static rule does not detect dynamically constructed imports.
+Use direct module imports, `import type` and `.js` relative specifiers: NodeNext
+models the emitted ESM paths, so no path aliases or runtime barrels are needed.
 
 ## Tests and development utilities
 
@@ -111,10 +103,10 @@ tests, preserve titles and snapshot contents, compare suite and test counts, and
 run with `CI=1` so a missing snapshot cannot be silently recreated.
 
 `scripts/` holds target builders, the documentation checks, the Docker smoke
-test and the opt-in synthetic benchmark
-(`npm run benchmark:reconciliation`). Scripts and `deploy/neon/` are linted, their
-TypeScript files are typechecked, and none ships in the production build. `npm run build` cleans
-`dist/` first so removed modules cannot survive as stale output.
+test and the opt-in synthetic benchmark (`npm run benchmark:reconciliation`).
+Scripts and `deploy/neon/` are linted and typechecked, and none ships in the
+production build. `npm run build` cleans `dist/` first so removed modules cannot
+survive as stale output.
 
 ## Other directories and packages
 
@@ -134,23 +126,20 @@ snapshots are deliberate source evidence.
 
 ## Style and tooling
 
-[AGENTS.md](../../AGENTS.md#architecture-and-style) states the style rules;
-`.prettierrc.json` and the ESLint configuration enforce formatting, braces, import
-order and declaration spacing. Run `npm run lint:fix`, then `npm run check`. Name
-values by role (`plan` for financial planning, `tx` for a database transaction,
-`schema` for a Drizzle namespace); conventional short names are fine when
-unambiguous. A lint suppression needs a local explanation. Style work preserves
-exported APIs, provider field names, SQL identifiers, stored JSON keys, error text
-and codes and test titles, stays separate from behavior changes, and never
-rewrites migration strings, schema manifests, fixtures or golden snapshots.
+[AGENTS.md](../../AGENTS.md#architecture-and-style) states the style rules; the
+Prettier and ESLint configurations enforce them. Run `npm run lint:fix`, then
+`npm run check`. Name values by role (`plan` for financial planning, `tx` for a
+database transaction, `schema` for a Drizzle namespace); conventional short names
+are fine when unambiguous. A lint suppression needs a local explanation. Style
+work preserves exported APIs, provider field names, SQL identifiers, stored JSON
+keys, error text and codes and test titles, stays separate from behavior changes,
+and never rewrites migration strings, schema manifests, fixtures or golden
+snapshots.
 
-TypeScript 7.0.2 is outside `@typescript-eslint/parser`'s supported peer range, so
-ESLint uses Babel's TypeScript syntax parser without transformation or type-aware
-rules; TypeScript remains the type and build authority, catching unused code with
-`noUnusedLocals` and `noUnusedParameters`. Babel 8 requires Node 24.11 or newer for
-development, which the root package declares; it does not enter production builds.
-Reassess parser support when upgrading these tools rather than forcing an
-incompatible peer install.
+ESLint parses syntax only, through Babel, and TypeScript remains the type, build
+and unused-code authority (the [ESLint configuration](../../eslint.config.mjs)
+says why). Reassess parser support when upgrading these tools rather than forcing
+an incompatible peer install.
 
 ## SQL, embedded migrations and schema manifests
 
@@ -167,22 +156,19 @@ unexplained drift.
 For a new migration, add the next numbered file to `migrations/` and
 `migrations/postgres/`, then run `node --import tsx scripts/generate-storage-schema.ts`
 with a disposable local PostgreSQL 18 `FONDS_TEST_POSTGRES_URL` (the role needs
-`CREATEDB`). It embeds the files, writes the D1 copies, applies the migrations to a
-fresh in-memory SQLite database and a fresh PostgreSQL database and records their
-declarations: non-internal `sqlite_master` rows ordered by type and name, and
-`schemaInspectionSql` from `src/storage/postgres/schema-check.ts`. `--check`
-verifies every artifact without writing files. SQLite migrations run in a
-transaction with foreign keys on, which SQLite cannot switch off there, so a
-migration that rebuilds a referenced table needs the runner changed first.
+`CREATEDB`). It embeds the files, writes the D1 copies, and records the
+declarations of fresh SQLite and PostgreSQL databases migrated to the latest
+version; `--check` verifies every artifact without writing files. SQLite
+migrations run in a transaction with foreign keys on, which SQLite cannot switch
+off there, so a migration that rebuilds a referenced table needs the runner
+changed first.
 
 ```sh
 npm test -- tests/storage/backends.test.ts tests/storage/domain-contract.test.ts
 npm run check:targets
 ```
 
-The hosted `identity` schema is migrated separately through Better Auth's API by
-`deploy/neon/setup.mjs`, followed by the managed Google bridge tables, and shares
-neither the financial migrations nor the model; see the
-[Neon runbook](../guides/neon-deployment.md). The
+The hosted `identity` schema shares neither the financial migrations nor the
+model; Neon setup migrates it ([auth storage](auth-storage.md)). The
 [storage test runbook](storage-testing.md) describes optional actual-driver
 services and their limits.

@@ -76,21 +76,20 @@ docker compose up -d
 ```
 
 `.env` also takes `FONDS_COLLECTION_TIMEZONE`; to pin `FONDS_COLLECTION_TIME`, set
-it under the `fonds` service's `environment` in `compose.override.yaml`. The
-service runs the schedule itself, with no scheduler container, and logs each run
-as `fonds_scheduled_collection` (`docker compose logs fonds`). Operation commands
-such as `docker compose exec fonds node /app/server.js list-connections` use the
-same database.
+it under the `fonds` service's `environment` in `compose.override.yaml`. No
+scheduler container is needed; each run is logged as `fonds_scheduled_collection`
+(`docker compose logs fonds`). Operation commands such as
+`docker compose exec fonds node /app/server.js list-connections` use the same
+database.
 
 ### Backup, restore and upgrades
 
-Back up the `postgres` and `state` volumes together: the database is
-[bound to](../database.md#state-directory-and-backup) the secrets in the state
-volume and refuses to start with any other. Stop the stack for a consistent copy,
-or use `pg_dump` inside the `postgres` container plus a copy of `/data/fonds.env`.
-
-To upgrade, pull the new revision and run `docker compose up -d --build`; the next
-start applies its [migrations](../database.md#migrations).
+Back up the `postgres` and `state` volumes
+[together](../database.md#state-directory-and-backup). Stop the stack for a
+consistent copy, or use `pg_dump` inside the `postgres` container plus a copy of
+`/data/fonds.env`. To upgrade, pull the new revision and run
+`docker compose up -d --build`; the next start applies its
+[migrations](../database.md#migrations).
 
 ## Quick tunnel
 
@@ -113,11 +112,10 @@ services:
       FONDS_TRUST_PROXY: "1"
 ```
 
-`FONDS_TRUST_PROXY` takes the public scheme and the
-[client address](hosted-service.md#client-addresses) that auth rate limits use
-from the tunnel's forwarded headers; never set it when clients reach Fonds
-directly. Whether a Cloudflare tunnel delivers the visitor's address as the last
-`X-Forwarded-For` entry is unverified. Limits:
+[`FONDS_TRUST_PROXY`](hosted-service.md#client-addresses) trusts the tunnel's
+forwarded headers; never set it when clients reach Fonds directly. Whether a
+Cloudflare tunnel delivers the visitor's address as the last `X-Forwarded-For`
+entry is unverified. Limits:
 
 - The URL changes whenever the tunnel restarts. The public origin is part of
   every OAuth grant, so reconnect ChatGPT and other clients after a change.

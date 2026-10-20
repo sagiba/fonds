@@ -29,13 +29,11 @@ the `postgres` build target (`npm run build:targets -- postgres`), or the
 
 The generated secrets in `fonds.env` include `FONDS_SCHEDULE_SECRET` (an external
 scheduler's bearer) and `FONDS_COLLECTION_SECRET` (the operator collection
-endpoint, and what enables collection); the
-[state directory](../database.md#state-directory-and-backup) lists them all.
-The first start binds the database to those secrets, and every later start,
-operator command and login link refuses a database bound to other secrets or
-never bound, so a lost or replaced state directory never silently re-keys a
-database ([binding](../database.md#state-directory-and-backup)). Back up the
-state directory with the database. On Neon the private env file is the state.
+endpoint, and what enables collection). The first start binds the database to
+them, and Fonds then refuses it with any other secrets
+([state directory and binding](../database.md#state-directory-and-backup)), so
+back up the state directory with the database. On Neon the private env file is
+the state.
 
 The database must be a direct or session-mode connection: financial writes take
 row locks and transaction-scoped advisory locks inside interactive transactions.
@@ -43,8 +41,7 @@ Transaction poolers (PgBouncer in transaction mode, Neon's `-pooler` endpoints)
 break them; Fonds rejects `-pooler.` URLs.
 
 On `SIGTERM` or `SIGINT` the service interrupts running refreshes, which keep the
-captures they already fetched and resume on the next start, and gives accepted
-requests five seconds before closing their connections
+captures they already fetched and resume on the next start
 ([node-service.ts](../../src/runtime/node-service.ts)).
 
 ### Client addresses
@@ -64,9 +61,10 @@ client-supplied forwarding headers never set it:
   from (nginx: `$proxy_add_x_forwarded_for`), and Fonds must be reachable only
   through them: a client that reaches Fonds, or an inner proxy, directly can
   choose its address.
-- **On Neon**, it is the right-most `X-Forwarded-For` entry, which is
-  trustworthy only if Neon's ingress sets it; that is not yet verified (see
-  the [Neon runbook](neon-deployment.md#owner-login-and-authorization)).
+- **On Neon**, it is the right-most `X-Forwarded-For` entry, or none if that is
+  missing or not a bare IP address. Whether Neon's ingress sets it is
+  [unverified](../security-model.md#known-limitations): confirm it on a real
+  deployment, with the owner's authorization, before relying on the limit.
 
 ## Owner login and authorization
 
@@ -122,22 +120,18 @@ On Neon, `--env-file` supplies the private env file instead
 
 ## Collection, refresh and scheduling
 
-Every collection is a recorded [refresh](../api.md#refreshes): an owner or model
-start, a scheduled occurrence, the operator retry and the CLI `collect`. The
-[design](../design.md#collection-and-evidence) owns what a collection rereads and
-commits; each refresh first replays archived runs a failed application left
+Every collection is a recorded [refresh](../api.md#refreshes), whose tools,
+routes and grants the [API reference](../api.md#operations) lists: an owner or
+model start, a scheduled occurrence, the operator retry and the CLI `collect`.
+The [design](../design.md#collection-and-evidence) owns what a collection rereads
+and commits; each refresh first replays archived runs a failed application left
 unapplied. A start without a connection, a scheduled occurrence and the operator
 retry cover every **target**, resolved at each start: the env-configured
 connection and every connection whose credentials `connect` stored. Their
-refreshes run one after another, each holding the connection's
-[collection lease](../../src/application/collection-lock.ts)
-([table](../database.md#collection-leases-table)), so manual, scheduled
-and CLI collection never run at once across processes. Each month, or the recent
-window, is bounded at ten minutes.
-
-The [API reference](../api.md#operations) lists the refresh tools and routes and
-their grants. The SQLite server and the PostgreSQL loopback launcher offer the
-same refreshes and Events behind their bearer token. Starting any launcher never
+refreshes run one after another under the connection's
+[collection lease](../../src/application/collection-lock.ts), so manual,
+scheduled and CLI collection never run at once across processes. Each month, or
+the recent window, is bounded at ten minutes. Starting any launcher never
 collects by itself, apart from resuming refreshes a stopped process left active.
 A lost or expired client request is not proof the provider work did not run;
 list the connection's refreshes before retrying.
@@ -183,29 +177,25 @@ names the variable.
 **On the Node host** (Docker, or `node server.js`) the service schedules itself,
 as the SQLite server and the PostgreSQL loopback launcher also do
 ([collection-schedule.ts](../../src/runtime/collection-schedule.ts)). Each
-occurrence starts a random zero to three minutes after its time and is
-[claimed in the database](../database.md#scheduled-collections-and-settings-tables),
-so it runs once across restarts, replicas and the trigger endpoint below.
-Missed occurrences never catch up in a burst: after downtime, a suspend or a
-clock change only the latest runs, until the next one is due, and the gap is
-recorded as a `missed` [refresh](../api.md#refreshes) per target. Each
-occurrence is still claimed once, but replicas with skewed clocks can each run
-an adjacent occurrence. A restart before the next occurrence retakes
-a run that shutdown interrupted.
+occurrence starts a random zero to three minutes after its time and
+[runs once](../database.md#scheduled-collections-and-settings-tables) across
+restarts, replicas and the trigger endpoint below, though replicas with skewed
+clocks can each run an adjacent occurrence. Missed occurrences never catch up in
+a burst: after downtime, a suspend or a clock change only the latest runs, until
+the next one is due, and the gap is recorded as a `missed`
+[refresh](../api.md#refreshes) per target. A restart before the next occurrence
+retakes a run that shutdown interrupted.
 
-**An external scheduler** POSTs `{}` to `/internal/triggers/recent` on the
-public origin with `Authorization: Bearer <FONDS_SCHEDULE_SECRET>`. Cron, Cloud
-Scheduler or EventBridge all fit. Without `FONDS_COLLECTION_SCHEDULE`, sending
-the same `Idempotency-Key` header on retries of one occurrence makes them reuse
-one occurrence's refreshes; without it each call is new. With
-`FONDS_COLLECTION_SCHEDULE` set, the schedule defines the occurrences and the
+**An external scheduler** (cron, Cloud Scheduler, EventBridge) POSTs `{}` to
+`/internal/triggers/recent` on the public origin with
+`Authorization: Bearer <FONDS_SCHEDULE_SECRET>`; every call also resumes
+refreshes a stopped process left active. Without `FONDS_COLLECTION_SCHEDULE`,
+retries of one occurrence that send the same `Idempotency-Key` header reuse its
+refreshes; without the header each call is new. With the schedule set, the
 header is not used: a call runs the latest due occurrence if nothing has claimed
-it yet, and otherwise answers `{refreshes: []}`. Every call also resumes
-refreshes a stopped process left active. Calling the endpoint as well as running
-the embedded schedule therefore never collects twice in one occurrence. Neon has
-no long-lived process; it uses its
-[native trigger](neon-deployment.md#native-scheduled-collection) with
-attestation instead.
+it yet, and otherwise answers `{refreshes: []}`, so the endpoint and the
+embedded schedule never collect twice in one occurrence. Neon uses its
+[native trigger](neon-deployment.md#native-scheduled-collection) instead.
 
 ## MCP Events and webhook delivery
 
