@@ -10,22 +10,17 @@ shapes. HTTP and MCP call the same application operations, defined in
 [query-inputs.ts](../src/application/query-inputs.ts) and
 [wire-output.ts](../src/application/wire-output.ts).
 
-Quick links: [operations](#operations), [lists and cursors](#lists-and-cursors),
-[transaction](#transaction), [money](#money-and-amount-basis),
-[perspectives](#perspectives), [totals](#totals), [annotations](#annotations),
-[events](#events), [errors](#errors).
-
 ## Operations
 
 Each operation name is also its MCP tool name. **Read** operations require the
 `financial:read` scope; **write** operations require `financial:write`. A write
 grant does not imply read access. Optional operations appear only when the runtime
-supplies their capability: the SQLite server and the PostgreSQL launchers supply
-`refresh_connection`; the experimental Turso launcher does not.
+supplies their capability; the [storage guide](guides/storage-backends.md) lists
+which runtimes offer refreshes.
 
 | Operation / MCP tool                                     | HTTP method and path                                                                 | Access | Notes                                                                                                                                               |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `list_connections`, `get_connection`                     | `GET /v1/connections`, `GET /v1/connections/:id`                                     | Read   | Takes no paging input. A connection carries its [latest refresh](#connection).                                                                      |
+| `list_connections`, `get_connection`                     | `GET /v1/connections`, `GET /v1/connections/:id`                                     | Read   | `list_connections` takes no input. A connection carries its [latest refresh](#connection).                                                          |
 | `refresh_connection` (optional)                          | `POST /v1/connections/:id/refreshes`, `POST /v1/refreshes`                           | Write  | Body `{}` or `{from, to}`; without a connection, every connection. See [refreshes](#refreshes).                                                     |
 | `get_refresh`, `list_refreshes`                          | `GET /v1/refreshes/:id`, `GET /v1/connections/:id/refreshes`                         | Read   | [Refreshes](#refreshes), newest first.                                                                                                              |
 | `list_sync_runs`                                         | `GET /v1/connections/:id/sync-runs`                                                  | Read   | [Sync runs](#sync-run).                                                                                                                             |
@@ -47,20 +42,17 @@ supplies their capability: the SQLite server and the PostgreSQL launchers supply
 initialization. There are no public operations to create connections or export
 raw source responses; a backfill is a [refresh](#refreshes) with `{from, to}`.
 
-The command-line client runs the same operations: each is a kebab-case command
-(`list-transactions`) whose flags are its input fields in kebab case
-(`--connection-id`), and it prints the operation's JSON output. It runs embedded on a
-local database or calls this API with `--remote`; see the
-[local guide](guides/local-development.md#use-the-command-line).
+The [command-line client](guides/local-development.md#use-the-command-line) runs
+the same operations as kebab-case commands and flags and prints each operation's
+JSON output, embedded on a local database or against this API with `--remote`.
 
 ## Requests and authentication
 
 HTTP GET arguments are query parameters. MCP arguments are one JSON object with the
 same names. An ID that appears in an HTTP path must not also appear in the query or
-body: an annotation PATCH body excludes the transaction ID, while the MCP call
-includes `transactionId`. MCP names the path IDs `connectionId`, `accountId`,
-`cardId`, `transactionId` and `refreshId`. Successful calls return HTTP 200,
-except a refresh start that is still running, which returns 202.
+body; MCP names it `connectionId`, `accountId`, `cardId`, `transactionId` or
+`refreshId`. Successful calls return HTTP 200, except a refresh start that is
+still running, which returns 202.
 
 HTTP write bodies are JSON objects sent with `Content-Type: application/json`, at
 most 64 KiB. Query keys may occur only once. `limit` is an unsigned decimal integer
@@ -77,35 +69,29 @@ send `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`.
 
 ## Lists and cursors
 
-Every list returns `{data: [...], hasMore, nextCursor}`.
+Every list returns `{data: [...], hasMore, nextCursor}`. Cursors are opaque and
+carry the last row's sort position; do not parse or construct them, and send a
+cursor only to the list that issued it.
 
 - **Browsing lists** (transactions, cards, accounts, sync runs): `nextCursor` is
-  `null` exactly when `hasMore` is false. Pass it back as `cursor` to read the next
-  page. Cursors are opaque and carry the last row's sort position; do not parse or
-  construct them, and send a cursor only to the list that issued it. A page can hold
-  fewer items than `limit` when the 256 KiB response budget is reached, so follow
-  `nextCursor` while `hasMore` is true. `list_connections` takes no `limit` or
-  `cursor` and returns every connection in one page.
+  `null` exactly when `hasMore` is false; pass it back as `cursor` for the next
+  page. A page can hold fewer items than `limit` when the 256 KiB response budget
+  is reached, so follow `nextCursor` while `hasMore` is true. `list_connections`
+  returns every connection in one page.
 - **The event feed** always returns a `nextCursor`, even on an empty or final page.
   It is a resumable checkpoint. See [events](#events).
 
 Browsing is a live read: each page sees current data, and concurrent writes can
 change later pages. Use the event feed to synchronize financial changes; enrichment
-fields and card-to-account links update without an event.
+fields and card-to-account links update without an event. Sort orders are fixed:
 
-`connectionId` is an optional filter for `list_transactions` and totals (omit it
-to read across connections), a required query parameter for `list_cards`,
-`list_accounts` and `list_events`, the path segment for `list_sync_runs`, and not
-accepted by `list_connections`. `limit` is 1 to 200 (default 50) for
-transactions, cards and accounts, 1 to 100 (default 20) for sync runs and 1 to 200
-(default 100) for events. The sort orders are fixed:
-
-| List                         | Order                                                |
-| ---------------------------- | ---------------------------------------------------- |
-| Transactions                 | `transactionDate` descending (nulls last), then `id` |
-| Cards, accounts, connections | `createdAt`, then `id`                               |
-| Sync runs                    | `startedAt` descending, then `id` descending         |
-| Events                       | `id` ascending                                       |
+| List            | Order                                                | `limit` (default) |
+| --------------- | ---------------------------------------------------- | ----------------- |
+| Transactions    | `transactionDate` descending (nulls last), then `id` | 1 to 200 (50)     |
+| Cards, accounts | `createdAt`, then `id`                               | 1 to 200 (50)     |
+| Connections     | `createdAt`, then `id`                               | none (one page)   |
+| Sync runs       | `startedAt` descending, then `id` descending         | 1 to 100 (20)     |
+| Events          | `id` ascending                                       | 1 to 200 (100)    |
 
 ## Transaction filters
 
@@ -133,15 +119,13 @@ match exactly.
 | `includeSuperseded`                            | Boolean, default false                              | Includes rows retired by a pending-to-posted match. They stay ineligible for totals and appear only in the `retiredOrRemoved` exclusion count.                                                          |
 | `perspective`                                  | `spending` (default), `billing` or `all`            | See [perspectives](#perspectives).                                                                                                                                                                      |
 
-An unknown `cardId` or `billingAccountId` fails with `invalid_input`. When
-`connectionId` is also given, they must belong to that connection, and a card and an
-account given together must belong to the same connection, or the request fails with
-`invalid_input`.
+An unknown `cardId` or `billingAccountId` fails with `invalid_input`, as does one
+outside a given `connectionId`, or a card and an account given together from
+different connections.
 
-`get_transaction` takes the transaction ID (the HTTP path segment, `transactionId`
-over MCP), `detail` and `includeEvidence`. Evidence expansion requires detail:
-`detail: false` with `includeEvidence: true` is invalid. Transaction reads never
-trigger collection.
+`get_transaction` takes the transaction ID, `detail` and `includeEvidence`.
+Evidence expansion requires detail: `detail: false` with `includeEvidence: true`
+is invalid. Transaction reads never trigger collection.
 
 ## Connection
 
@@ -185,15 +169,13 @@ rule met; HTTP answers 202 while any runs.
 
 A backfill requests and checkpoints each month: an interrupted refresh resumes,
 redoing only unfinished months, and an authentication, rate-limit or budget
-failure stops it. Its months share one provider login, renewed at most once
-when the provider rejects the session; a resumed refresh logs in again. A held
-lease or failed execution is retried for about a minute; an active refresh then
+failure stops it. Its months share one provider login, renewed at most once when
+the provider rejects the session; a resumed refresh logs in again. A held lease
+or failed execution is retried for about a minute; an active refresh then
 resumes on the next scheduler tick, start or `get_refresh`, and expires a day
 after creation. `completed` means the requested work succeeded, not that history
-is complete; see
-[collection behavior](guides/hosted-service.md#collection-refresh-and-scheduling).
-Deleting a refresh clears its sync runs' `refreshId`; no change event announces
-completion.
+is complete; see [collection behavior](guides/hosted-service.md#collection-refresh-and-scheduling).
+No change event announces completion.
 
 ## Sync run
 
@@ -202,23 +184,21 @@ One archived collection unit, not a whole refresh:
 `status` is `started`, `completed`, `partial` or `failed`. `finishedAt` and
 `appliedAt` are nullable, and `appliedAt` records application to the ledger, which is
 separate from collection. `refreshId` names the refresh that archived the run, or
-`null` for offline ingestion. Source responses and coverage details are excluded.
-`list_sync_runs` does not start collection.
+is `null` for offline ingestion or a deleted refresh. Source responses and
+coverage details are excluded. `list_sync_runs` does not start collection.
 
 ## Account
 
-`{id, connectionId, type, institutionName, mask, displayName, createdAt, lastSeenAt}`.
-
-An account is a bank account that a provider evidences as the payer of card bills.
-The provider's key for it (which can be a full account number) is private and
-never appears in output.
+`{id, connectionId, type, institutionName, mask, displayName, createdAt, lastSeenAt}`:
+a bank account that a provider evidences as the payer of card bills. The
+provider's key for it (which can be a full account number) is private and never
+appears in output.
 
 - `type` is `depository`. `credit` is reserved for a provider that evidences a card
   credit account.
 - `institutionName`, `mask` (the last four digits, keeping leading zeros) and
-  `displayName` are nullable. No current provider supplies an institution name
-  (Isracard states only a numeric bank code); the provider guides say which other
-  fields a source supplies.
+  `displayName` are nullable. No current provider supplies an institution name;
+  the provider guides say which other fields a source supplies.
 - Accounts belong to one connection, come only from card discovery and are never
   merged by name or mask.
 
@@ -245,9 +225,10 @@ and are never merged by their last four digits.
 
 Lists and `get_transaction` with `detail: false` return compact records, and the
 default single read returns the [detailed record](#detailed-read);
-`get_transaction` wraps either as `{transaction: {...}}`. A transaction has one primary `amount`,
-interpreted through its `amountBasis` and `status`; an evidenced `originalAmount`
-is a second money object. Provider facts and owner annotations stay separate.
+`get_transaction` wraps either as `{transaction: {...}}`. A transaction has one
+primary `amount`, interpreted through its `amountBasis` and `status`; an evidenced
+`originalAmount` is a second money object. Provider facts and owner annotations
+stay separate.
 
 ### Fields
 
@@ -292,13 +273,12 @@ no timezone.
 
 ### Payment context
 
-`cardPresent`, `authorizationMethod`, `wallet`, `threeDSecureUsed` and `recurring`
-follow Stripe Issuing's vocabulary. A field is set only from explicit source
-evidence. When two source facts disagree, the typed field is `null` and the record
-carries `conflicting_payment_context`. A stored fact persists through later reads
-that do not mention it, and a history import never changes payment context; the
-merge and conflict-clearing rules are in
-[sync.ts](../src/domain/plans/sync.ts).
+A payment-context field (`cardPresent`, `authorizationMethod`, `wallet`,
+`threeDSecureUsed`, `recurring`) is set only from explicit source evidence. When
+two source facts disagree, the typed field is `null` and the record carries
+`conflicting_payment_context`. A stored fact persists through later reads that do
+not mention it, and a history import never changes payment context;
+[sync.ts](../src/domain/plans/sync.ts) owns the merge and conflict-clearing rules.
 
 ### Source issues and review reasons
 
@@ -307,15 +287,17 @@ pending-posting candidate; a removed or superseded row has no review requirement
 The detailed record lists `review.reasons` (source issues plus the service's
 `user_needs_review`, when the owner's annotation asks for review, and
 `review_stale`) and `review.sourceIssues` (only the source interpretation's
-codes). Codes are strings, extensible and sorted. Providers raise these:
+codes). Codes are strings, extensible and sorted. The provider extractors and
+[sync.ts](../src/domain/plans/sync.ts) decide when each is raised; its consequence
+for a client is:
 
-| Code                                                                                                                                                                                                                                                                                                                                                                                       | Meaning                                                                                                                             |
+| Code                                                                                                                                                                                                                                                                                                                                                                                       | Consequence                                                                                                                         |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `conflicting_payment_context`                                                                                                                                                                                                                                                                                                                                                              | Two source facts disagree, so a typed payment-context field is null.                                                                |
+| `conflicting_payment_context`                                                                                                                                                                                                                                                                                                                                                              | A typed [payment-context](#payment-context) field is null.                                                                          |
 | `fx_unreconciled`, `conflicting_fx_comments`, `unverified_converted_installments`                                                                                                                                                                                                                                                                                                          | FX facts are withheld; see [foreign exchange](#foreign-exchange).                                                                   |
-| `conflicting_installment_total`, `conflicting_installment_facts`                                                                                                                                                                                                                                                                                                                           | The rows of one plan in one capture state different totals, or differ in a plan-level fact.                                         |
+| `conflicting_installment_total`, `conflicting_installment_facts`                                                                                                                                                                                                                                                                                                                           | The rows of one plan in one capture disagree on the total or a plan-level fact.                                                     |
 | `conflicting_installment_plan`                                                                                                                                                                                                                                                                                                                                                             | A later capture restates a purchase that has live billed lines as a non-plan; the plan's facts are kept.                            |
-| `unresolved_purchase`                                                                                                                                                                                                                                                                                                                                                                      | A billed line names a purchase that cannot be resolved, so its `purchaseId` is null.                                                |
+| `unresolved_purchase`                                                                                                                                                                                                                                                                                                                                                                      | A billed line's purchase cannot be resolved, so its `purchaseId` is null.                                                           |
 | `duplicate_installment_ordinal`                                                                                                                                                                                                                                                                                                                                                            | Another live billed line of the purchase states this ordinal; the amount is null until the owner removes one of them.               |
 | `invalid_installment_ordinal`, `unknown_installment_count`, `unverified_installment_amount_basis`, `invalid_installment_plan_voucher`                                                                                                                                                                                                                                                      | An installment ordinal, count, voucher or money role is missing, malformed, inconsistent or unproven; no plan or amount is guessed. |
 | `possible_duplicate_plan`                                                                                                                                                                                                                                                                                                                                                                  | Another posted plan purchase has the same card, merchant, installment count, amount, currency and date. Both stay counted.          |
@@ -373,13 +355,10 @@ A non-null money object always has both fields:
 ILS `"-370.00"` is -37,000 minor units; JPY `"-100"` has no decimals; KWD
 `"-100.000"` has three. Never parse these strings as binary floating point. Missing
 money is the whole object `null`, never a half-present pair. Inputs with more
-decimals than the currency allows are rejected, not rounded. Supported precision
-comes from the pinned official
-[SIX ISO 4217 list](https://www.six-group.com/dam/download/financial-information/data-center/iso-currrency/lists/list-one.xml)
-(publication 2026-09-17), plus historical HRK under
-[Amendment 174](https://www.six-group.com/dam/download/financial-information/data-center/iso-currrency/amendments/dl-currency-iso-amendment-174.pdf).
-The table and its source hash are in [money.ts](../src/domain/money.ts); nothing is
-fetched at runtime. Unknown codes and overflow are rejected.
+decimals than the currency allows are rejected, not rounded. Unknown codes and
+overflow are rejected. Precision comes from a pinned ISO 4217 table, plus historical HRK, in
+[money.ts](../src/domain/money.ts), with its official SIX source and hash;
+nothing is fetched at runtime.
 
 `originalAmount: null` means no original money is established. It does not assert
 that the purchase was in one currency. An original amount can also be in the same
@@ -412,10 +391,9 @@ with `fx_unreconciled` when rates were stated. A row that repeats a conversion o
 fee template with different text publishes no FX facts and carries
 `conflicting_fx_comments`. Rows derived from installment plans carry no FX facts in
 this release; foreign-currency plans carry `unverified_converted_installments`.
-The reconciliation arithmetic belongs to the provider: CAL's is in
-[enrichment.ts](../src/providers/cal/enrichment.ts), with its evidence in the
-[CAL source notes](../src/providers/cal/source-notes.md#calfx-conversion-and-fee).
-See the [FX policy](reference-models.md#foreign-exchange-policy).
+Each provider owns its reconciliation arithmetic and evidence, such as the
+[CAL source notes](../src/providers/cal/source-notes.md#calfx-conversion-and-fee);
+see the [FX policy](reference-models.md#foreign-exchange-policy).
 
 ## Purchases and billed lines
 
@@ -444,8 +422,7 @@ purchase date and say nothing about billing dates.
 which rows represent a plan, so that a purchase is counted once. Membership depends
 only on the row's own facts, never on whether child rows exist or on the other
 filters, which then apply within the perspective. The rule is `perspectiveRule` in
-[read-model.ts](../src/domain/read-model.ts), compiled into the same SQL `WHERE`
-clause as the other filters.
+[read-model.ts](../src/domain/read-model.ts).
 
 | `perspective`        | Members                                                                                                                                       | Totals                                                |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
@@ -455,9 +432,7 @@ clause as the other filters.
 
 Standalone rows appear in both `spending` and `billing` without double-counting,
 because no purchase row exists for them; a row whose `installmentCount` is null is
-never a plan purchase. These exclusions apply to totals in every perspective:
-pending, `authorization` basis, removed, superseded, unknown basis or kind,
-ambiguous identity, and `income` or `transfer` rows.
+never a plan purchase.
 
 Worked example, one currency: a −300.00 purchase in three installments of −100.00,
 with two billed lines observed so far, plus a −50.00 single charge (outflows are
@@ -473,41 +448,23 @@ reconciled statement or the amount that leaves a bank account.
 
 ## Totals
 
-`get_transaction_totals` returns exact sums over the selected rows. The values here
-are illustrative.
+`get_transaction_totals` returns exact sums over the selected rows:
+`{totals, fxFees, fxFeeUnknownCount, includedCount, excludedCount, excluded}`,
+where `excluded` is
+`{pending, transferOrIncome, retiredOrRemoved, unresolved, authorization}`.
 
-```json
-{
-  "totals": [
-    {
-      "currency": "ILS",
-      "amount": "-353.50",
-      "amountBasis": "purchase_commitment"
-    }
-  ],
-  "fxFees": [{ "currency": "ILS", "amount": "-3.50" }],
-  "fxFeeUnknownCount": 0,
-  "includedCount": 1,
-  "excludedCount": 0,
-  "excluded": {
-    "pending": 0,
-    "transferOrIncome": 0,
-    "retiredOrRemoved": 0,
-    "unresolved": 0,
-    "authorization": 0
-  }
-}
-```
-
-- `totals` has one group per currency and basis (`spending`) or one per currency
-  (`billing`, where `amountBasis` is omitted). Never add groups together.
-- `fxFees` sums published `fxFee` values per currency over the same eligible rows.
-  `fxFeeUnknownCount` counts eligible converted rows (original currency differs from
-  the billing currency) whose fee was not published. Unknown is never zero.
+- `totals` is a list of [money](#money-and-amount-basis) groups: one per currency
+  and `amountBasis` (`spending`) or one per currency (`billing`, where
+  `amountBasis` is omitted). Never add groups together.
+- `fxFees` lists money objects that sum published `fxFee` values per currency
+  over the same eligible rows. `fxFeeUnknownCount` counts eligible converted rows
+  (original currency differs from the billing currency) whose fee was not
+  published. Unknown is never zero.
 - `includedCount` counts eligible matching rows. `excludedCount` is the sum of the
-  `excluded` buckets. Each excluded row enters the first applicable bucket, in the
-  order: retired or removed, pending, income or transfer, authorization, then
-  unresolved.
+  `excluded` buckets. In every perspective, each excluded row enters the first
+  applicable bucket, in the order: retired (superseded) or removed, pending,
+  income or transfer, `authorization` basis, then unresolved, such as unknown
+  basis or kind, or ambiguous identity.
 - `not_returned` alone does not remove a row from totals. An empty list of groups is
   not proof that collection was complete.
 
@@ -531,8 +488,7 @@ says whether it does), and billed lines are never matched or linked. The
 | `evidence`                | `{runId, capturedAt}` of the deciding capture, or null.               |
 | `unlinked`                | The owner split the pair, so it is never matched automatically again. |
 
-Owner decisions use the pending transaction's ID in the path. The body (and the MCP
-arguments, which add `transactionId`) is:
+Owner decisions use the pending transaction's ID in the path and take:
 
 | Input                                                                   | Meaning                                                   |
 | ----------------------------------------------------------------------- | --------------------------------------------------------- |
@@ -550,8 +506,7 @@ retired purchase move to the surviving one in the same write.
 ## Annotations
 
 An annotation is the owner's independent document. Collection never writes it.
-
-Compact records carry `{version, category, tags, hasNotes, metadata}` or null. The
+Compact records carry `{version, category, tags, hasNotes, metadata}` or null; the
 detailed read returns the full annotation:
 
 | Field       | Type           | Meaning                                                                                                                                                                              |
@@ -568,8 +523,7 @@ The whole serialized document must fit 64 KiB.
 
 ### Update
 
-`update_annotation` is a partial update. Omitted fields are unchanged. Over HTTP the
-transaction ID is the path segment; over MCP it is `transactionId`.
+`update_annotation` is a partial update. Omitted fields are unchanged.
 
 | Input               | Behavior                                                                                                                                  |
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
@@ -584,9 +538,9 @@ money: a review goes stale when the reviewed amount, currency, basis or kind
 changes, and never from a change to another field.
 
 `undo_annotation` takes the `annotation.updated` event's `eventId` and
-`expectedVersion` (the current annotation version, as in `update_annotation`). It
-restores the exact previous document, including its historical review basis. Only
-the annotation's latest edit can be undone.
+`expectedVersion` (the current annotation version). It restores the exact
+previous document, including its historical review basis. Only the annotation's
+latest edit can be undone.
 
 ### Receipts
 
@@ -604,8 +558,7 @@ request-result replay is not implemented.
 
 ## Events
 
-`list_events` takes a required `connectionId`, an optional `cursor` and a `limit`,
-and returns `{data: [...], hasMore, nextCursor}`. Each event is:
+Each [event feed](#lists-and-cursors) entry is:
 
 `{id, type, connectionId, transactionId, syncRunId, createdAt, actor, changedFields?, summary?}`
 
@@ -664,11 +617,11 @@ JSON-RPC.
 
 MCP advertises the same input and output schemas and returns each result in both
 `structuredContent` and JSON text in `content`. Tool descriptions state the
-perspective semantics and that totals groups are never added together. Read tools
-carry idempotent and, except `get_refresh`, read-only hints; mutation tools carry
-destructive hints, and refresh and `get_refresh` declare external-world access.
-These hints do not replace
-authorization. See [local development](guides/local-development.md#connect-an-mcp-client-locally)
+perspective semantics and that totals groups are never added together. Tools
+carry the MCP behavior hints set in [mcp.ts](../src/transport/mcp.ts); refresh
+and `get_refresh` declare external-world access, and `get_refresh` is not
+read-only. These hints do not replace authorization. See
+[local development](guides/local-development.md#connect-an-mcp-client-locally)
 for configuration.
 
 When the runtime supplies Events (HTTP on the SQLite server, the PostgreSQL

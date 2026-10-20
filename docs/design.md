@@ -80,28 +80,26 @@ budgets, roles and archiving exceptions belong to the provider guides
 ## Personal data
 
 The service keeps what it needs to reconcile transactions and nothing that merely
-identifies the owner. Login, initialization and card-list responses carry names,
-email, phone and national ID numbers, which the service never needs: collection
-uses server-side credentials, the owner is identified by OAuth and cards by
-provider keys. Storing them would raise the cost of every leaked database, backup
-or copy for no benefit. Exact retention therefore has these exceptions:
+identifies the owner. Some provider responses carry names, contact details and
+national ID numbers, which the service never needs: collection uses server-side
+credentials, the owner is identified by OAuth and cards by provider keys. Storing
+them would raise the cost of every leaked database, backup or copy for no benefit.
+Exact retention therefore has these exceptions:
 
 - Login bodies, credentials, tokens and authentication headers are never stored.
-- Responses that carry personal data and are not financial evidence (the CAL
-  initialization response, the Isracard card list) keep an adapter-applied
-  allowlist of fields. Redacting a stored copy would break exact archives; an
-  allowlist keeps both rules, and card state is reread at every login, so no
-  history is lost. A new field is kept only once allowlisted.
+- A response that carries personal data and is not financial evidence keeps only
+  an adapter-applied allowlist of fields. Redacting a stored copy would break
+  exact archives; an allowlist keeps both rules, and card state is reread at every
+  login, so no history is lost. A new field is kept only once allowlisted.
 - Financial responses stay exact even when they embed holder data, which is never
   parsed into public fields unless a provider guide says so. The one change is a
-  credential echo: Isracard replaces the login identity number in known holder
-  fields with a fixed marker before archiving.
+  credential echo, which a provider may replace with a fixed marker in known
+  holder fields before archiving.
 - A provider may refuse a response, such as an application error or one that
-  echoes credentials outside known fields, and discard its body; its guide says
-  when.
+  echoes credentials outside known fields, and discard its body.
 
 Bank account numbers become private provider keys and are never exposed. Each
-provider guide lists its allowlist and refusals:
+provider guide lists its allowlist, markers and refusals:
 [CAL](providers/cal.md#personal-data),
 [Isracard](providers/isracard.md#personal-data).
 
@@ -134,32 +132,27 @@ and cannot be replayed into the ledger. Provider guides say which adapters do.
 ## Purchases and billed lines
 
 An installment plan is one **purchase** row carrying the whole commitment plus one
-**billed line** per payment, all ordinary transaction rows with their own
-versions, events, presence and annotations. One purchase exists per plan, created
-from any observed row. Conflicts are flagged and leave values unknown rather than
-split a plan. A total is never computed by multiplying a payment, no schedule is
-generated, and fewer observed lines never mean an incomplete plan. Billed lines are
-never compared for absence or matched. A purchase restated as a non-plan keeps
-the plan's facts, so a purchase and its lines are never both counted. A provider
-that cannot prove a plan emits one row per source item with null installment
-fields. The [API](api.md#purchases-and-billed-lines) owns the fields, issue codes
+**billed line** per payment, all ordinary transaction rows. One purchase exists per
+plan, created from any observed row. Conflicts are flagged
+and leave values unknown rather than split a plan. A total is never computed by
+multiplying a payment and no schedule is generated. A purchase restated as a
+non-plan keeps the plan's facts, so a purchase and its lines are never both
+counted. The [API](api.md#purchases-and-billed-lines) owns the fields, issue codes
 and [perspectives](api.md#perspectives); perspective membership depends only on a
 row's own facts, so selection and paging stay in SQL without database views.
 
 ## Pending-to-posted matching
 
-Automatic matching is a narrow, reversible, opt-in provider capability. A
+Automatic matching is a narrow, reversible, opt-in provider capability: a
 disappearing pending authorization keeps its service ID when a new posted identity
 with the same purchase date, card and signed purchase money arrives in the same
 fresh comparable capture, and every candidate in its group pairs (a complete
-group of indistinguishable twins pairs in a fixed arbitrary order); no conversion
-or guessed rate is used, and anything uncertain stays in review. The posted row is retained
-with `supersededById`, and one revision commits `transaction.posted` and
-`transaction.linked` with decision evidence, but no `transaction.created` or
-`transaction.unlisted` for the pair. Billed lines of a retired purchase move to the
-survivor in the same write (an unlink moves them back) and are never matched
-themselves. Because this is a heuristic, a false link is possible, so explicit
-split is part of the design; similarity alone yields review candidates.
+group of indistinguishable twins pairs in a fixed arbitrary order). No conversion or
+guessed rate is used, and anything uncertain stays in review. One revision
+commits `transaction.posted` and `transaction.linked` with decision evidence, but
+no `transaction.created` or `transaction.unlisted` for the pair. Because this is
+a heuristic, a false link is possible, so explicit split is part of the design;
+similarity alone yields review candidates.
 
 Owner decisions carry the current transaction and annotation versions and a
 reason ([API](api.md#pending-to-posted-matching)):
@@ -176,8 +169,8 @@ reason ([API](api.md#pending-to-posted-matching)):
 Providers opt in through [source-adapter.ts](../src/domain/source-adapter.ts), and
 each guide says whether it does. Provider code owns keys, mappings,
 comparability and horizons; shared code owns grouping, eligibility, lifecycle and
-annotation ownership and never branches on provider name. The rules live in
-[auto-posting.ts](../src/domain/plans/auto-posting.ts) and its tests.
+annotation ownership and never branches on provider name. The matching rules live
+in [auto-posting.ts](../src/domain/plans/auto-posting.ts) and its tests.
 
 ## Annotations, reads and delivery
 
@@ -185,23 +178,22 @@ Annotations are independently versioned owner documents that source refresh neve
 writes. A review change also guards the transaction version, and staleness
 compares recorded money, currency, basis and kind, not versions. Reads are live
 and bounded; only `get_refresh` collects, to [resume](api.md#refreshes) an
-interrupted refresh. Writes return committed receipts; with no
-general command idempotency, an uncertain outcome needs a reread. The event feed
-names records to refetch, not deltas, and imports are not fresh spending.
-Consumers store `nextCursor` after processing; `changes.available` webhooks only
-wake them, so polling recovers a missed wake-up. Callbacks run outside SQL
-transactions and can repeat after a failed acknowledgement, so receivers
-deduplicate on the stable delivery key; exactly-once delivery is not promised.
+interrupted refresh. Writes return committed receipts; with no general command
+idempotency, an uncertain outcome needs a reread. The event feed names records to
+refetch, not deltas, and imports are not fresh spending. Webhooks only wake
+consumers and run outside SQL transactions, so delivery can repeat and polling
+recovers a missed wake-up; exactly-once delivery is not promised
+([events](api.md#events), [delivery](api.md#mcp-and-events)).
 
 ## Runtime and deliberate limits
 
 Collection runs in the service, independently of reads, the same on every
 supported backend, as recorded [refreshes](api.md#refreshes) under one
 per-connection [lock](../src/application/collection-lock.ts). Scheduled collection
-is off until [configured](guides/hosted-service.md#scheduling). Composition is
-static, not plugin discovery. Owner identity and exact resource and operation
-scopes constrain access ([admission](security-model.md#admission)); local bearer HTTP
-and stdio are single-client interfaces. Schema changes ship as
+is off until [configured](guides/hosted-service.md#scheduling). Owner identity and
+exact resource and operation scopes constrain access
+([admission](security-model.md#admission)); local bearer HTTP and stdio are
+single-client interfaces. Schema changes ship as
 [migrations](database.md#migrations), and recovery pairs a database with its
 [state directory](database.md#state-directory-and-backup).
 
