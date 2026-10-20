@@ -155,7 +155,7 @@ A refresh records one connection's manual or scheduled collection.
 | `missed`                               | A `missed` skip's gap `{through, count}`, from `scheduledAt` through `through`; otherwise `null`.                                                  |
 | `windows`                              | `get_refresh` and starts only: a backfill's months, newest first, each `{from, to, status}`.                                                       |
 
-`counts` distinguishes recorded financial `captures`, successful `unchanged` captures
+`counts` distinguishes applied financial `captures` (including recovery), successful `unchanged` captures
 without content changes, and accepted `observed` transaction identities counted once
 per capture (overlaps repeat). `unchangedTransactions` counts unchanged observations;
 `created`, `updated`, `unlisted` count creations, content updates and absence marks.
@@ -165,7 +165,7 @@ Counts need not partition observations. `failures` is positive when failed.
 neither, at most 120 months). A start records the refresh, runs it in the same
 process and waits about 10 seconds: `200 {refresh}` when it finished, otherwise
 `202 {refresh}` while it continues; read it later with `get_refresh`. A pending
-or running refresh answers `409 refresh_in_progress`, a provider needing the owner
+or running refresh answers `409 refresh_in_progress`, collection needing operator attention
 `409 requires_attention`, and within 60 seconds of a finished refresh a start
 returns that one without calling the provider. Without `connectionId` (HTTP
 `POST /v1/refreshes`), every connection with stored credentials, under the same

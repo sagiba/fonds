@@ -1060,7 +1060,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "רגילה",
       "details": {
-        "additionalInformation": [],
         "issues": [],
         "merchant": {
           "address": "רחוב הדוגמה 1, עיר הדוגמה",
@@ -1188,7 +1187,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "רגילה",
       "details": {
-        "additionalInformation": [],
         "issues": [],
         "merchant": {
           "address": "רחוב הדוגמה 1, עיר הדוגמה",
@@ -1316,7 +1314,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "USD",
       "description": "רגילה",
       "details": {
-        "additionalInformation": [],
         "issues": [],
         "merchant": {
           "address": "רחוב הדוגמה 1, עיר הדוגמה",
@@ -1444,7 +1441,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "EUR",
       "description": "רגילה",
       "details": {
-        "additionalInformation": [],
         "issues": [],
         "merchant": {
           "address": "רחוב הדוגמה 1, עיר הדוגמה",
@@ -1572,7 +1568,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "תשלומים",
       "details": {
-        "additionalInformation": [],
         "issues": [],
         "merchant": {
           "address": "רחוב הדוגמה 1, עיר הדוגמה",
@@ -1699,7 +1694,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "ביטול תשלומים",
       "details": {
-        "additionalInformation": [],
         "issues": [
           "unknown_installment_count",
         ],
@@ -1828,7 +1822,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "זיכוי",
       "details": {
-        "additionalInformation": [],
         "issues": [],
         "merchant": {
           "address": "רחוב הדוגמה 1, עיר הדוגמה",
@@ -1956,7 +1949,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "ביטול תשלומים",
       "details": {
-        "additionalInformation": [],
         "issues": [],
         "merchant": {
           "address": "רחוב הדוגמה 1, עיר הדוגמה",
@@ -2148,7 +2140,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "דמי חבר",
       "details": {
-        "additionalInformation": [],
         "issues": [],
         "merchant": {
           "address": "רחוב הדוגמה 1, עיר הדוגמה",
@@ -2276,7 +2267,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "תשלומים",
       "details": {
-        "additionalInformation": [],
         "issues": [],
         "merchant": {
           "address": "רחוב הדוגמה 1, עיר הדוגמה",
@@ -2615,7 +2605,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "רגילה",
       "details": {
-        "additionalInformation": [],
         "issues": [],
         "merchant": {
           "address": "רחוב הדוגמה 1, עיר הדוגמה",
@@ -2743,7 +2732,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "רגילה",
       "details": {
-        "additionalInformation": [],
         "issues": [],
         "merchant": {
           "address": "רחוב הדוגמה 1, עיר הדוגמה",
@@ -2871,7 +2859,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "רגילה",
       "details": {
-        "additionalInformation": [],
         "issues": [],
         "merchant": {
           "address": "רחוב הדוגמה 1, עיר הדוגמה",
@@ -2999,7 +2986,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "רגילה",
       "details": {
-        "additionalInformation": [],
         "issues": [],
         "merchant": {
           "address": "רחוב הדוגמה 1, עיר הדוגמה",
@@ -3127,7 +3113,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "רגילה",
       "details": {
-        "additionalInformation": [],
         "issues": [],
         "merchant": {
           "address": "רחוב הדוגמה 1, עיר הדוגמה",
@@ -3255,7 +3240,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "רגילה",
       "details": {
-        "additionalInformation": [],
         "issues": [],
         "merchant": {
           "address": "רחוב הדוגמה 1, עיר הדוגמה",
@@ -3383,7 +3367,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "רגילה",
       "details": {
-        "additionalInformation": [],
         "issues": [],
         "merchant": {
           "address": "רחוב הדוגמה 1, עיר הדוגמה",
@@ -3511,7 +3494,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "רגילה",
       "details": {
-        "additionalInformation": [],
         "issues": [
           "possible_pending_posted_match",
         ],
@@ -3596,7 +3578,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "רגילה",
       "details": {
-        "additionalInformation": [],
         "issues": [
           "weak_source_identity",
         ],
@@ -3683,7 +3664,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "תשלומים",
       "details": {
-        "additionalInformation": [],
         "issues": [],
         "merchant": {
           "address": "רחוב הדוגמה 1, עיר הדוגמה",
@@ -3810,7 +3790,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "רגילה",
       "details": {
-        "additionalInformation": [],
         "issues": [
           "possible_pending_posted_match",
         ],
@@ -3943,7 +3922,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "רגילה",
       "details": {
-        "additionalInformation": [],
         "issues": [],
         "merchant": {
           "address": "רחוב הדוגמה 1, עיר הדוגמה",
@@ -4071,7 +4049,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "רגילה",
       "details": {
-        "additionalInformation": [],
         "issues": [],
         "merchant": {
           "address": "רחוב הדוגמה 1, עיר הדוגמה",
@@ -4194,7 +4171,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "תשלומים",
       "details": {
-        "additionalInformation": [],
         "issues": [],
         "merchant": {
           "address": "רחוב הדוגמה 1, עיר הדוגמה",
@@ -4438,7 +4414,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "תשלומים",
       "details": {
-        "additionalInformation": [],
         "issues": [],
         "merchant": {
           "address": "רחוב הדוגמה 1, עיר הדוגמה",
@@ -4558,7 +4533,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "תשלומים",
       "details": {
-        "additionalInformation": [],
         "issues": [],
         "merchant": {
           "address": "רחוב הדוגמה 1, עיר הדוגמה",
@@ -4678,7 +4652,6 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "תשלומים",
       "details": {
-        "additionalInformation": [],
         "issues": [],
         "merchant": {
           "address": "רחוב הדוגמה 1, עיר הדוגמה",

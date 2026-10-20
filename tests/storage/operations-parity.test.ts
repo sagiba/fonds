@@ -328,7 +328,7 @@ describe.each(backends)("operations parity on %s", (backend) => {
       ]);
       expect(result?.refresh).toMatchObject({
         status: "completed",
-        counts: { captures: 1, created: 2, updated: 0 },
+        counts: { captures: 2, observed: 2, created: 2, updated: 0 },
       });
     });
 

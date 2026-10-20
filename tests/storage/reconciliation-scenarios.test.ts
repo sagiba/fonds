@@ -226,6 +226,13 @@ describe.each(backends)(
         lastSeenRunId: "synthetic-run-2",
         details: {
           ...purchase.details,
+          provider: {
+            ...purchase.details.provider,
+            cal: {
+              ...purchase.details.provider.cal,
+              identity: { currentRows: [0] },
+            },
+          },
           sourceRefs: [
             { runId: "synthetic-run-2", path: "/result/transactions/0" },
           ],
