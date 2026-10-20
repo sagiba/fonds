@@ -1,29 +1,8 @@
 {
-  "name": "fonds-finance",
+  "name": "fonds-sqlite",
   "version": "0.1.0",
-  "description": "Fonds, a self-hosted personal financial evidence ledger: the local SQLite CLI and HTTP/MCP server.",
-  "license": "Apache-2.0",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/sagiba/fonds.git"
-  },
-  "homepage": "https://github.com/sagiba/fonds#readme",
-  "bugs": {
-    "url": "https://github.com/sagiba/fonds/issues"
-  },
   "private": true,
   "type": "module",
-  "bin": {
-    "fonds": "fonds.mjs"
-  },
-  "files": [
-    "cli.js",
-    "server.js",
-    "fonds.mjs",
-    "demo/",
-    "NOTICE",
-    "npm-shrinkwrap.json"
-  ],
   "engines": {
     "node": ">=24.11"
   },

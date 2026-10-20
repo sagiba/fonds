@@ -7,6 +7,7 @@ updates:
     directories:
       - /
       - /deploy/sqlite
+      - /deploy/npm
       - /deploy/postgres
       - /deploy/turso
       - /deploy/turso-web
