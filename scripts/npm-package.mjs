@@ -30,6 +30,18 @@ const permittedLicenses = new Set([
   "Unlicense",
 ]);
 const legalFile = /^(?:licen[cs]e|copying|notice)(?:[.-].*)?$/i;
+/**
+ * Upstream texts for bundled packages whose npm archive omits them, copied
+ * into deploy/npm/licenses/<name>@<version>. A new version needs its text
+ * reviewed and added again.
+ */
+const supplementalLicenses = {
+  "drizzle-orm@0.45.4":
+    "https://github.com/drizzle-team/drizzle-orm/blob/0.45.4/LICENSE",
+  // The repository root is the spec's Apache-2.0; the libraries are MIT.
+  "standardwebhooks@1.1.1":
+    "https://github.com/standard-webhooks/standard-webhooks/blob/a7d19b4574ae62221042e76240648d0688a8c420/libraries/LICENSE",
+};
 
 /**
  * The license and notice texts of every dependency esbuild copied into the
@@ -55,19 +67,28 @@ async function thirdPartyNotices(metafile) {
         `${manifest.name}@${manifest.version}: license ${manifest.license} needs review before bundling`,
       );
     }
+    const id = `${manifest.name}@${manifest.version}`;
     const texts = [];
     for (const file of (await readdir(directory)).sort()) {
       if (legalFile.test(file)) {
         texts.push(await readFile(join(directory, file), "utf8"));
       }
     }
+    if (!texts.length && supplementalLicenses[id]) {
+      texts.push(
+        `Source: ${supplementalLicenses[id]}`,
+        await readFile(resolve(root, "deploy/npm/licenses", id), "utf8"),
+      );
+    }
+    if (!texts.length) {
+      throw new Error(
+        `${id} ships no license text; review its upstream text and add it to deploy/npm/licenses`,
+      );
+    }
     sections.push(
-      [
-        `${manifest.name}@${manifest.version} (${manifest.license})`,
-        ...(texts.length
-          ? texts.map((text) => text.trim())
-          : ["The package ships no license file; see its license field."]),
-      ].join("\n\n"),
+      [`${id} (${manifest.license})`, ...texts.map((text) => text.trim())].join(
+        "\n\n",
+      ),
     );
   }
   return {
