@@ -25,7 +25,7 @@ export function postgresBackend(
   return {
     name: "postgres",
     title: "PostgreSQL target",
-    invocation: "node server.js",
+    invocation: "fonds",
     description: `With no command, node server.js serves: the hosted service when FONDS_PUBLIC_ORIGIN is
 set, otherwise the loopback HTTP/MCP API; --transport stdio serves MCP over stdio to a
 trusted local client instead. The database is FONDS_DATABASE_URL; without it, use the

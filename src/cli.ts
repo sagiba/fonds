@@ -131,7 +131,7 @@ export function sqliteBackend(
   return {
     name: "sqlite",
     title: "local SQLite CLI",
-    invocation: "node dist/cli.js",
+    invocation: "fonds",
     description: `Run as node dist/cli.js from a checkout, or fonds in the Docker image. Every command takes
 [--db <path outside this repository>]; without it, commands use ${DEFAULT_DATABASE} in the
 private data directory: $FONDS_HOME, otherwise the platform's per-user data directory
@@ -201,7 +201,7 @@ export async function main(
     argv.includes("--help");
   if (selectedBackend(env) === "postgres" && !asksForHelp) {
     process.stderr.write(
-      "FONDS_DATABASE_URL selects PostgreSQL: run this command with the PostgreSQL target's node server.js, or unset it to use SQLite.\n",
+      "FONDS_DATABASE_URL selects PostgreSQL, which the fonds command runs; unset it to use SQLite.\n",
     );
     return 1;
   }

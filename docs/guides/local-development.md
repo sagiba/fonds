@@ -2,20 +2,23 @@
 
 Run the SQLite service locally, query it over loopback bearer HTTP, or connect a
 trusted local MCP client over stdio; both serve the same
-[operations](../api.md#operations) from `dist/server.js`. Synthetic development
+[operations](../api.md#operations) from `fonds serve`. Synthetic development
 needs no provider credentials, and refresh is opt-in. Hosted setup is in the
 [hosted-service guide](hosted-service.md).
 
 ## Start with synthetic data
 
-Use Node 24.11 or newer. From the repository root, install and build, then create
-the synthetic demo ledger and serve it over HTTP:
+Use Node 24.11 or newer. Install the `fonds` command, then create the synthetic
+demo ledger and serve it over HTTP:
 
 ```sh
-npm ci && npm run build
-node dist/cli.js demo
-node dist/server.js --db <the demo database demo printed>
+npm install --global fonds-finance
+fonds demo
+fonds serve --db <the demo database demo printed>
 ```
+
+From a source checkout, `npm ci && npm run build` provides the same commands as
+`node dist/cli.js` and, for `fonds serve`, `node dist/server.js`.
 
 `demo` creates `demo.sqlite` in the private data directory (`$FONDS_HOME`, otherwise
 `~/.local/share/fonds` on Linux or `~/Library/Application Support/Fonds` on macOS,
@@ -64,9 +67,9 @@ Set `DEMO_DB` to the path `demo` printed, or drop `--db` to use your default
 ledger:
 
 ```sh
-node dist/cli.js list --db "$DEMO_DB" --connection-id demo --limit 5
-node dist/cli.js get --db "$DEMO_DB" --transaction-id TRANSACTION_ID
-node dist/cli.js annotate --db "$DEMO_DB" \
+fonds list --db "$DEMO_DB" --connection-id demo --limit 5
+fonds get --db "$DEMO_DB" --transaction-id TRANSACTION_ID
+fonds annotate --db "$DEMO_DB" \
   --transaction-id TRANSACTION_ID --expected-version 0 --notes "Synthetic note" --tags '["demo"]'
 ```
 
@@ -83,7 +86,7 @@ into a private file once:
 
 ```sh
 (umask 077; grep '^FONDS_API_TOKEN=' "$FONDS_STATE_FILE" | cut -d= -f2- > ~/.fonds-token)
-node dist/cli.js list-connections --remote http://127.0.0.1:8787 --token-file ~/.fonds-token
+fonds list-connections --remote http://127.0.0.1:8787 --token-file ~/.fonds-token
 ```
 
 Remote mode against an OAuth deployment needs a CLI login, which is not built yet.
@@ -91,10 +94,9 @@ Remote mode against an OAuth deployment needs a CLI login, which is not built ye
 ### Operator commands
 
 Every Node backend runs one operator CLI with the same commands, flags, output and
-exit codes: `node dist/cli.js <command>` on SQLite (`fonds <command>` in the Docker
-image), and `node server.js <command>` from the PostgreSQL target, which needs
-`FONDS_DATABASE_URL` set to a `postgresql://` URL; the SQLite CLI refuses one and
-uses `--db` or the default ledger.
+exit codes: `fonds <command>`, from the npm package or the
+[Docker image](docker.md). A `postgresql://` `FONDS_DATABASE_URL` selects
+PostgreSQL; otherwise SQLite uses `--db` or the default ledger.
 
 | Command      | Does                                                                                          |
 | ------------ | --------------------------------------------------------------------------------------------- |
@@ -127,13 +129,13 @@ not API or MCP inputs.
 
 ## Connect an MCP client locally
 
-For a host supporting stdio MCP, configure a command with absolute paths after
-`npm run build`. `demo` prints ready-made versions for its ledger. For your own
-default ledger, after `node dist/cli.js init` has created it, run this from the
-repository root for Claude Code:
+For a host supporting stdio MCP, configure the `fonds` command by its absolute
+path, since a host may not share your shell's `PATH`. `demo` prints ready-made
+versions for its ledger. For your own default ledger, after `fonds init` has
+created it, for Claude Code:
 
 ```sh
-claude mcp add fonds -- node "$PWD/dist/server.js" --transport stdio
+claude mcp add fonds -- "$(command -v fonds)" serve --transport stdio
 ```
 
 Other hosts take the same command as JSON, for example Claude Desktop's
@@ -143,8 +145,8 @@ Other hosts take the same command as JSON, for example Claude Desktop's
 {
   "mcpServers": {
     "fonds": {
-      "command": "node",
-      "args": ["/absolute/path/to/fonds/dist/server.js", "--transport", "stdio"]
+      "command": "/absolute/path/to/fonds",
+      "args": ["serve", "--transport", "stdio"]
     }
   }
 }
