@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseEnv, promisify } from "node:util";
 
 import { buildTarget, root, targets } from "./build-targets.mjs";
@@ -29,7 +30,8 @@ const permittedLicenses = new Set([
   "MIT",
   "Unlicense",
 ]);
-const legalFile = /^(?:licen[cs]e|copying|notice)(?:[.-].*)?$/i;
+const licenseFile = /^(?:licen[cs]e|copying)(?:[.-].*)?$/i;
+const noticeFile = /^notice(?:[.-].*)?$/i;
 /**
  * Upstream texts for bundled packages whose npm archive omits them, copied
  * into deploy/npm/licenses/<name>@<version>. A new version needs its text
@@ -45,15 +47,16 @@ const supplementalLicenses = {
 
 /**
  * The license and notice texts of every dependency esbuild copied into the
- * bundle. Native modules stay installed packages and carry their own.
+ * bundle. Native modules stay installed packages and carry their own. Paths
+ * in the metafile are relative to `base`, the build's working directory.
  */
-async function thirdPartyNotices(metafile) {
+export async function thirdPartyNotices(metafile, base = root) {
   const packages = new Map();
   for (const output of Object.values(metafile.outputs)) {
     for (const [path, contribution] of Object.entries(output.inputs)) {
       const match = path.match(/^(.*node_modules\/(?:@[^/]+\/)?[^/]+)\//);
       if (match && contribution.bytesInOutput > 0) {
-        packages.set(resolve(root, match[1]), true);
+        packages.set(resolve(base, match[1]), true);
       }
     }
   }
@@ -68,27 +71,36 @@ async function thirdPartyNotices(metafile) {
       );
     }
     const id = `${manifest.name}@${manifest.version}`;
-    const texts = [];
+    const licenses = [];
+    const notices = [];
     for (const file of (await readdir(directory)).sort()) {
-      if (legalFile.test(file)) {
-        texts.push(await readFile(join(directory, file), "utf8"));
+      const kind = licenseFile.test(file)
+        ? licenses
+        : noticeFile.test(file)
+          ? notices
+          : undefined;
+      const text = kind && (await readFile(join(directory, file), "utf8"));
+      if (text?.trim()) {
+        kind.push(text.trim());
       }
     }
-    if (!texts.length && supplementalLicenses[id]) {
-      texts.push(
-        `Source: ${supplementalLicenses[id]}`,
-        await readFile(resolve(root, "deploy/npm/licenses", id), "utf8"),
+    if (!licenses.length && supplementalLicenses[id]) {
+      const text = await readFile(
+        resolve(root, "deploy/npm/licenses", id),
+        "utf8",
       );
+      if (text.trim()) {
+        licenses.push(`Source: ${supplementalLicenses[id]}`, text.trim());
+      }
     }
-    if (!texts.length) {
+    // A notice never stands in for the license text itself.
+    if (!licenses.length) {
       throw new Error(
         `${id} ships no license text; review its upstream text and add it to deploy/npm/licenses`,
       );
     }
     sections.push(
-      [`${id} (${manifest.license})`, ...texts.map((text) => text.trim())].join(
-        "\n\n",
-      ),
+      [`${id} (${manifest.license})`, ...licenses, ...notices].join("\n\n"),
     );
   }
   return {
@@ -405,13 +417,18 @@ async function checkInstalled(packed, scratch) {
   };
 }
 
-const scratch = await mkdtemp(join(tmpdir(), "fonds-npm-package-"));
-try {
-  const packed = await pack(join(scratch, "stage"));
-  const checked = process.argv.includes("--check")
-    ? await checkInstalled(packed, scratch)
-    : {};
-  console.log(JSON.stringify({ ...packed, ...checked }));
-} finally {
-  await rm(scratch, { recursive: true, force: true });
+if (
+  process.argv[1] &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  const scratch = await mkdtemp(join(tmpdir(), "fonds-npm-package-"));
+  try {
+    const packed = await pack(join(scratch, "stage"));
+    const checked = process.argv.includes("--check")
+      ? await checkInstalled(packed, scratch)
+      : {};
+    console.log(JSON.stringify({ ...packed, ...checked }));
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
 }
