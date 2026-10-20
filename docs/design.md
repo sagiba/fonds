@@ -19,7 +19,7 @@ flowchart LR
   provider["Provider transaction APIs"] --> collector
   clients["Assistant and API clients"] --> transport
   subgraph service["One TypeScript service"]
-    collector["Provider collector"] --> archive["Retain original response and context"]
+    collector["Provider collector"] --> archive["Stage response for recovery"]
     archive -->|First commit| storage["Selected SQL adapter"]
     archive --> extraction["Provider extraction and validation"]
     extraction --> planning["Shared financial planning"]
@@ -32,7 +32,7 @@ flowchart LR
 ```
 
 Collectors own provider authentication, discovery, request windows and
-demonstrated paging. Extraction turns one archived response into validated
+demonstrated paging. Extraction turns one staged response into validated
 provider-neutral input. Shared planners decide identity, financial changes,
 annotations and lifecycle transitions without driver dependencies, and storage
 adapters ([backends](guides/storage-backends.md)) execute the finite plans
@@ -49,14 +49,15 @@ is a separate transaction that commits transactions, events and the run's applie
 marker together, so a failure leaves the evidence for retry. Provider calls never
 run inside financial write transactions.
 
-The archive keeps exact response text, numeric tokens, unknown keys and null/empty
-distinctions, with endpoint, scope, capture time, versions and coverage.
-Validation can reject an oversized or unsupported row without discarding or
-truncating its response. Run IDs identify immutable evidence: different evidence
-under one ID fails, replaying an applied run is quiet, and an unapplied archive
-needs its parser version. A policy version in recent-capture fingerprints makes a
-policy change defeat identical-content skipping once; there is no historical
-reinterpretation.
+Normal operation retains declared transaction evidence and capture receipts.
+Raw bodies are staged for recovery, then released with application unless
+bounded debugging retention was requested. Legacy archives remain. Unknown fields
+are discarded; recollection cannot recover vanished values or expired periods.
+Declared evidence without a safe transaction identity is retained separately.
+
+Input digests preserve run-ID immutability after body removal; applied replay is
+quiet. Recovery needs the staged body and matching parser. Historical
+reinterpretation is unsupported.
 
 - **Backfill** requests a bounded historical range (about seven years is enough).
   Providers own windowing, paging, overlap and budgets; partial results are kept
@@ -71,10 +72,9 @@ success cannot clear an unrelated failure, child windows do not resolve an
 interrupted broad range, and unknown continuation metadata makes a capture
 incomplete. Collection is API-only, without browser automation or statement
 fallback; authentication challenges and rate limits stop it, and bodies, timeouts,
-retries and failure budgets are bounded. An identical recent capture is skipped
-only when fingerprint, versions, scope and an unchanged ledger revision prove it
-equivalent; the skip archives nothing and leaves `lastSeenAt` alone. Endpoints,
-budgets, roles and archiving exceptions belong to the provider guides
+retries and failure budgets are bounded. Every capture reconciles against current
+state and policy. Unchanged content advances receipt/observation freshness without
+transaction-row writes or change events. Capture rules belong to the provider guides
 ([CAL](providers/cal.md), [Isracard](providers/isracard.md)).
 
 ## Personal data
@@ -88,10 +88,10 @@ Exact retention therefore has these exceptions:
 
 - Login bodies, credentials, tokens and authentication headers are never stored.
 - A response that carries personal data and is not financial evidence keeps only
-  an adapter-applied allowlist of fields. Redacting a stored copy would break
-  exact archives; an allowlist keeps both rules, and card state is reread at every
-  login, so no history is lost. A new field is kept only once allowlisted.
-- Financial responses stay exact even when they embed holder data, which is never
+  an adapter-applied allowlist. Card state is reread at login; new fields need
+  explicit inclusion.
+- Staged and opt-in archived financial responses stay exact even when they embed
+  holder data, which is never
   parsed into public fields unless a provider guide says so. The one change is a
   credential echo, which a provider may replace with a fixed marker in known
   holder fields before archiving.
@@ -117,8 +117,10 @@ partitions source identity and absence comparison and is never public.
 Native-key collisions and legitimate duplicate-looking purchases keep their
 multiplicity. Changed multiplicity or ambiguous candidates stay reviewable and
 never inherit annotations by row order. Older evidence never overwrites newer
-facts. A [versioned field](api.md#versioned-fields) change advances the version
-and emits `transaction.updated`; enrichment refreshes quietly.
+facts. One declaration governs content retention and versioned changes, including mapped
+facts and provider evidence; posting keeps its lifecycle events. Observation state
+is separate. Named columns hold mapped facts/lists; provider evidence stays private.
+The [API](api.md#versioned-fields) owns notifications.
 
 `not_returned` means a comparable successful response omitted a known identity,
 not that it was cancelled or removed; failed partitions cannot unlist rows, and
@@ -201,8 +203,7 @@ single-client interfaces. Schema changes ship as
 [migrations](database.md#migrations), and recovery pairs a database with its
 [state directory](database.md#state-directory-and-backup).
 
-The seven financial tables are not an architectural constraint. Beyond the
-collection lease, distributed coordination, commit chains, chunk protocols,
+Beyond the collection lease, distributed coordination, commit chains, chunk protocols,
 general merge and replay frameworks, historical reinterpretation, bidirectional
 sync and broad exporters wait for a concrete requirement.
 [Acceptance](internals/acceptance.md) indexes the behavioral checks.

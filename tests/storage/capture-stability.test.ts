@@ -8,7 +8,7 @@ import {
   type Database,
   openDatabase,
 } from "../../src/storage/sqlite/database.js";
-import { syncRuns } from "../../src/storage/sqlite/schema.js";
+import { syncRunBodies, syncRuns } from "../../src/storage/sqlite/schema.js";
 
 type SourceRow = Record<string, unknown>;
 
@@ -38,11 +38,13 @@ describe("bounded canonical state and capture-independent installment purchases"
     rows: SourceRow[],
     day: number,
     adapter: SourceAdapter = calAdapter,
+    debugArchiveDays?: number,
   ) {
     return db.ingestRun(
       {
         connectionId: "synthetic-cal",
         runId,
+        ...(debugArchiveDays !== undefined && { debugArchiveDays }),
         responses: [
           {
             accountKey: "synthetic-account",
@@ -59,7 +61,7 @@ describe("bounded canonical state and capture-independent installment purchases"
     );
   }
 
-  it("archives expanded and shrinking component subsets without purchase revisions or stale annotations", async () => {
+  it("versions newly retained component evidence once without changing commitment money or stale annotations", async () => {
     const first = {
       ...installment,
       curPaymentNum: 1,
@@ -85,20 +87,21 @@ describe("bounded canonical state and capture-independent installment purchases"
     const totals = await db.getTotals();
     await capture("many", [first, second], 2);
     await capture("one-again", [second], 3);
+    await capture("first-again", [first], 4);
     const after = (await db.getTransaction(before.id))!;
     // Purchases carry no billed-line ordinal.
     expect(after.installmentNumber).toBeNull();
     expect(after).toMatchObject({
-      version: 1,
+      version: 2,
       amountMinor: before.amountMinor,
       billingDate: null,
       installmentCount: 12,
       reviewStale: false,
       annotation: original.annotation,
     });
-    expect(after.details.sourceRefs.map((ref) => ref.runId)).toEqual(
-      expect.arrayContaining(["one", "many", "one-again"]),
-    );
+    expect(after.details.sourceRefs.map((ref) => ref.runId)).toEqual([
+      "first-again",
+    ]);
     // Each payment is its own billed line; a line missing from a recent window
     // is non-comparable, so it stays seen.
     const lines = (await db.listTransactions()).filter(
@@ -117,7 +120,10 @@ describe("bounded canonical state and capture-independent installment purchases"
       (await db.listEvents())
         .slice(changes.length)
         .map((event) => [event.type, event.transactionId]),
-    ).toEqual([["transaction.created", secondLine.id]]);
+    ).toEqual([
+      ["transaction.created", secondLine.id],
+      ["transaction.updated", before.id],
+    ]);
     const commitments = (result: Awaited<ReturnType<typeof db.getTotals>>) =>
       result.totals.filter(
         (group) => group.amountBasis === "purchase_commitment",
@@ -127,10 +133,10 @@ describe("bounded canonical state and capture-independent installment purchases"
     await capture(
       "corrected",
       [{ ...second, amountForDisplay: 1300, trnAmt: 1300, numOfPayments: 13 }],
-      4,
+      5,
     );
     expect(await db.getTransaction(before.id)).toMatchObject({
-      version: 2,
+      version: 3,
       amountMinor: -130000,
       installmentCount: 13,
       reviewStale: true,
@@ -150,6 +156,8 @@ describe("bounded canonical state and capture-independent installment purchases"
       "oversized",
       [{ ...regular, merchantName: oversized }],
       2,
+      calAdapter,
+      2,
     );
     expect(result.status).toBe("partial");
     expect(await db.getTransaction(before.id)).toMatchObject({
@@ -162,8 +170,9 @@ describe("bounded canonical state and capture-independent installment purchases"
       "invalid_extracted_posted_row",
     );
     expect(
-      runs.find((run) => run.id === "oversized")!.snapshot.responses[0]!
-        .responseText,
+      (await db.orm.select().from(syncRunBodies).all()).find(
+        (run) => run.runId === "oversized",
+      )!.snapshot.responses[0]!.responseText,
     ).toContain(oversized);
   });
 
@@ -181,15 +190,20 @@ describe("bounded canonical state and capture-independent installment purchases"
         };
       },
     };
-    expect(await capture("empty-card", [regular], 1, adapter)).toMatchObject({
-      status: "partial",
-      created: 0,
-    });
+    expect(await capture("empty-card", [regular], 1, adapter, 2)).toMatchObject(
+      {
+        status: "partial",
+        created: 0,
+      },
+    );
     expect(await db.listTransactions()).toEqual([]);
     const run = (await db.orm.select().from(syncRuns).all())[0]!;
     expect(run.warnings).toContain("invalid_extracted_posted_row");
     expect(
-      JSON.parse(run.snapshot.responses[0]!.responseText).result.transactions,
+      JSON.parse(
+        (await db.orm.select().from(syncRunBodies).get())!.snapshot
+          .responses[0]!.responseText,
+      ).result.transactions,
     ).toEqual([regular]);
   });
 

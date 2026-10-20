@@ -27,16 +27,16 @@ import type {
   FinancialResponse,
   LedgerEvent,
   Partition,
-  Run,
-  Transaction as StoredTransaction,
 } from "../../domain/records.js";
 import {
   FAILURE_REASONS,
+  PROVIDER_STOP_REASONS,
   REFRESH_STATUSES,
   REFRESH_TRIGGERS,
   SKIP_REASONS,
   WINDOW_STATUSES,
 } from "../../domain/refreshes.js";
+import { decodeScalarText, encodeScalarText } from "../scalar-text.js";
 
 /** JSON stays text: PostgreSQL JSONB cannot retain NUL or the original document. */
 const jsonText = <T>() =>
@@ -45,6 +45,12 @@ const jsonText = <T>() =>
     toDriver: (value) => JSON.stringify(value),
     fromDriver: (value) => JSON.parse(value) as T,
   });
+
+const scalarText = customType<{ data: string; driverData: string }>({
+  dataType: () => "text",
+  toDriver: encodeScalarText,
+  fromDriver: decodeScalarText,
+});
 
 export const connections = pgTable("connections", {
   id: text().primaryKey(),
@@ -114,13 +120,10 @@ export const syncRuns = pgTable("sync_runs", {
   parserVersion: text("parser_version").notNull(),
   snapshot: jsonText<{
     schemaVersion: 1;
-    responses: FinancialResponse[];
-    failures?: CollectionFailure[];
-  }>()("snapshot_json").notNull(),
-  metadata: jsonText<{
     responses: Omit<FinancialResponse, "responseText">[];
-    failures: CollectionFailure[];
+    failures?: CollectionFailure[];
   }>()("metadata_json").notNull(),
+  evidenceDigest: text("evidence_digest").notNull(),
   coverage: jsonText<Partition[]>()("coverage_json").notNull(),
   warnings: jsonText<string[]>()("warnings_json").notNull(),
   appliedAt: text("applied_at"),
@@ -128,6 +131,36 @@ export const syncRuns = pgTable("sync_runs", {
   refreshId: text("refresh_id").references((): AnyPgColumn => refreshes.id, {
     onDelete: "set null",
   }),
+});
+
+export const syncRunBodies = pgTable("sync_run_bodies", {
+  runId: text("run_id")
+    .primaryKey()
+    .references(() => syncRuns.id),
+  snapshot: jsonText<{
+    schemaVersion: 1;
+    responses: FinancialResponse[];
+    failures?: CollectionFailure[];
+  }>()("snapshot_json").notNull(),
+  retention: text({ enum: ["staged", "debug"] }).notNull(),
+  expiresAt: text("expires_at"),
+});
+
+export const deferredEvidence = pgTable("deferred_evidence", {
+  id: text().primaryKey(),
+  connectionId: text("connection_id")
+    .notNull()
+    .references(() => connections.id),
+  sourceScope: text("source_scope").notNull(),
+  sourceKey: text("source_key").notNull(),
+  reason: text().notNull(),
+  content: jsonText<Record<string, unknown>>()("content_json").notNull(),
+  firstSeenRunId: text("first_seen_run_id")
+    .notNull()
+    .references(() => syncRuns.id),
+  lastSeenRunId: text("last_seen_run_id")
+    .notNull()
+    .references(() => syncRuns.id),
 });
 
 export const transactions = pgTable(
@@ -176,12 +209,23 @@ export const transactions = pgTable(
     providerTransactionCode: text("provider_transaction_code"),
     fxFeeMinor: bigint("fx_fee_minor", { mode: "number" }),
     fxFeeCurrency: text("fx_fee_currency"),
-    details: jsonText<TransactionInput["details"]>()("details_json").notNull(),
+    transactionDateTime: text("transaction_date_time"),
+    merchantAddressLine: scalarText("merchant_address_line"),
+    merchantPhone: scalarText("merchant_phone"),
+    merchantCity: scalarText("merchant_city"),
+    merchantCountryCode: text("merchant_country_code"),
+    additionalInformation: jsonText<
+      NonNullable<TransactionInput["details"]["additionalInformation"]>
+    >()("additional_information_json"),
+    currencyExchange: jsonText<
+      NonNullable<TransactionInput["details"]["currencyExchange"]>
+    >()("currency_exchange_json"),
+    sourceIssues: jsonText<string[]>()("source_issues_json").notNull(),
+    provider:
+      jsonText<TransactionInput["details"]["provider"]>()(
+        "provider_json",
+      ).notNull(),
     firstSeenAt: text("first_seen_at").notNull(),
-    lastSeenAt: text("last_seen_at").notNull(),
-    lastSeenRunId: text("last_seen_run_id")
-      .notNull()
-      .references(() => syncRuns.id),
     version: bigint({ mode: "number" }).notNull(),
     supersededById: text("superseded_by_id").references(
       (): AnyPgColumn => transactions.id,
@@ -208,6 +252,58 @@ export const transactions = pgTable(
     index("transactions_status").on(table.status),
   ],
 );
+
+export const transactionObservations = pgTable("transaction_observations", {
+  transactionId: text("transaction_id")
+    .primaryKey()
+    .references(() => transactions.id),
+  lastSeenAt: text("last_seen_at").notNull(),
+  lastSeenRunId: text("last_seen_run_id")
+    .notNull()
+    .references(() => syncRuns.id),
+  sourceRefs:
+    jsonText<TransactionInput["details"]["sourceRefs"]>()(
+      "source_refs_json",
+    ).notNull(),
+});
+
+export const transactionReconciliation = pgTable("transaction_reconciliation", {
+  transactionId: text("transaction_id")
+    .primaryKey()
+    .references(() => transactions.id),
+  paymentContextConflicts: jsonText<
+    NonNullable<TransactionInput["details"]["paymentContextConflicts"]>
+  >()("payment_context_conflicts_json"),
+  pendingPostingCandidates: jsonText<string[]>()(
+    "pending_posting_candidates_json",
+  ),
+  rejectedPostingKeys: jsonText<string[]>()("rejected_posting_keys_json"),
+  providerIdentity: jsonText<
+    Record<string, import("../../domain/model.js").JsonValue>
+  >()("provider_identity_json"),
+  providerObservations: jsonText<
+    Record<string, import("../../domain/model.js").JsonValue>
+  >()("provider_observations_json"),
+  providerMonetaryEvidence: jsonText<
+    Record<string, import("../../domain/model.js").JsonValue>
+  >()("provider_monetary_evidence_json"),
+  providerBillingMonth: jsonText<
+    Record<string, import("../../domain/model.js").JsonValue>
+  >()("provider_billing_month_json"),
+  providerCurrencyMapping: jsonText<
+    Record<string, import("../../domain/model.js").JsonValue>
+  >()("provider_currency_mapping_json"),
+});
+
+export const transactionPostingLinks = pgTable("transaction_posting_links", {
+  transactionId: text("transaction_id")
+    .primaryKey()
+    .references(() => transactions.id),
+  postingLink:
+    jsonText<NonNullable<TransactionInput["details"]["postingLink"]>>()(
+      "posting_link_json",
+    ),
+});
 
 export const annotations = pgTable("annotations", {
   transactionId: text("transaction_id")
@@ -236,7 +332,7 @@ export const events = pgTable(
   (table) => [index("events_connection").on(table.connectionId, table.id)],
 );
 
-export type Transaction = typeof transactions.$inferSelect;
+export type { Transaction } from "../../domain/records.js";
 
 // Adapter-only ordinals and metadata never become fields of application records.
 type SameShape<A, B> = [A] extends [B]
@@ -251,18 +347,6 @@ export type PostgreSQLRowCompatibility = [
   Assert<SameShape<typeof accounts.$inferSelect, Account>>,
   Assert<SameShape<typeof cards.$inferSelect, Card>>,
   Assert<SameShape<typeof connections.$inferSelect, Connection>>,
-  Assert<
-    SameShape<
-      Omit<typeof syncRuns.$inferSelect, "ingestionOrder" | "metadata">,
-      Run
-    >
-  >,
-  Assert<
-    SameShape<
-      Omit<typeof transactions.$inferSelect, "ingestionOrder">,
-      StoredTransaction
-    >
-  >,
   Assert<SameShape<typeof annotations.$inferSelect, Annotation>>,
   Assert<SameShape<typeof events.$inferSelect, LedgerEvent>>,
 ];
@@ -304,11 +388,21 @@ export const refreshes = pgTable("refreshes", {
   startedAt: text("started_at"),
   finishedAt: text("finished_at"),
   requiresAttention: boolean("requires_attention").notNull(),
+  providerStopReason: text("provider_stop_reason", {
+    enum: PROVIDER_STOP_REASONS,
+  }),
+  hasAcceptedEvidence: boolean("has_accepted_evidence").notNull(),
   captures: bigint({ mode: "number" }).notNull(),
   unchanged: bigint({ mode: "number" }).notNull(),
   failures: bigint({ mode: "number" }).notNull(),
   created: bigint({ mode: "number" }).notNull(),
   updated: bigint({ mode: "number" }).notNull(),
+  observed: bigint("observed", { mode: "number" }).notNull(),
+  unchangedTransactions: bigint("unchanged_transactions", {
+    mode: "number",
+  }).notNull(),
+  unlisted: bigint("unlisted", { mode: "number" }).notNull(),
+
   failureCodes:
     jsonText<ReconciliationFailureCode[]>()("failure_codes_json").notNull(),
   failureReason: text("failure_reason", { enum: FAILURE_REASONS }),
@@ -326,6 +420,7 @@ export const refreshWindows = pgTable(
     rangeFrom: text("range_from").notNull(),
     rangeTo: text("range_to").notNull(),
     status: text({ enum: WINDOW_STATUSES }).notNull(),
+    hasAcceptedEvidence: boolean("has_accepted_evidence").notNull(),
   },
   (table) => [primaryKey({ columns: [table.refreshId, table.rangeFrom] })],
 );

@@ -9,7 +9,7 @@ export interface Migration {
 export class NewerSchemaError extends Error {
   constructor(version: number, latest: number) {
     super(
-      `Database schema is at migration ${version}, newer than this Fonds release (migration ${latest}); run a Fonds release that includes it`,
+      `Database schema is at migration ${version}, newer than this Fonds release (migration ${latest}); use a compatible release, or explicitly recreate an obsolete pre-release database`,
     );
     this.name = "NewerSchemaError";
   }

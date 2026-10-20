@@ -25,6 +25,39 @@ function audit(args: string[]) {
   );
 }
 
+function createArchive(db: DatabaseSync) {
+  db.exec(`
+    CREATE TABLE sync_runs (id INTEGER PRIMARY KEY, status TEXT, metadata_json TEXT, warnings_json TEXT);
+    CREATE TABLE sync_run_bodies (run_id INTEGER PRIMARY KEY, snapshot_json TEXT);
+  `);
+}
+
+function archiveRun(
+  db: DatabaseSync,
+  status: string,
+  snapshot: string,
+  warnings: string,
+) {
+  const decoded = JSON.parse(snapshot) as {
+    responses: Record<string, unknown>[];
+  };
+  const metadata = JSON.stringify({
+    ...decoded,
+    responses: decoded.responses.map(
+      ({ responseText: _body, ...response }) => response,
+    ),
+  });
+  const result = db
+    .prepare(
+      "INSERT INTO sync_runs (status,metadata_json,warnings_json) VALUES (?,?,?)",
+    )
+    .run(status, metadata, warnings);
+  db.prepare("INSERT INTO sync_run_bodies VALUES (?,?)").run(
+    result.lastInsertRowid,
+    snapshot,
+  );
+}
+
 /** Invented key text in any letter case, so a plausible field name cannot leak. */
 function expectNoSecrets(stdout: string): void {
   expect(stdout).not.toContain("SYNTHETIC_SECRET");
@@ -43,9 +76,7 @@ describe("value-free read-only CAL source audit", () => {
 
   it("counts recent/legacy/monthly occurrences and reports structure without source values", () => {
     const db = new DatabaseSync(path);
-    db.exec(
-      "CREATE TABLE sync_runs (status TEXT, snapshot_json TEXT, warnings_json TEXT)",
-    );
+    createArchive(db);
     const recent = JSON.parse(
       readFileSync(
         new URL("./fixtures/recent-01.json", import.meta.url),
@@ -97,13 +128,13 @@ describe("value-free read-only CAL source audit", () => {
         ],
       },
     };
-    const insert = db.prepare("INSERT INTO sync_runs VALUES (?,?,?)");
     for (const [value, kind] of [
       [recent, "recent"],
       [legacy, "history"],
       [monthly, "history"],
     ]) {
-      insert.run(
+      archiveRun(
+        db,
         "partial",
         JSON.stringify({
           responses: [
@@ -174,9 +205,7 @@ describe("value-free read-only CAL source audit", () => {
 
   it("separates catalog/no-data contracts and shares posted fixture types across envelopes", () => {
     const db = new DatabaseSync(path);
-    db.exec(
-      "CREATE TABLE sync_runs (status TEXT, snapshot_json TEXT, warnings_json TEXT)",
-    );
+    createArchive(db);
     const searchEndpoint =
       "https://api.cal-online.co.il/Transactions/api/filteredTransactions/getFilteredTransactions";
     const statementEndpoint =
@@ -228,7 +257,8 @@ describe("value-free read-only CAL source audit", () => {
       },
     ];
     for (const source of sources) {
-      db.prepare("INSERT INTO sync_runs VALUES (?,?,?)").run(
+      archiveRun(
+        db,
         "completed",
         JSON.stringify({
           responses: [
@@ -284,6 +314,35 @@ describe("value-free read-only CAL source audit", () => {
       report.fieldTypes["$.result.transArr[].cashAccountTrnAmt|number"],
     ).toBe(1);
     expect(report.fieldTypes["$.statusDescription|null"]).toBe(2);
+  });
+
+  it("reads released capture receipts without inventing source bodies", () => {
+    const db = new DatabaseSync(path);
+    createArchive(db);
+    db.prepare(
+      "INSERT INTO sync_runs (status,metadata_json,warnings_json) VALUES (?,?,?)",
+    ).run(
+      "completed",
+      JSON.stringify({
+        schemaVersion: 1,
+        responses: [
+          { accountKey: "SYNTHETIC_SECRET_ID", scope: { kind: "recent" } },
+        ],
+      }),
+      "[]",
+    );
+    db.close();
+    const result = audit(["--db", path]);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expectNoSecrets(result.stdout);
+    const report = JSON.parse(result.stdout);
+    expect(report.counts.runs).toBe(1);
+    expect(report.counts.invalid_run_metadata).toBeUndefined();
+    expect(report.counts.response_bodies_unavailable).toBe(1);
+    expect(report.counts.invalid_response_json_or_structure).toBeUndefined();
+    expect(report.counts.financial_row_occurrences).toBe(0);
+    expect(report.sourceRowOccurrences).toEqual({});
   });
 
   it("rejects missing databases and malformed arguments with value-free errors", () => {

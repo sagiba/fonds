@@ -21,7 +21,7 @@ import {
   type Database,
   openDatabase,
 } from "../../../src/storage/sqlite/database.js";
-import { syncRuns } from "../../../src/storage/sqlite/schema.js";
+import { syncRunBodies, syncRuns } from "../../../src/storage/sqlite/schema.js";
 
 type Row = Record<string, unknown>;
 
@@ -39,6 +39,7 @@ async function ingestCapture(
   const accountKey = isracardCardKey(capture.card);
   return db.ingestRun(
     {
+      debugArchiveDays: 2,
       connectionId: "synthetic-isracard",
       runId: `synthetic-review-${index}`,
       responses: [
@@ -316,18 +317,14 @@ describe("Isracard extraction", () => {
       saleName: "Synthetic seasonal offer",
       supplierId: "SYNTHETIC-SUPPLIER",
       walletPayName: "Synthetic wallet label",
-      isError: [
-        "synthetic-unclassified-first",
-        "synthetic-unclassified-second",
-      ],
     });
+    expect(discount.details.provider.isracard!.detail).not.toHaveProperty(
+      "isError",
+    );
     expect(discount.details.provider.isracard!.rows).toContainEqual(
       expect.objectContaining({
-        dealsInbound: "Synthetic domestic listing",
-        isShowLinkForSupplierDetails: "synthetic-unmapped",
         kodMatbeaMekori: "SYNTHETIC-CURRENCY-CODE",
         purchaseDate: "15/06/2040",
-        solek: "SYNTHETIC-CLEARER",
       }),
     );
     const recurring = result.transactions.find(
@@ -619,7 +616,20 @@ describe("Isracard extraction", () => {
       expect(updated?.annotation?.data.notes).toBe(
         "Synthetic time correction note",
       );
-      expect(updated?.version).toBe(original.version);
+      expect(updated?.version).toBe(original.version + 1);
+      expect(
+        (await db.listEvents()).find(
+          (event) =>
+            event.type === "transaction.updated" &&
+            event.transactionId === original.id,
+        ),
+      ).toMatchObject({
+        before: { transactionDateTime: "2040-06-11T12:30:00" },
+        after: {
+          transactionDateTime: "2040-06-11T13:45:00",
+          providerEvidence: expect.any(Array),
+        },
+      });
 
       capture.mode = "history";
       updateDigital(capture, (rows) => {
@@ -640,7 +650,8 @@ describe("Isracard extraction", () => {
       });
       await ingestCapture(db, capture, 3);
       expect(
-        (await db.getTransaction(original.id))?.details.transactionDateTime,
+        (await db.getTransaction(original.id))?.details.transactionDateTime ??
+          null,
       ).toBeNull();
       expect(
         (await db.getTransaction(original.id))?.annotation?.data.notes,
@@ -719,12 +730,10 @@ describe("Isracard extraction", () => {
     const row = extract(capture).transactions[0]!;
     expect(row.sourceKey).toContain("9007199254740993123");
     expect(row.amountMinor).toBe(-29);
-    expect(row.details.provider.isracard!.observations).toMatchObject([
+    expect(row.details.provider.isracard!.rows).toMatchObject([
       {
-        row: {
-          billingAmount: "0.2900",
-          seqVoucherNumber: "9007199254740993123",
-        },
+        billingAmount: "0.2900",
+        seqVoucherNumber: "9007199254740993123",
       },
     ]);
   });
@@ -1469,9 +1478,9 @@ describe("Isracard extraction", () => {
       expect(await db.getTotals()).toMatchObject({
         totals: [{ currency: "USD", amountMinor: -825 }],
       });
-      const runs = await db.orm.select().from(syncRuns).all();
+      const runs = await db.orm.select().from(syncRunBodies).all();
       const archived = JSON.parse(
-        runs.find((run) => run.id === "synthetic-review-1")!.snapshot
+        runs.find((run) => run.runId === "synthetic-review-1")!.snapshot
           .responses[0]!.responseText,
       ) as IsracardCapture;
       expect(archived.responses.legacy).toBe(capture.responses.legacy);
@@ -2058,9 +2067,11 @@ describe("Isracard extraction", () => {
           expect(result.status).not.toBe("completed");
         }
         const [run] = await db.orm.select().from(syncRuns).all();
-        expect(run!.snapshot.responses[0]!.responseText).toBe(source);
+        const [body] = await db.orm.select().from(syncRunBodies).all();
+        expect(run!.snapshot.responses[0]).not.toHaveProperty("responseText");
+        expect(body!.snapshot.responses[0]!.responseText).toBe(source);
         const archived = JSON.parse(
-          run!.snapshot.responses[0]!.responseText,
+          body!.snapshot.responses[0]!.responseText,
         ) as IsracardCapture;
         expect(archived.responses.digital).toBe(capture.responses.digital);
         expect(run!.coverage).toContainEqual(
@@ -2224,6 +2235,7 @@ describe("Isracard extraction", () => {
         const accountKey = isracardCardKey(capture.card);
         await db.ingestRun(
           {
+            debugArchiveDays: 2,
             connectionId: "synthetic-isracard",
             runId: `synthetic-isracard-run-${index}`,
             responses: [

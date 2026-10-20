@@ -105,7 +105,7 @@ export const currencyExchangeSchema = z
 
 export type CurrencyExchange = z.infer<typeof currencyExchangeSchema>;
 
-/** Payment context: enrichment that updates quietly. */
+/** Payment context retained as versioned transaction content. */
 export const paymentContextFields = [
   "cardPresent",
   "authorizationMethod",
@@ -115,6 +115,15 @@ export const paymentContextFields = [
 ] as const;
 
 export type PaymentContextField = (typeof paymentContextFields)[number];
+
+/** Adapter-derived state is stored separately from retained source content. */
+export const providerStateFields = [
+  "identity",
+  "observations",
+  "monetaryEvidence",
+  "billingMonth",
+  "currencyMapping",
+] as const;
 
 const sourceDetailsSchema = z
   .object({

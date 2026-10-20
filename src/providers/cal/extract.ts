@@ -19,6 +19,7 @@ import {
   calPaymentContext,
   calProviderTransactionCode,
 } from "./enrichment.js";
+import { calRowEvidence, retainCalEvidence } from "./evidence.js";
 import { calHasUnsupportedPagination } from "./pagination.js";
 import { CAL_EMPTY_SEARCH_DESCRIPTION } from "./search.js";
 import { CAL_ENDPOINTS } from "./transport.js";
@@ -160,7 +161,7 @@ function integerToken(value: unknown): string | null {
   }
 }
 
-/** Numeric tokens become strings in detail JSON; the original response remains the source of truth. */
+/** Keep source numeric lexemes exact when building retained JSON evidence. */
 function json(value: unknown): JsonValue {
   if (isLosslessNumber(value)) {
     return value.value;
@@ -509,7 +510,7 @@ function extractGroup(
     runId: context.runId,
     path,
   }));
-  details.provider.cal = { rows: rows.map((item) => json(item)) };
+  details.provider.cal = { rows: rows.map(calRowEvidence) };
   details.merchant = {
     address: text(row.merchantAddress),
     phone: text(row.merchantPhoneNo),
@@ -548,6 +549,7 @@ function extractGroup(
       paymentHistory,
     };
   }
+  details.provider.cal = retainCalEvidence(details.provider.cal);
   const code = token(
     status === "posted" ? row.transactionTypeCode : row.trnTypeCode,
   );

@@ -262,7 +262,7 @@ export default defineConfig([
     rules: {
       ...restrictedImports([
         parentImports(
-          "\\.\\./(?:application|domain)/|(?:store|run-evidence|sql|migrations|collection-lease)\\.js$",
+          "\\.\\./(?:application|domain)/|(?:store|run-evidence|sql|migrations|collection-lease|transaction-codec|scalar-text|statements)\\.js$",
         ),
         neonImports,
       ]),
@@ -291,6 +291,8 @@ export default defineConfig([
       "src/storage/run-evidence.ts",
       "src/storage/sql.ts",
       "src/storage/statements.ts",
+      "src/storage/transaction-codec.ts",
+      "src/storage/scalar-text.ts",
     ],
     rules: {
       ...restrictedImports([
@@ -346,7 +348,7 @@ export default defineConfig([
             "SQLite statements may import only the driver-free local schema and shared statements.",
         },
         parentImports(
-          "\\.\\./(?:application|domain)/|(?:run-evidence|sql)\\.js$",
+          "\\.\\./(?:application|domain)/|(?:run-evidence|sql|transaction-codec|statements)\\.js$",
         ),
       ]),
       "no-restricted-globals": nodeGlobals,
@@ -363,7 +365,7 @@ export default defineConfig([
             "The shared SQLite schema may import only its dialect and domain types.",
         },
         {
-          regex: "^\\.(?!\\./\\.\\./domain/)",
+          regex: "^\\.(?!\\./\\.\\./domain/|\\./scalar-text\\.js$)",
           message: "Keep native SQLite modules out of the shared schema.",
         },
       ]),

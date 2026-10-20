@@ -111,7 +111,7 @@ npm run benchmark:reconciliation -- --backend libsql
 npm run benchmark:reconciliation -- --backend postgres
 ```
 
-Each command measures three unchanged refreshes for 1,000/10,000 rows and 1/500 prior runs. Historical captures preserve the retained metadata and normalized timestamps while replacing only the synthetic response body with `[]`. Setup and cleanup are outside timing; cleanup runs on failure too. libSQL here uses the local file driver; actual HTTP behavior, contention and 64 MiB captures have separate acceptance tests. Compare the same script and fixtures on both revisions. Query budgets and these local timings do not certify managed-service latency or quotas.
+Each command measures three unchanged refreshes for 1,000/10,000 rows and 1/500 prior runs. Historical captures duplicate body-free receipts and normalized timestamps without copying source bodies. Setup and cleanup are outside timing; cleanup runs on failure too. libSQL here uses the local file driver; actual HTTP behavior, contention and 64 MiB captures have separate acceptance tests. Compare the same script and fixtures on both revisions. Query budgets and these local timings do not certify managed-service latency or quotas.
 
 ## Clean up
 

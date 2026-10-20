@@ -18,7 +18,7 @@ import { FinancialPlan } from "../../src/domain/plans/state.js";
 import { openDatabase } from "../../src/storage/sqlite/database.js";
 import { initializeTursoDatabase } from "../../src/storage/sqlite/initialize-libsql.js";
 import { sqliteMigrations } from "../../src/storage/sqlite/migration.js";
-import { syncRuns } from "../../src/storage/sqlite/schema.js";
+import { syncRunBodies } from "../../src/storage/sqlite/schema.js";
 import {
   applyPlan,
   connection,
@@ -29,7 +29,7 @@ import { row, synthetic } from "../helpers/storage-harness.js";
 
 const initialMigration = sqliteMigrations[0]!.sql;
 
-it("creates exactly the seven financial tables plus credentials, schedule, Events, collection lease and refresh tables and enables foreign keys", async () => {
+it("creates the ledger, evidence and operational tables and enables foreign keys", async () => {
   const db = await openDatabase(":memory:");
   try {
     expect(
@@ -44,6 +44,7 @@ it("creates exactly the seven financial tables plus credentials, schedule, Event
       { name: "cards" },
       { name: "collection_leases" },
       { name: "connections" },
+      { name: "deferred_evidence" },
       { name: "event_subscriptions" },
       { name: "events" },
       { name: "provider_credentials" },
@@ -51,7 +52,11 @@ it("creates exactly the seven financial tables plus credentials, schedule, Event
       { name: "refreshes" },
       { name: "scheduled_collections" },
       { name: "settings" },
+      { name: "sync_run_bodies" },
       { name: "sync_runs" },
+      { name: "transaction_observations" },
+      { name: "transaction_posting_links" },
+      { name: "transaction_reconciliation" },
       { name: "transactions" },
     ]);
     expect((await db.client.execute("PRAGMA foreign_keys")).rows[0]?.[0]).toBe(
@@ -374,6 +379,7 @@ it("retains a full 64 MiB source response through local backup and restore", asy
     await source.ingestRun(
       {
         runId: "large",
+        debugArchiveDays: 2,
         connectionId: "large",
         responses: [
           {
@@ -390,8 +396,8 @@ it("retains a full 64 MiB source response through local backup and restore", asy
     await source.backup(filename);
     restored = await openDatabase(filename);
     const archived = await restored.orm
-      .select({ snapshot: syncRuns.snapshot })
-      .from(syncRuns)
+      .select({ snapshot: syncRunBodies.snapshot })
+      .from(syncRunBodies)
       .get();
     const retained = archived?.snapshot.responses[0]?.responseText;
     expect(retained?.length).toBe(64 * 1024 * 1024);

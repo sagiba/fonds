@@ -202,7 +202,7 @@ describe.each(backends)("%s billed lines", (backend) => {
     );
     expect(await capture(corrected, 2)).toMatchObject({
       created: 0,
-      updated: 1,
+      updated: 2,
     });
     expect(await db.getTransaction(before.id)).toMatchObject({
       version: 2,
@@ -217,7 +217,17 @@ describe.each(backends)("%s billed lines", (backend) => {
     );
     expect(
       updates.map((event) => presentWireEvent(event).changedFields),
-    ).toEqual([["amount", "billingDate"]]);
+    ).toEqual([["amount", "billingDate", "evidence"]]);
+    expect(
+      (await db.listEvents())
+        .filter(
+          (event) =>
+            event.type === "transaction.updated" &&
+            event.transactionId === before.purchaseId,
+        )
+        .map(presentWireEvent)
+        .map((event) => event.changedFields),
+    ).toEqual([["evidence"]]);
   });
 
   it("keeps duplicate ordinals as ambiguous occurrences outside totals", async () => {
@@ -257,8 +267,13 @@ describe.each(backends)("%s billed lines", (backend) => {
     await capture(payments(rounding, 1, 3), 2);
     expect(await db.getTransaction(purchase.id)).toMatchObject({
       amountMinor: -10000,
-      version: 1,
+      version: 2,
     });
+    expect(await capture(payments(rounding, 2), 3)).toMatchObject({
+      created: 0,
+      updated: 0,
+    });
+    expect((await db.getTransaction(purchase.id))!.version).toBe(2);
     const lines = (await db.listTransactions()).filter(
       (item) => item.purchaseId === purchase.id,
     );
@@ -303,7 +318,7 @@ describe.each(backends)("%s billed lines", (backend) => {
     expect(conflicted).toMatchObject({
       installmentCount: 3,
       billingDate: null,
-      version: 1,
+      version: 2,
       reviewRequired: true,
     });
     expect(conflicted.sourceIssues).toContain("conflicting_installment_plan");
@@ -330,7 +345,7 @@ describe.each(backends)("%s billed lines", (backend) => {
     expect(resolved).toMatchObject({
       installmentCount: 1,
       billingDate: "2040-06-10",
-      version: 2,
+      version: 3,
     });
     expect(resolved.sourceIssues).not.toContain("conflicting_installment_plan");
     expect(await totals()).toEqual(once);

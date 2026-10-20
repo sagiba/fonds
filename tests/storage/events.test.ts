@@ -27,6 +27,9 @@ describe.skipIf(!postgresUrl)("durable PostgreSQL event subscriptions", () => {
   let db: ReturnType<typeof openPostgresDatabase>;
   let databaseName: string;
   let store: ReturnType<typeof createPostgresEventStore>;
+  let financialTables: { table_name: string }[];
+  const financialTableQuery =
+    "SELECT table_name FROM information_schema.tables WHERE table_schema='financial' AND table_type='BASE TABLE' ORDER BY table_name";
   const now = Date.parse("2040-01-01T00:00:00Z");
 
   beforeEach(async () => {
@@ -43,6 +46,9 @@ describe.skipIf(!postgresUrl)("durable PostgreSQL event subscriptions", () => {
     });
     await initializePostgresDatabase(db.pool);
     await initializePostgresDatabase(db.pool);
+    financialTables = (
+      await pool.query<{ table_name: string }>(financialTableQuery)
+    ).rows;
     store = createPostgresEventStore(pool, db);
   });
 
@@ -86,15 +92,9 @@ describe.skipIf(!postgresUrl)("durable PostgreSQL event subscriptions", () => {
     expect(
       await createPostgresEventStore(otherPool, db).get("sub-synthetic"),
     ).toEqual(saved);
-    // The seven financial tables, the schedule, lease and refresh tables and
-    // the migration versions, nothing more.
-    expect(
-      (
-        await pool.query(
-          "SELECT count(*)::int AS count FROM information_schema.tables WHERE table_schema='financial' AND table_type='BASE TABLE'",
-        )
-      ).rows[0].count,
-    ).toBe(13);
+    expect((await pool.query(financialTableQuery)).rows).toEqual(
+      financialTables,
+    );
     expect(
       (await pool.query("SELECT current_schema() AS schema")).rows[0].schema,
     ).toBe("public");

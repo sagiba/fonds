@@ -5,18 +5,20 @@ import {
   collectFromStore,
   type CollectionSummary,
 } from "../application/collection.js";
-import type {
-  CollectionLock,
-  LockedCollectionStore,
+import {
+  type CollectionLock,
+  type LockedCollectionStore,
+  ManualRecoveryRequiredError,
+  RetryableRecoveryError,
 } from "../application/collection-lock.js";
 import type { InternalStore } from "../application/financial-store.js";
 import {
   emptyCounts,
   isActive,
   monthWindows,
+  PROVIDER_STOP_REASONS,
   type Refresh,
   REFRESH_MAX_AGE_MS,
-  type RefreshCounts,
   type RefreshStartResult,
   type RefreshTrigger,
   skippedRefresh,
@@ -27,6 +29,11 @@ import type {
   MissedOccurrences,
   ScheduledOccurrence,
 } from "../application/scheduled-collections.js";
+import {
+  elapsedMs,
+  safeLog,
+  syncDiagnostics,
+} from "../application/sync-diagnostics.js";
 import { NotFoundError } from "../domain/errors.js";
 import type { CollectionFailure } from "../domain/records.js";
 import type {
@@ -51,17 +58,9 @@ const RETRY_DELAYS_MS = [2_000, 4_000, 8_000, 16_000, 32_000];
 const RECOVERY_INTERVAL_MS = 30_000;
 
 /** Failures after which no further window of the refresh is requested. */
-const STOPPING_CODES: ReadonlySet<CollectionFailure["code"]> = new Set([
-  "authentication_failed",
-  "authentication_challenge",
-  "rate_limited",
-  "budget_exhausted",
-]);
-/** The provider needs the owner: ordinary refreshes stop until an operator retry. */
-const ATTENTION_CODES: ReadonlySet<CollectionFailure["code"]> = new Set([
-  "authentication_failed",
-  "authentication_challenge",
-]);
+const STOPPING_CODES: ReadonlySet<CollectionFailure["code"]> = new Set(
+  PROVIDER_STOP_REASONS,
+);
 
 export interface RefreshStart {
   trigger: RefreshTrigger;
@@ -91,19 +90,10 @@ export interface RefreshServiceOptions {
   /** Waits before each retry of a held lease or a failed execution. */
   retryDelaysMs?: readonly number[];
   log?: (entry: object) => void;
+  debugArchiveDays?: number;
 }
 
 type Outcome = "done" | "yielded" | "busy" | "interrupted";
-
-function add(counts: RefreshCounts, summary: CollectionSummary) {
-  return {
-    captures: counts.captures + summary.captures,
-    unchanged: counts.unchanged + summary.unchanged,
-    failures: counts.failures + summary.failures,
-    created: counts.created + summary.created,
-    updated: counts.updated + summary.updated,
-  };
-}
 
 /** Completed when every window completed; failed when none yielded evidence. */
 function rangeStatus(statuses: readonly WindowStatus[]) {
@@ -144,8 +134,10 @@ function watched(
  */
 export function createRefreshService(options: RefreshServiceOptions) {
   const { store } = options;
-  const log =
-    options.log ?? ((entry: object) => console.info(JSON.stringify(entry)));
+  const log = safeLog(
+    options.log ?? ((entry: object) => console.info(JSON.stringify(entry))),
+  );
+  const emit = syncDiagnostics(log);
   const shutdown = options.signal ?? new AbortController().signal;
   /** Executions in this process, by refresh, until each settles. */
   const running = new Map<string, Promise<void>>();
@@ -179,6 +171,8 @@ export function createRefreshService(options: RefreshServiceOptions) {
       startedAt: null,
       finishedAt: null,
       requiresAttention: false,
+      hasAcceptedEvidence: false,
+      providerStopReason: null,
       counts: emptyCounts(),
       failureCodes: [],
       failureReason: null,
@@ -240,10 +234,42 @@ export function createRefreshService(options: RefreshServiceOptions) {
     if (cannotFinishUnit()) {
       return "yielded";
     }
+    const statuses = new Map(
+      current.windows.map((window) => [window.from, window.status]),
+    );
+    let activeWindow = current.windows.find(
+      (window) => window.status === "running",
+    )?.from;
+    let hasAcceptedEvidence = Boolean(current.hasAcceptedEvidence);
+    const acceptedWindows = new Set(
+      current.windows
+        .filter((window) => window.hasAcceptedEvidence)
+        .map((window) => window.from),
+    );
+    let activeWindowAccepted =
+      activeWindow !== undefined && acceptedWindows.has(activeWindow);
+    const finishActiveWindow = () => {
+      if (!activeWindow || statuses.get(activeWindow) !== "running") {
+        return undefined;
+      }
+      const status = activeWindowAccepted
+        ? ("partial" as const)
+        : ("failed" as const);
+      statuses.set(activeWindow, status);
+      return { from: activeWindow, status };
+    };
+    const failureStatus = () =>
+      current.range
+        ? rangeStatus([...statuses.values()])
+        : hasAcceptedEvidence
+          ? ("partial" as const)
+          : ("failed" as const);
     const now = new Date().toISOString();
     if (Date.now() - Date.parse(current.createdAt) > REFRESH_MAX_AGE_MS) {
+      const window = finishActiveWindow();
       await locked.updateRefresh(id, {
         status: "failed",
+        ...(window && { window }),
         failureReason: "expired",
         startedAt: current.startedAt ?? now,
         finishedAt: now,
@@ -256,11 +282,11 @@ export function createRefreshService(options: RefreshServiceOptions) {
       return "done";
     }
     // A provider stop already recorded is final; it is never requested again.
-    if (current.requiresAttention) {
+    if (current.requiresAttention || current.providerStopReason) {
+      const window = finishActiveWindow();
       await locked.updateRefresh(id, {
-        status: current.range
-          ? rangeStatus(current.windows.map((window) => window.status))
-          : "failed",
+        status: failureStatus(),
+        ...(window && { window }),
         startedAt: current.startedAt ?? now,
         finishedAt: now,
       });
@@ -268,36 +294,76 @@ export function createRefreshService(options: RefreshServiceOptions) {
     }
     let counts = current.counts;
     let failureCodes = current.failureCodes;
-    let requiresAttention = false;
+    let requiresAttention: boolean = current.requiresAttention;
+    let providerStopped = Boolean(current.providerStopReason);
+    const reloadProgress = async () => {
+      const persisted = await locked.getRefresh(id);
+      if (!persisted) {
+        throw new Error("Refresh progress disappeared");
+      }
+      counts = persisted.counts;
+      failureCodes = persisted.failureCodes;
+      requiresAttention = persisted.requiresAttention;
+      hasAcceptedEvidence = Boolean(persisted.hasAcceptedEvidence);
+      providerStopped = Boolean(persisted.providerStopReason);
+      for (const window of persisted.windows) {
+        statuses.set(window.from, window.status);
+        if (window.hasAcceptedEvidence) {
+          acceptedWindows.add(window.from);
+        }
+      }
+      activeWindowAccepted =
+        activeWindow !== undefined && acceptedWindows.has(activeWindow);
+    };
+    let recovering = false;
+    let recoveryStarted = 0;
     await locked.updateRefresh(id, {
       status: "running",
       startedAt: current.startedAt ?? now,
     });
     let status: "completed" | "partial" | "failed";
+    let failedWindow: ReturnType<typeof finishActiveWindow>;
     try {
       if (!target) {
         throw new Error("Refresh connection cannot be collected");
+      }
+      recoveryStarted = performance.now();
+      recovering = true;
+      emit({
+        event: "fonds_sync",
+        refreshId: id,
+        stage: "recovery",
+        outcome: "started",
+      });
+      const replayed = await locked.recoverPendingRuns(target.adapter, log, id);
+      await reloadProgress();
+      recovering = false;
+      emit({
+        event: "fonds_sync",
+        refreshId: id,
+        stage: "recovery",
+        outcome: "completed",
+        reason: "pending_runs_recovered",
+        durationMs: elapsedMs(recoveryStarted),
+        counts: { recoveredRuns: replayed.length },
+      });
+      if (requiresAttention || providerStopped) {
+        const window = finishActiveWindow();
+        await locked.updateRefresh(id, {
+          status: failureStatus(),
+          ...(window && { window }),
+          finishedAt: new Date().toISOString(),
+          counts,
+          failureCodes,
+          requiresAttention,
+        });
+        return "done";
       }
       // Credentials are read only once this execution holds the lease.
       const collector = await target.collector();
       if (collector.provider !== target.adapter.provider) {
         throw new Error("Collector does not match the adapter");
       }
-      const replayed = await locked.recoverPendingRuns(target.adapter);
-      if (replayed.length) {
-        counts = replayed.reduce(
-          (total, result) => ({
-            ...total,
-            created: total.created + result.created,
-            updated: total.updated + result.updated,
-          }),
-          counts,
-        );
-        await locked.updateRefresh(id, { counts });
-      }
-      const statuses = new Map(
-        current.windows.map((window) => [window.from, window.status]),
-      );
       const units = current.range
         ? current.windows.filter(
             (window) =>
@@ -311,6 +377,9 @@ export function createRefreshService(options: RefreshServiceOptions) {
         }
         signal.throwIfAborted();
         if (window) {
+          activeWindow = window.from;
+          activeWindowAccepted = acceptedWindows.has(window.from);
+          statuses.set(window.from, "running");
           await locked.updateRefresh(id, {
             window: { from: window.from, status: "running" },
           });
@@ -321,6 +390,10 @@ export function createRefreshService(options: RefreshServiceOptions) {
           {
             connectionId: current.connectionId,
             refreshId: id,
+            onDiagnostic: log,
+            ...(options.debugArchiveDays !== undefined && {
+              debugArchiveDays: options.debugArchiveDays,
+            }),
             signal: AbortSignal.any([
               signal,
               AbortSignal.timeout(UNIT_DEADLINE_MS),
@@ -329,22 +402,22 @@ export function createRefreshService(options: RefreshServiceOptions) {
           },
           watched(collector, (code) => {
             stop ||= STOPPING_CODES.has(code);
-            requiresAttention ||= ATTENTION_CODES.has(code);
           }),
           target.adapter,
         );
-        // An interrupted unit is redone whole when the refresh resumes.
+        await reloadProgress();
+        // Financial commits already own these counts; a retried unit creates new
+        // observations without charging its previous application twice.
         if (signal.aborted) {
           return "interrupted";
         }
-        counts = add(counts, summary);
-        failureCodes = [
-          ...new Set([...failureCodes, ...(summary.failureCodes ?? [])]),
-        ].sort();
+        const accepted = window ? activeWindowAccepted : hasAcceptedEvidence;
+        const unitStatus =
+          summary.status === "failed" && accepted ? "partial" : summary.status;
         if (window) {
-          statuses.set(window.from, summary.status);
+          statuses.set(window.from, unitStatus);
         } else {
-          recent = summary.status;
+          recent = unitStatus;
         }
         // A stop finishes the refresh in the same write as its checkpoint,
         // so no resume requests the provider again.
@@ -353,32 +426,66 @@ export function createRefreshService(options: RefreshServiceOptions) {
           failureCodes,
           requiresAttention,
           ...(window && {
-            window: { from: window.from, status: summary.status },
+            window: { from: window.from, status: unitStatus },
           }),
           ...(stop
             ? {
                 status: current.range
                   ? rangeStatus([...statuses.values()])
-                  : summary.status,
+                  : unitStatus,
                 finishedAt: new Date().toISOString(),
               }
             : {}),
         });
+        activeWindow = undefined;
+        activeWindowAccepted = false;
         if (stop) {
           return "done";
         }
       }
       status = current.range ? rangeStatus([...statuses.values()]) : recent;
-    } catch {
-      if (signal.aborted) {
+    } catch (error) {
+      // Some captures may have committed before a later capture or recovery failed.
+      await reloadProgress();
+      const manualRecovery = error instanceof ManualRecoveryRequiredError;
+      if (manualRecovery) {
+        requiresAttention = true;
+      }
+      const interrupted = signal.aborted && !manualRecovery;
+      if (recovering) {
+        emit({
+          event: "fonds_sync",
+          refreshId: id,
+          stage: "recovery",
+          outcome: interrupted ? "interrupted" : "failed",
+          reason: manualRecovery
+            ? "manual_recovery_required"
+            : interrupted
+              ? "cancelled"
+              : "persistence_failure",
+          requiresAttention,
+          failureCategory: manualRecovery
+            ? error.failureCategory
+            : interrupted
+              ? "execution"
+              : "persistence",
+          durationMs: elapsedMs(recoveryStarted),
+        });
+      }
+      if (interrupted) {
         return "interrupted";
       }
+      if (error instanceof RetryableRecoveryError) {
+        throw error;
+      }
       // Raw provider and driver errors can hold financial data or credentials.
-      status = "failed";
+      failedWindow = finishActiveWindow();
+      status = failureStatus();
       counts = { ...counts, failures: Math.max(1, counts.failures) };
     }
     await locked.updateRefresh(id, {
       status,
+      ...(failedWindow && { window: failedWindow }),
       finishedAt: new Date().toISOString(),
       counts,
       failureCodes,
@@ -388,6 +495,13 @@ export function createRefreshService(options: RefreshServiceOptions) {
   }
 
   async function execute(id: string, deadline: number | undefined) {
+    const started = performance.now();
+    emit({
+      event: "fonds_sync",
+      refreshId: id,
+      stage: "refresh",
+      outcome: "started",
+    });
     const refresh = await store.getRefresh(id);
     if (!refresh || !isActive(refresh)) {
       return "done" as const;
@@ -415,6 +529,33 @@ export function createRefreshService(options: RefreshServiceOptions) {
       }
     }
     const final = await store.getRefresh(id);
+    emit({
+      event: "fonds_sync",
+      refreshId: id,
+      stage: "refresh",
+      outcome:
+        outcome === "done"
+          ? final?.status === "partial"
+            ? "partial"
+            : final?.status === "failed"
+              ? "failed"
+              : "completed"
+          : outcome,
+      durationMs: elapsedMs(started),
+      ...(outcome === "busy" && { reason: "lease_busy" }),
+      ...(outcome === "yielded" && { reason: "budget" }),
+      ...(outcome === "interrupted" && { reason: "cancelled" }),
+      counts: {
+        observed: final?.counts.observed,
+        unchangedTransactions: final?.counts.unchangedTransactions,
+        absent: final?.counts.unlisted,
+        captures: final?.counts.captures,
+        unchanged: final?.counts.unchanged,
+        created: final?.counts.created,
+        changed: final?.counts.updated,
+        failures: final?.counts.failures,
+      },
+    });
     log({
       event: "fonds_refresh",
       provider: target?.adapter.provider ?? null,
@@ -435,6 +576,13 @@ export function createRefreshService(options: RefreshServiceOptions) {
     let outcome: Outcome | "error" = "error";
     for (let attempt = 0; attempt <= retries.length; attempt++) {
       if (attempt > 0) {
+        emit({
+          event: "fonds_sync",
+          refreshId: id,
+          stage: "refresh",
+          outcome: "started",
+          reason: "retry",
+        });
         await delay(retries[attempt - 1]!, undefined, {
           signal: shutdown,
         }).catch(() => {});
@@ -443,6 +591,14 @@ export function createRefreshService(options: RefreshServiceOptions) {
         break;
       }
       outcome = await execute(id, deadline).catch(() => {
+        emit({
+          event: "fonds_sync",
+          refreshId: id,
+          stage: "refresh",
+          outcome: "failed",
+          reason: "execution_failed",
+          failureCategory: "execution",
+        });
         log({ event: "fonds_refresh_failed" });
         return "error" as const;
       });
@@ -650,11 +806,15 @@ export async function runOperatorRefresh(input: {
   connectionId?: string | undefined;
   range?: CollectionRange | undefined;
   log?: (entry: object) => void;
+  debugArchiveDays?: number;
 }) {
   const service = createRefreshService({
     store: input.store,
     targets: input.targets,
     log: input.log ?? (() => {}),
+    ...(input.debugArchiveDays !== undefined && {
+      debugArchiveDays: input.debugArchiveDays,
+    }),
   });
   const start: RefreshStart = {
     trigger: "manual",

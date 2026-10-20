@@ -16,6 +16,10 @@ import type {
 import type { EventSubscriptionStore } from "../../src/application/events.js";
 import type { InternalStore } from "../../src/application/financial-store.js";
 import { emptyDetails, type TransactionInput } from "../../src/domain/model.js";
+import {
+  evidenceObject,
+  scalarFields,
+} from "../../src/domain/provider-evidence.js";
 import type { SourceAdapter } from "../../src/domain/source-adapter.js";
 import { createPostgresEventStore } from "../../src/storage/postgres/events.js";
 import {
@@ -67,6 +71,38 @@ export type Harness = InternalStore &
     ): Promise<Record<string, unknown>[]>;
     close(): Promise<void>;
   };
+
+/** Synthetic ID-ordering fixtures must move the joined records with their parent. */
+export async function renameTransactionFixture(
+  db: Harness,
+  previousId: string,
+  id: string,
+) {
+  const tables = [
+    "transaction_observations",
+    "transaction_reconciliation",
+    "transaction_posting_links",
+  ];
+  const retained = await Promise.all(
+    tables.map((table) =>
+      db.raw(`SELECT * FROM ${table} WHERE transaction_id = ?`, [previousId]),
+    ),
+  );
+  for (const table of tables) {
+    await db.raw(`DELETE FROM ${table} WHERE transaction_id = ?`, [previousId]);
+  }
+  await db.raw("UPDATE transactions SET id = ? WHERE id = ?", [id, previousId]);
+  for (const [index, table] of tables.entries()) {
+    for (const row of retained[index]!) {
+      row.transaction_id = id;
+      const columns = Object.keys(row);
+      await db.raw(
+        `INSERT INTO ${table} (${columns.join(",")}) VALUES (${columns.map(() => "?").join(",")})`,
+        columns.map((column) => row[column]),
+      );
+    }
+  }
+}
 
 export type Backend =
   "sqlite" | "libsql-local" | "libsql-http" | "postgres" | "d1-local";
@@ -307,6 +343,20 @@ export function row(
 export const synthetic: SourceAdapter = {
   provider: "cal",
   parserVersion: "synthetic-v1",
+  retainProviderEvidence: (value) =>
+    evidenceObject(value, {
+      retained: {
+        comments: [scalarFields("key value text label")],
+        paymentHistory: [scalarFields("date num amount currency label")],
+      },
+    }),
+  projectProviderState: (value) =>
+    evidenceObject(value, {
+      identity: {
+        ...scalarFields("baseKey occurrenceCount"),
+        currentRows: ["scalar"],
+      },
+    }),
   extract: (text) => ({
     transactions: JSON.parse(text) as TransactionInput[],
     partitions: [

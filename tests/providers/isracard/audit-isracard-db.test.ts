@@ -560,6 +560,7 @@ async function buildArchive(path: string): Promise<void> {
     await db.ensureConnection({ id: "synthetic-isr", provider: "isracard" });
     await db.ingestRun(
       {
+        debugArchiveDays: 2,
         runId: "synthetic-run-1",
         connectionId: "synthetic-isr",
         responses: [
@@ -571,6 +572,7 @@ async function buildArchive(path: string): Promise<void> {
     );
     await db.ingestRun(
       {
+        debugArchiveDays: 2,
         runId: "synthetic-run-2",
         connectionId: "synthetic-isr",
         responses: [response(laterCapture)],
@@ -591,6 +593,7 @@ async function buildArchive(path: string): Promise<void> {
     );
     await db.ingestRun(
       {
+        debugArchiveDays: 2,
         runId: "synthetic-run-3",
         connectionId: "synthetic-isr",
         responses: [],
@@ -977,7 +980,7 @@ describe("value-free read-only Isracard archive profile", () => {
       applied: { applied: 3 },
       versions: {
         "collector|offline-v1": 3,
-        "parser|isracard-v12": 3,
+        "parser|isracard-v13": 3,
       },
     });
     expect(profile.archives[0].schema.unlistedTables).toBe(0);
@@ -1287,15 +1290,27 @@ describe("value-free read-only Isracard archive profile", () => {
         }
       }
       const db = new DatabaseSync(target);
+      const separateBodies = !!db
+        .prepare(
+          "SELECT name FROM sqlite_schema WHERE type='table' AND name='sync_run_bodies'",
+        )
+        .get();
       const rows = db
-        .prepare("SELECT rowid, snapshot_json, warnings_json FROM sync_runs")
+        .prepare(
+          separateBodies
+            ? "SELECT b.rowid, b.snapshot_json, r.warnings_json, r.id FROM sync_run_bodies b JOIN sync_runs r ON r.id=b.run_id"
+            : "SELECT rowid, id, snapshot_json, warnings_json FROM sync_runs",
+        )
         .all() as {
         rowid: number;
+        id: string;
         snapshot_json: string;
         warnings_json: string;
       }[];
       const update = db.prepare(
-        "UPDATE sync_runs SET snapshot_json = ?, warnings_json = ? WHERE rowid = ?",
+        separateBodies
+          ? "UPDATE sync_run_bodies SET snapshot_json = ? WHERE rowid = ?"
+          : "UPDATE sync_runs SET snapshot_json = ?, warnings_json = ? WHERE rowid = ?",
       );
       for (const row of rows) {
         const snapshot = substitute(row.snapshot_json);
@@ -1303,7 +1318,15 @@ describe("value-free read-only Isracard archive profile", () => {
         for (const value of [MERCHANT, BILLING, ORIGINAL, VOUCHER, SUFFIX]) {
           expect(snapshot).not.toContain(value);
         }
-        update.run(snapshot, substitute(row.warnings_json), row.rowid);
+        if (separateBodies) {
+          update.run(snapshot, row.rowid);
+          db.prepare("UPDATE sync_runs SET warnings_json = ? WHERE id = ?").run(
+            substitute(row.warnings_json),
+            row.id,
+          );
+        } else {
+          update.run(snapshot, substitute(row.warnings_json), row.rowid);
+        }
       }
       expect(rows.some((row) => row.snapshot_json.includes(BILLING))).toBe(
         true,

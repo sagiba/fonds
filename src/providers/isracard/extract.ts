@@ -18,6 +18,7 @@ import {
   isracardCaptureSchema,
   isracardCardKey,
 } from "./capture.js";
+import { isracardDetailEvidence, isracardRowEvidence } from "./evidence.js";
 import { isIsracardDigitalSuccess } from "./transport.js";
 
 type SourceRow = Record<string, unknown>;
@@ -470,7 +471,7 @@ function collectApprovals(
         });
         details.provider.isracard = {
           identity: { baseKey, occurrenceCount: members.length },
-          rows: [json(row)],
+          rows: [isracardRowEvidence(row, "approval")],
           billingMonth: capture.billingMonth,
           monetaryEvidence: {
             originalMinor: stated,
@@ -1360,11 +1361,12 @@ function extractGroup(
   const originalMinor = minor(rawOriginal, evidenceCurrency);
   details.provider.isracard = {
     identity: { baseKey, occurrenceCount },
-    rows: observations.map((item) => json(item.row)),
+    rows: observations.map((item) =>
+      isracardRowEvidence(item.row, item.generation),
+    ),
     observations: observations.map((item) => ({
       generation: item.generation,
       path: item.path,
-      row: json(item.row),
     })),
     monetaryEvidence: {
       billingMinor: billedMinor,
@@ -1403,7 +1405,7 @@ function extractGroup(
       if (kind === "transfer") {
         counterpartyName = text(detail.motavName)?.trim() || null;
       }
-      details.provider.isracard.detail = json(detail);
+      details.provider.isracard.detail = isracardDetailEvidence(detail);
       details.sourceRefs.push({
         runId: context.runId,
         path: `$.responses.details[${binding.index}].responseText.PirteyIska_204Bean`,
@@ -1622,11 +1624,12 @@ function extractPlanPurchase(
     countryCode !== null && isCountryCode(countryCode) ? countryCode : null;
   details.provider.isracard = {
     identity: { baseKey: purchaseKey, occurrenceCount: 1 },
-    rows: observations.map((item) => json(item.row)),
+    rows: observations.map((item) =>
+      isracardRowEvidence(item.row, item.generation),
+    ),
     observations: observations.map((item) => ({
       generation: item.generation,
       path: item.path,
-      row: json(item.row),
     })),
     monetaryEvidence: {
       // Unlike the proven-payment rows, totals include unresolved witnesses in capture order.
@@ -1743,7 +1746,7 @@ function explainCashAdvanceFees(
   );
 }
 
-/** Reconcile only unique voucher joins. Every raw response and unmatched occurrence remains inspectable. */
+/** Reconcile only unique voucher joins; keep duplicate occurrences separate. */
 export function extractIsracard(
   responseText: string,
   context: ExtractionContext,

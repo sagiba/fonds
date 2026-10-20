@@ -28,7 +28,7 @@ import type {
   Run,
   Transaction,
 } from "../domain/records.js";
-import type { FailureReason } from "../domain/refreshes.js";
+import type { FailureReason, ProviderStopReason } from "../domain/refreshes.js";
 import type { RetainedRun } from "./run-evidence.js";
 import type { PlanScope } from "./sql.js";
 
@@ -51,11 +51,16 @@ export interface RefreshRow {
   startedAt: string | null;
   finishedAt: string | null;
   requiresAttention: boolean;
+  providerStopReason: ProviderStopReason | null;
+  hasAcceptedEvidence: boolean;
   captures: number;
   unchanged: number;
   failures: number;
   created: number;
   updated: number;
+  observed: number;
+  unchangedTransactions: number;
+  unlisted: number;
   failureCodes: ReconciliationFailureCode[];
   failureReason: FailureReason | null;
   missedThrough: string | null;
@@ -67,6 +72,19 @@ export interface RefreshWindowRow {
   rangeFrom: string;
   rangeTo: string;
   status: WindowStatus;
+  hasAcceptedEvidence: boolean;
+}
+
+/** Content-addressed evidence that cannot safely belong to a ledger transaction. */
+export interface DeferredEvidenceWrite {
+  id: string;
+  connectionId: string;
+  sourceScope: string;
+  sourceKey: string;
+  reason: string;
+  content: Record<string, unknown>;
+  firstSeenRunId: string;
+  lastSeenRunId: string;
 }
 
 /** Unexecuted Drizzle statements. The driver owns execution and transactions. */
@@ -106,7 +124,9 @@ export interface Statements<Db> {
   runState(
     db: Db,
     id: string,
-  ): PromiseLike<Pick<Run, "appliedAt" | "status" | "warnings">[]>;
+  ): PromiseLike<
+    Pick<Run, "appliedAt" | "status" | "warnings" | "evidenceDigest">[]
+  >;
   syncRuns(db: Db, id: string, page: SyncRunPageInput): PromiseLike<SyncRun[]>;
   /** Archived runs not yet applied, oldest first. */
   pendingRuns(
@@ -122,6 +142,17 @@ export interface Statements<Db> {
   ): PromiseLike<Pick<LedgerEvent, "transactionId" | "createdAt">[]>;
   insertConnection(db: Db, row: Connection): PromiseLike<Connection[]>;
   insertRun(db: Db, row: RetainedRun): PromiseLike<{ id: string }[]>;
+  upsertDeferredEvidence(
+    db: Db,
+    row: DeferredEvidenceWrite,
+  ): PromiseLike<unknown>;
+  insertRunBody(db: Db, row: RetainedRun): PromiseLike<unknown>;
+  finishRunEvidence(
+    db: Db,
+    id: string,
+    keepUntil: string | null,
+  ): Iterable<PromiseLike<unknown>>;
+  pruneDebugBodies(db: Db, now: string): PromiseLike<unknown>;
   setConfig(db: Db, id: string, config: ConnectionConfig): PromiseLike<unknown>;
   latestOccurrence(db: Db): PromiseLike<{ scheduledAt: string | null }[]>;
   claimOccurrence(
@@ -177,6 +208,11 @@ export interface Statements<Db> {
     id: string,
     from: string,
     status: WindowStatus,
+  ): PromiseLike<unknown>;
+  markRefreshWindowAccepted(
+    db: Db,
+    id: string,
+    from: string,
   ): PromiseLike<unknown>;
   insertSetting(db: Db, name: string, value: string): PromiseLike<unknown>;
   /** Writes accounts, cards, transactions, annotations, events, then the run. */

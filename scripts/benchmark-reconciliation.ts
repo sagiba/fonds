@@ -8,6 +8,7 @@ import { type Backend, open } from "../tests/helpers/storage-harness.js";
 const adapter: SourceAdapter = {
   provider: "synthetic-benchmark",
   parserVersion: "synthetic-v1",
+  retainProviderEvidence: () => ({}),
   extract(text, context) {
     return {
       transactions: JSON.parse(text) as TransactionInput[],
@@ -93,22 +94,13 @@ async function measure(rowCount: number, historyCount: number) {
     if ((await capture(0)).created !== rowCount) {
       throw new Error("Invalid synthetic baseline");
     }
-    // Bound setup memory: older runs retain empty synthetic capture bodies and identical
-    // comparable account/scope metadata. Timed runs still archive all current rows.
+    // Historical receipts exercise planner history without retaining duplicate bodies.
     const columns =
-      "connection_id,started_at,completed_at,status,collector_version,parser_version,snapshot_json,coverage_json,warnings_json,applied_at";
-    const retained = await db.raw(
-      "SELECT snapshot_json FROM sync_runs WHERE id = 'run-0'",
-    );
-    const snapshot = JSON.parse(String(retained[0]!.snapshot_json));
-    snapshot.responses[0].responseText = "[]";
-    const historySnapshot = JSON.stringify(snapshot);
-    const metadataColumn = backend === "postgres" ? ",metadata_json" : "";
-    const projectedColumns = columns.replace("snapshot_json", "?");
+      "connection_id,started_at,completed_at,status,collector_version,parser_version,metadata_json,evidence_digest,coverage_json,warnings_json,applied_at";
     for (let index = 1; index < historyCount; index++) {
       await db.raw(
-        `INSERT INTO sync_runs(id,${columns}${metadataColumn}) SELECT ?,${projectedColumns}${metadataColumn} FROM sync_runs WHERE id = 'run-0'`,
-        [`history-${index}`, historySnapshot],
+        `INSERT INTO sync_runs(id,${columns}) SELECT ?,${columns} FROM sync_runs WHERE id = 'run-0'`,
+        [`history-${index}`],
       );
     }
     const times = [];

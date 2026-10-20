@@ -1,3 +1,4 @@
+import { canonicalJson } from "../domain/observations.js";
 import {
   reconciliationFailure,
   type RunInput,
@@ -10,7 +11,14 @@ import type { SourceAdapter } from "../domain/source-adapter.js";
 /** Recorded for runs whose input names no collector, such as offline imports. */
 const DEFAULT_COLLECTOR_VERSION = "offline-v1";
 
+export function requireEvidenceRetention(adapter: SourceAdapter): void {
+  if (typeof adapter.retainProviderEvidence !== "function") {
+    throw new Error("Adapter must declare provider evidence retention");
+  }
+}
+
 export function prepareRun(input: RunInput, adapter: SourceAdapter) {
+  requireEvidenceRetention(adapter);
   const run = runSchema.parse(input);
   for (const item of [...run.responses, ...run.failures]) {
     if (item.scope) {
@@ -23,11 +31,13 @@ export function prepareRun(input: RunInput, adapter: SourceAdapter) {
 export function retainedRun(
   run: ReturnType<typeof prepareRun>,
   adapter: SourceAdapter,
+  digest: string,
 ) {
+  const startedAt = run.startedAt ?? new Date().toISOString();
   return {
     id: run.runId,
     connectionId: run.connectionId,
-    startedAt: run.startedAt ?? new Date().toISOString(),
+    startedAt,
     status: "started" as const,
     collectorVersion: run.collectorVersion ?? DEFAULT_COLLECTOR_VERSION,
     parserVersion: adapter.parserVersion,
@@ -39,26 +49,37 @@ export function retainedRun(
     coverage: [],
     warnings: [],
     refreshId: run.refreshId ?? null,
+    evidenceDigest: digest,
+    bodyRetention: "staged" as const,
+    bodyExpiresAt:
+      run.debugArchiveDays === undefined
+        ? null
+        : new Date(
+            Date.now() + run.debugArchiveDays * 86_400_000,
+          ).toISOString(),
   };
 }
 
 export type RetainedRun = ReturnType<typeof retainedRun>;
 
-export function assertSameEvidence(
-  existing: Run,
+export async function contentDigest(value: unknown): Promise<string> {
+  const bytes = new TextEncoder().encode(canonicalJson(value));
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
+}
+
+export function runEvidenceDigest(
   run: ReturnType<typeof prepareRun>,
-) {
-  if (
-    existing.connectionId !== run.connectionId ||
-    existing.collectorVersion !==
-      (run.collectorVersion ?? DEFAULT_COLLECTOR_VERSION) ||
-    JSON.stringify(existing.snapshot.responses) !==
-      JSON.stringify(run.responses) ||
-    JSON.stringify(existing.snapshot.failures ?? []) !==
-      JSON.stringify(run.failures)
-  ) {
-    throw new Error("Run ID already refers to different evidence");
-  }
+): Promise<string> {
+  return contentDigest({
+    digestSchema: "fonds-run-evidence-v1",
+    connectionId: run.connectionId,
+    collectorVersion: run.collectorVersion ?? DEFAULT_COLLECTOR_VERSION,
+    responses: run.responses,
+    failures: run.failures,
+  });
 }
 
 export function replayResult(run: Run): SyncResult {

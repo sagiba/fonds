@@ -1,5 +1,6 @@
 import {
   type AnySQLiteColumn,
+  customType,
   foreignKey,
   index,
   integer,
@@ -23,11 +24,13 @@ import type {
 } from "../../domain/records.js";
 import {
   FAILURE_REASONS,
+  PROVIDER_STOP_REASONS,
   REFRESH_STATUSES,
   REFRESH_TRIGGERS,
   SKIP_REASONS,
   WINDOW_STATUSES,
 } from "../../domain/refreshes.js";
+import { decodeScalarText, encodeScalarText } from "../scalar-text.js";
 
 export type {
   CollectionFailure,
@@ -36,6 +39,12 @@ export type {
   Partition,
   Transaction,
 } from "../../domain/records.js";
+
+const scalarText = customType<{ data: string; driverData: string }>({
+  dataType: () => "text",
+  toDriver: encodeScalarText,
+  fromDriver: decodeScalarText,
+});
 
 export const connections = sqliteTable("connections", {
   id: text().primaryKey(),
@@ -107,13 +116,14 @@ export const syncRuns = sqliteTable("sync_runs", {
   }).notNull(),
   collectorVersion: text("collector_version").notNull(),
   parserVersion: text("parser_version").notNull(),
-  snapshot: text("snapshot_json", { mode: "json" })
+  snapshot: text("metadata_json", { mode: "json" })
     .$type<{
       schemaVersion: 1;
-      responses: FinancialResponse[];
+      responses: Omit<FinancialResponse, "responseText">[];
       failures?: CollectionFailure[];
     }>()
     .notNull(),
+  evidenceDigest: text("evidence_digest").notNull(),
   coverage: text("coverage_json", { mode: "json" })
     .$type<Partition[]>()
     .notNull(),
@@ -125,6 +135,40 @@ export const syncRuns = sqliteTable("sync_runs", {
       onDelete: "set null",
     },
   ),
+});
+
+export const syncRunBodies = sqliteTable("sync_run_bodies", {
+  runId: text("run_id")
+    .primaryKey()
+    .references(() => syncRuns.id),
+  snapshot: text("snapshot_json", { mode: "json" })
+    .$type<{
+      schemaVersion: 1;
+      responses: FinancialResponse[];
+      failures?: CollectionFailure[];
+    }>()
+    .notNull(),
+  retention: text({ enum: ["staged", "debug"] }).notNull(),
+  expiresAt: text("expires_at"),
+});
+
+export const deferredEvidence = sqliteTable("deferred_evidence", {
+  id: text().primaryKey(),
+  connectionId: text("connection_id")
+    .notNull()
+    .references(() => connections.id),
+  sourceScope: text("source_scope").notNull(),
+  sourceKey: text("source_key").notNull(),
+  reason: text().notNull(),
+  content: text("content_json", { mode: "json" })
+    .$type<Record<string, unknown>>()
+    .notNull(),
+  firstSeenRunId: text("first_seen_run_id")
+    .notNull()
+    .references(() => syncRuns.id),
+  lastSeenRunId: text("last_seen_run_id")
+    .notNull()
+    .references(() => syncRuns.id),
 });
 
 export const transactions = sqliteTable(
@@ -174,14 +218,26 @@ export const transactions = sqliteTable(
     providerTransactionCode: text("provider_transaction_code"),
     fxFeeMinor: integer("fx_fee_minor"),
     fxFeeCurrency: text("fx_fee_currency"),
-    details: text("details_json", { mode: "json" })
-      .$type<TransactionInput["details"]>()
+    transactionDateTime: text("transaction_date_time"),
+    merchantAddressLine: scalarText("merchant_address_line"),
+    merchantPhone: scalarText("merchant_phone"),
+    merchantCity: scalarText("merchant_city"),
+    merchantCountryCode: text("merchant_country_code"),
+    additionalInformation: text("additional_information_json", {
+      mode: "json",
+    }).$type<
+      NonNullable<TransactionInput["details"]["additionalInformation"]>
+    >(),
+    currencyExchange: text("currency_exchange_json", { mode: "json" }).$type<
+      NonNullable<TransactionInput["details"]["currencyExchange"]>
+    >(),
+    sourceIssues: text("source_issues_json", { mode: "json" })
+      .$type<string[]>()
+      .notNull(),
+    provider: text("provider_json", { mode: "json" })
+      .$type<TransactionInput["details"]["provider"]>()
       .notNull(),
     firstSeenAt: text("first_seen_at").notNull(),
-    lastSeenAt: text("last_seen_at").notNull(),
-    lastSeenRunId: text("last_seen_run_id")
-      .notNull()
-      .references(() => syncRuns.id),
     version: integer().notNull(),
     supersededById: text("superseded_by_id").references(
       (): AnySQLiteColumn => transactions.id,
@@ -207,6 +263,66 @@ export const transactions = sqliteTable(
     index("transactions_merchant_name").on(table.merchantName),
     index("transactions_status").on(table.status),
   ],
+);
+
+export const transactionObservations = sqliteTable("transaction_observations", {
+  transactionId: text("transaction_id")
+    .primaryKey()
+    .references(() => transactions.id),
+  lastSeenAt: text("last_seen_at").notNull(),
+  lastSeenRunId: text("last_seen_run_id")
+    .notNull()
+    .references(() => syncRuns.id),
+  sourceRefs: text("source_refs_json", { mode: "json" })
+    .$type<TransactionInput["details"]["sourceRefs"]>()
+    .notNull(),
+});
+
+export const transactionReconciliation = sqliteTable(
+  "transaction_reconciliation",
+  {
+    transactionId: text("transaction_id")
+      .primaryKey()
+      .references(() => transactions.id),
+    paymentContextConflicts: text("payment_context_conflicts_json", {
+      mode: "json",
+    }).$type<
+      NonNullable<TransactionInput["details"]["paymentContextConflicts"]>
+    >(),
+    pendingPostingCandidates: text("pending_posting_candidates_json", {
+      mode: "json",
+    }).$type<string[]>(),
+    rejectedPostingKeys: text("rejected_posting_keys_json", {
+      mode: "json",
+    }).$type<string[]>(),
+    providerIdentity: text("provider_identity_json", { mode: "json" }).$type<
+      Record<string, import("../../domain/model.js").JsonValue>
+    >(),
+    providerObservations: text("provider_observations_json", {
+      mode: "json",
+    }).$type<Record<string, import("../../domain/model.js").JsonValue>>(),
+    providerMonetaryEvidence: text("provider_monetary_evidence_json", {
+      mode: "json",
+    }).$type<Record<string, import("../../domain/model.js").JsonValue>>(),
+    providerBillingMonth: text("provider_billing_month_json", {
+      mode: "json",
+    }).$type<Record<string, import("../../domain/model.js").JsonValue>>(),
+    providerCurrencyMapping: text("provider_currency_mapping_json", {
+      mode: "json",
+    }).$type<Record<string, import("../../domain/model.js").JsonValue>>(),
+  },
+);
+
+export const transactionPostingLinks = sqliteTable(
+  "transaction_posting_links",
+  {
+    transactionId: text("transaction_id")
+      .primaryKey()
+      .references(() => transactions.id),
+    postingLink: text("posting_link_json", { mode: "json" }).$type<
+      NonNullable<TransactionInput["details"]["postingLink"]>
+    >(),
+  },
 );
 
 export const annotations = sqliteTable("annotations", {
@@ -282,11 +398,21 @@ export const refreshes = sqliteTable("refreshes", {
   requiresAttention: integer("requires_attention", {
     mode: "boolean",
   }).notNull(),
+  providerStopReason: text("provider_stop_reason", {
+    enum: PROVIDER_STOP_REASONS,
+  }),
+  hasAcceptedEvidence: integer("has_accepted_evidence", {
+    mode: "boolean",
+  }).notNull(),
   captures: integer().notNull(),
   unchanged: integer().notNull(),
   failures: integer().notNull(),
   created: integer().notNull(),
   updated: integer().notNull(),
+  observed: integer("observed").notNull(),
+  unchangedTransactions: integer("unchanged_transactions").notNull(),
+  unlisted: integer("unlisted").notNull(),
+
   failureCodes: text("failure_codes_json", { mode: "json" })
     .$type<ReconciliationFailureCode[]>()
     .notNull(),
@@ -305,6 +431,9 @@ export const refreshWindows = sqliteTable(
     rangeFrom: text("range_from").notNull(),
     rangeTo: text("range_to").notNull(),
     status: text({ enum: WINDOW_STATUSES }).notNull(),
+    hasAcceptedEvidence: integer("has_accepted_evidence", {
+      mode: "boolean",
+    }).notNull(),
   },
   (table) => [primaryKey({ columns: [table.refreshId, table.rangeFrom] })],
 );

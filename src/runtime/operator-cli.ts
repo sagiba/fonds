@@ -14,6 +14,10 @@ import {
   type OperationDefinition,
 } from "../application/operations.js";
 import { isActive } from "../application/refreshes.js";
+import {
+  createSyncDiagnosticReport,
+  syncDiagnosticSchema,
+} from "../application/sync-diagnostics.js";
 import { FONDS_VERSION } from "../application/version.js";
 import { CredentialInputError } from "../domain/credentials.js";
 import { ProviderConfigurationError } from "../domain/source-adapter.js";
@@ -137,11 +141,23 @@ export const collectionSummarySchema = z
     type: z.literal("collection_summary"),
     status: z.enum(["completed", "partial", "failed", "busy", "blocked"]),
     captures: z.number().int().nonnegative(),
+    unchanged: z.number().int().nonnegative(),
+    observed: z.number().int().nonnegative(),
+    unchangedTransactions: z.number().int().nonnegative(),
+    unlisted: z.number().int().nonnegative(),
     failures: z.number().int().nonnegative(),
     failureCodes: z.array(z.string()).optional(),
     created: z.number().int().nonnegative(),
     updated: z.number().int().nonnegative(),
     requestedRange: z.object({ from: z.string(), to: z.string() }).optional(),
+    diagnostics: z
+      .object({
+        entries: z.array(syncDiagnosticSchema).max(200),
+        dropped: z.number().int().nonnegative(),
+        truncated: z.boolean(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -228,14 +244,27 @@ function collectionSummary(
     ...(finished.length < results.length ? ["busy"] : []),
     ...(undiscovered ? ["failed"] : []),
   ];
-  const sum = (key: "captures" | "failures" | "created" | "updated") =>
-    finished.reduce((total, refresh) => total + refresh.counts[key], 0);
+  const sum = (
+    key:
+      | "captures"
+      | "unchanged"
+      | "failures"
+      | "created"
+      | "updated"
+      | "observed"
+      | "unchangedTransactions"
+      | "unlisted",
+  ) => finished.reduce((total, refresh) => total + refresh.counts[key], 0);
   const failureCodes = [
     ...new Set(finished.flatMap((refresh) => refresh.failureCodes)),
   ].sort();
   return {
     status: summaryStatus(statuses),
     captures: sum("captures"),
+    unchanged: sum("unchanged"),
+    observed: sum("observed"),
+    unchangedTransactions: sum("unchangedTransactions"),
+    unlisted: sum("unlisted"),
     failures: sum("failures") + undiscovered,
     ...(failureCodes.length && { failureCodes }),
     created: sum("created"),
@@ -331,7 +360,7 @@ export const operatorCommands: readonly OperatorCommand[] = [
     name: "collect",
     synopsis:
       "[--connection <id>] [--from YYYY-MM-DD --to YYYY-MM-DD] [--credentials-fd <number>]\n" +
-      "            [--history-mode monthly|search] [--search-window-months 1|3|6|12] [--call-budget 1-100] [--max-details 0-20]",
+      "            [--history-mode monthly|search] [--search-window-months 1|3|6|12] [--call-budget 1-100] [--max-details 0-20] [--diagnostics] [--archive-days 1-30]",
     description: [
       "Collect from the provider now, as a refresh under the same lease as the server's.",
       "Without --connection, every connection with stored credentials, in turn; the provider",
@@ -340,6 +369,8 @@ export const operatorCommands: readonly OperatorCommand[] = [
       "Without dates it rereads the provider's recent window; requested windows do not prove",
       "complete history. Prints counts only; each refresh (list-refreshes) records its own",
       "result. Another refresh of a connection in progress makes it busy.",
+      "--diagnostics adds a bounded stage/count report without source values. --archive-days",
+      "retains redacted raw response bodies temporarily for trusted local investigation.",
     ].join("\n            "),
     options: {
       connection: { type: "string" },
@@ -350,9 +381,24 @@ export const operatorCommands: readonly OperatorCommand[] = [
       "search-window-months": { type: "string" },
       "call-budget": { type: "string" },
       "max-details": { type: "string" },
+      diagnostics: { type: "boolean" },
+      "archive-days": { type: "string" },
     },
     async run(context) {
       const { values } = context;
+      const diagnostics = values.diagnostics
+        ? createSyncDiagnosticReport()
+        : undefined;
+      const archiveDaysText = text(values, "archive-days");
+      let debugArchiveDays: number | undefined;
+      if (archiveDaysText !== undefined) {
+        if (!/^(?:[1-9]|[12][0-9]|30)$/.test(archiveDaysText)) {
+          throw new CommandInputError(
+            "--archive-days must be an integer from 1 through 30.",
+          );
+        }
+        debugArchiveDays = Number(archiveDaysText);
+      }
       const connectionId = optionalNonEmpty(values, "connection");
       const { range, options, credentialFd } = collectionControls({
         from: text(values, "from"),
@@ -405,6 +451,8 @@ export const operatorCommands: readonly OperatorCommand[] = [
             targets: async () => discovery,
             connectionId,
             range,
+            ...(diagnostics && { log: diagnostics.log }),
+            ...(debugArchiveDays !== undefined && { debugArchiveDays }),
           });
           session.verify?.();
           return collectionSummary(results, discovery.failures);
@@ -414,6 +462,7 @@ export const operatorCommands: readonly OperatorCommand[] = [
         type: "collection_summary",
         ...summary,
         ...(range && { requestedRange: range }),
+        ...(diagnostics && { diagnostics: diagnostics.report() }),
       });
       return collectionExitCode(summary.status);
     },

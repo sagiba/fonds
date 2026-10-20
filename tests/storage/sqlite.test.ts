@@ -6,11 +6,8 @@ import { emptyDetails, unknownLedgerFacts } from "../../src/domain/model.js";
 import type { Transaction } from "../../src/domain/records.js";
 import { calAdapter } from "../../src/providers/cal/adapter.js";
 import { openDatabase } from "../../src/storage/sqlite/database.js";
-import {
-  cards,
-  syncRuns,
-  transactions,
-} from "../../src/storage/sqlite/schema.js";
+import { cards, syncRuns } from "../../src/storage/sqlite/schema.js";
+import { insertTransactions } from "../helpers/sqlite-transactions.js";
 import { row, synthetic } from "../helpers/storage-harness.js";
 
 it("loads lifecycle annotations by scoped join beyond SQLite's parameter limit", async () => {
@@ -30,6 +27,7 @@ it("loads lifecycle annotations by scoped join beyond SQLite's parameter limit",
         collectorVersion: "synthetic",
         parserVersion: "synthetic",
         snapshot: { schemaVersion: 1, responses: [] },
+        evidenceDigest: "0".repeat(64),
         coverage: [],
         warnings: [],
       })
@@ -66,15 +64,13 @@ it("loads lifecycle annotations by scoped join beyond SQLite's parameter limit",
     });
     await db.orm.transaction(async (tx) => {
       for (let offset = 0; offset < 33_000; offset += 250) {
-        await tx
-          .insert(transactions)
-          .values(
-            Array.from({ length: 250 }, (_, index) => ({
-              ...template,
-              id: `synthetic-${offset + index}`,
-            })),
-          )
-          .run();
+        await insertTransactions(
+          tx,
+          Array.from({ length: 250 }, (_, index) => ({
+            ...template,
+            id: `synthetic-${offset + index}`,
+          })),
+        );
       }
     });
     expect(

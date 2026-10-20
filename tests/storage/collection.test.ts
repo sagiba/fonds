@@ -1,15 +1,13 @@
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 import { eq } from "drizzle-orm";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   collectFromStore,
   type CollectionStore,
   validateCollectionRange,
 } from "../../src/application/collection.js";
-import { RECONCILIATION_POLICY_VERSION } from "../../src/domain/plans/sync.js";
 import type {
   CollectionEvent,
   ProviderCollector,
@@ -25,7 +23,11 @@ import {
   type Database,
   openDatabase,
 } from "../../src/storage/sqlite/database.js";
-import { syncRuns, transactions } from "../../src/storage/sqlite/schema.js";
+import {
+  syncRunBodies,
+  syncRuns,
+  transactions,
+} from "../../src/storage/sqlite/schema.js";
 
 const responseText = readFileSync(
   new URL("../providers/cal/fixtures/recent-01.json", import.meta.url),
@@ -97,9 +99,8 @@ describe("streamed collection application boundary", () => {
     });
     expect(summary.runIds).toHaveLength(3);
     expect(
-      (await db.orm.select().from(syncRuns).all())[0]?.snapshot.responses[0]
-        ?.responseText,
-    ).toBe(responseText);
+      (await db.orm.select().from(syncRuns).all())[0]?.snapshot.responses[0],
+    ).not.toHaveProperty("responseText");
     expect(
       (await db.orm.select().from(syncRuns).all())[0]?.collectorVersion,
     ).toBe("synthetic-v1");
@@ -318,7 +319,6 @@ describe("streamed collection application boundary", () => {
       type: "capture",
       capture: {
         ...base,
-        // Only freshly fetched captures can be reused.
         capturedAt: new Date().toISOString(),
         responseText: text.replace(
           /"groupPid": "[^"]*"/,
@@ -341,7 +341,7 @@ describe("streamed collection application boundary", () => {
         source,
       );
 
-    /** A changing ingest is confirmed by one more archive, then repeats are skipped. */
+    /** Repeated reads settle retained content while still recording observations. */
     async function settle(groupPid: string) {
       await collect([read(`${groupPid}-1`)]);
       await collect([read(`${groupPid}-2`)]);
@@ -379,11 +379,11 @@ describe("streamed collection application boundary", () => {
           (card) => card.providerKey === "card",
         )?.last4,
       ).toBe("3456");
-      expect(await runs()).toBe(stored);
+      expect(await runs()).toBe(stored + 2);
       expect(await db.ledgerRevision("synthetic")).toBe(revision);
     });
 
-    it("skips identical rereads once the ledger is settled, without storing anything", async () => {
+    it("records receipt and observed counts for every identical reread without transaction writes", async () => {
       expect(
         await collectFromStore(
           db,
@@ -394,20 +394,94 @@ describe("streamed collection application boundary", () => {
       ).toMatchObject({ status: "completed", unchanged: 0, created: 21 });
       await collect([read("B")]);
       const stored = await runs();
-      expect(await collect([read("C")])).toMatchObject({
+      const rowsBefore = await db.orm.select().from(transactions).all();
+      const eventIdBefore = await db.latestEventId("synthetic");
+      await db.client.execute(
+        "CREATE TRIGGER reject_repeat_transaction_update BEFORE UPDATE ON transactions BEGIN SELECT RAISE(ABORT, 'unchanged transaction was rewritten'); END",
+      );
+      const capturedAt = new Date(Date.now() + 1_000).toISOString();
+      const summary = await collect([read("C", { capturedAt })]);
+      expect(summary).toMatchObject({
         status: "completed",
         captures: 1,
         unchanged: 1,
         failures: 0,
-        runIds: [],
+        observed: 21,
+        unchangedTransactions: 21,
+        created: 0,
+        updated: 0,
       });
-      expect(await runs()).toBe(stored);
+      expect(summary.runIds).toHaveLength(1);
+      expect(await runs()).toBe(stored + 1);
+      expect(await db.orm.select().from(transactions).all()).toEqual(
+        rowsBefore,
+      );
+      expect(await db.latestEventId("synthetic")).toBe(eventIdBefore);
+      expect(
+        (await db.listTransactions()).every(
+          (transaction) => transaction.lastSeenAt === capturedAt,
+        ),
+      ).toBe(true);
     });
 
-    it("archives changed content, parser upgrades and non-2xx responses", async () => {
+    it("retains receipt digests after default raw-body deletion and rejects changed evidence on retry", async () => {
+      const event = read("digest") as Extract<
+        CollectionEvent,
+        { type: "capture" }
+      >;
+      const summary = await collect([event]);
+      const receipt = (await db.orm.select().from(syncRuns).all())[0]!;
+      expect(receipt.evidenceDigest).toMatch(/^[a-f0-9]{64}$/);
+      expect(receipt.snapshot.responses[0]).not.toHaveProperty("responseText");
+      expect(await db.orm.select().from(syncRunBodies).all()).toEqual([]);
+      const input = {
+        runId: summary.runIds[0]!,
+        connectionId: "synthetic",
+        collectorVersion: "synthetic-v1",
+        responses: [event.capture],
+      };
+      expect(await db.ingestRun(input, calAdapter)).toMatchObject({
+        replayed: true,
+        created: 0,
+        updated: 0,
+      });
+      await expect(
+        db.ingestRun(
+          {
+            ...input,
+            responses: [
+              {
+                ...event.capture,
+                responseText: `${event.capture.responseText} `,
+              },
+            ],
+          },
+          calAdapter,
+        ),
+      ).rejects.toThrow("different evidence");
+    });
+
+    it("keeps raw response bodies temporarily only when the operator opts in", async () => {
+      const summary = await collectFromStore(
+        db,
+        { connectionId: "synthetic", debugArchiveDays: 2 },
+        collector([read("debug")]),
+        calAdapter,
+      );
+      const body = (await db.orm.select().from(syncRunBodies).all())[0]!;
+      expect(body).toMatchObject({
+        runId: summary.runIds[0],
+        retention: "debug",
+      });
+      const remainingMs = Date.parse(body.expiresAt!) - Date.now();
+      expect(remainingMs).toBeGreaterThan(47 * 60 * 60 * 1000);
+      expect(remainingMs).toBeLessThan(49 * 60 * 60 * 1000);
+    });
+
+    it("reconciles envelope changes and parser upgrades while recording non-2xx failures", async () => {
       await settle("A");
       const stored = await runs();
-      expect((await collect([read("B", {}, changedText)])).unchanged).toBe(0);
+      expect((await collect([read("B", {}, changedText)])).unchanged).toBe(1);
       expect(
         (
           await collect([read("C", {}, changedText)], db, {
@@ -415,59 +489,30 @@ describe("streamed collection application boundary", () => {
             parserVersion: `${calAdapter.parserVersion}-next`,
           })
         ).unchanged,
-      ).toBe(0);
+      ).toBe(1);
       expect((await collect([read("D", { httpStatus: 503 })])).unchanged).toBe(
         0,
       );
       expect(await runs()).toBe(stored + 3);
     });
 
-    it("re-ingests identical content once after auto-posting-v8 to v9 without changing the parser", async () => {
-      expect(RECONCILIATION_POLICY_VERSION).toBe("auto-posting-v9");
-      const fingerprintUnder = (policyVersion: string) =>
-        createHash("sha256")
-          .update(
-            [
-              calAdapter.parserVersion,
-              collector([]).collectorVersion,
-              policyVersion,
-              calAdapter.recentComparableDays,
-              calAdapter.rejectEmptyRecentPosted,
-              calAdapter.contentFingerprint!(responseText),
-            ].join("\n"),
-          )
-          .digest("hex");
+    it("extracts identical responses under each parser and reconciliation policy", async () => {
       await settle("A");
       const stored = await runs();
-      const lastCapture = (await db.getStoredConnection("synthetic"))?.config
-        .lastCapture as { fingerprint: string };
-      expect(lastCapture.fingerprint).toBe(
-        fingerprintUnder(RECONCILIATION_POLICY_VERSION),
-      );
-      // Emulate the same capture accepted under an earlier policy version.
-      await db.updateConfig("synthetic", (config) => ({
-        ...config,
-        lastCapture: {
-          ...lastCapture,
-          fingerprint: fingerprintUnder("auto-posting-v8"),
+      const extract = vi.fn(calAdapter.extract);
+      for (const source of [
+        { ...calAdapter, extract },
+        {
+          ...calAdapter,
+          extract,
+          parserVersion: `${calAdapter.parserVersion}-next`,
         },
-      }));
-      expect((await collect([read("B")])).unchanged).toBe(0);
-      expect(await runs()).toBe(stored + 1);
-      expect((await collect([read("C")])).unchanged).toBe(1);
-      expect(
-        (
-          await collect([read("D")], db, {
-            ...calAdapter,
-            recentComparableDays: 59,
-          })
-        ).unchanged,
-      ).toBe(0);
-      expect(
-        (await db.orm.select().from(syncRuns).all()).every(
-          (run) => run.parserVersion === calAdapter.parserVersion,
-        ),
-      ).toBe(true);
+        { ...calAdapter, extract, recentComparableDays: 59 },
+      ]) {
+        expect((await collect([read("B")], db, source)).unchanged).toBe(1);
+      }
+      expect(extract).toHaveBeenCalledTimes(3);
+      expect(await runs()).toBe(stored + 3);
     });
 
     it("never caches a rejected capture, even though its ledger revision is unchanged", async () => {
@@ -490,14 +535,11 @@ describe("streamed collection application boundary", () => {
           unchanged: 0,
         });
         expect(await db.ledgerRevision("synthetic")).toBe(revision);
-        expect(
-          (await db.getStoredConnection("synthetic"))?.config.lastCapture,
-        ).not.toHaveProperty("fingerprint");
       }
       expect(await runs()).toBe(stored + 3);
       expect(await collect([read("F", {}, populated)])).toMatchObject({
         status: "completed",
-        unchanged: 0,
+        unchanged: 1,
       });
       expect(await db.ledgerRevision("synthetic")).toBe(revision);
     });
@@ -544,6 +586,16 @@ describe("streamed collection application boundary", () => {
         sql: "UPDATE events SET transaction_id = NULL WHERE transaction_id = ?",
         args: [victim!.id],
       });
+      for (const table of [
+        "transaction_observations",
+        "transaction_reconciliation",
+        "transaction_posting_links",
+      ]) {
+        await db.client.execute({
+          sql: `DELETE FROM ${table} WHERE transaction_id = ?`,
+          args: [victim!.id],
+        });
+      }
       await db.orm.delete(transactions).where(eq(transactions.id, victim!.id));
       expect(await db.listTransactions()).toHaveLength(20);
       expect((await collect([read("B")])).unchanged).toBe(0);
@@ -552,9 +604,8 @@ describe("streamed collection application boundary", () => {
       expect(restored.map((row) => row.sourceKey)).toContain(victim!.sourceKey);
     });
 
-    it("never reuses a capture after a failure, a crash, another scope or a stale capture", async () => {
+    it("records receipts after a crash, across scopes and after stale captures", async () => {
       await settle("A");
-      // An explicit failure whose archive write throws still clears the record.
       const store = db;
       const crashing: CollectionStore = {
         ...store,
@@ -565,25 +616,17 @@ describe("streamed collection application boundary", () => {
       await expect(collect([failure], crashing)).rejects.toThrow(
         "synthetic storage crash",
       );
-      expect((await collect([read("B")])).unchanged).toBe(0);
-
-      await settle("C");
-      await collect([read("D", { scope: { kind: "recent" } })]);
-      expect((await collect([read("E")])).unchanged).toBe(0);
-
-      // A delayed capture with other content, even one whose offset timestamp
-      // sorts after the newest capture as a string, never becomes reusable.
-      await settle("F");
+      const stored = await runs();
+      await collect([read("B")]);
+      await collect([read("C", { scope: { kind: "recent" } })]);
+      await collect([read("D")]);
       const delayed = Date.now() - 60 * 60 * 1000;
-      // The same instant written at +02:00 sorts after a newer "Z" string.
-      const offset = `${new Date(delayed + 2 * 60 * 60 * 1000)
-        .toISOString()
-        .slice(0, 19)}+02:00`;
+      const offset = `${new Date(delayed + 2 * 60 * 60 * 1000).toISOString().slice(0, 19)}+02:00`;
       for (const capturedAt of [new Date(delayed).toISOString(), offset]) {
-        await collect([read("G", { capturedAt }, changedText)]);
-        expect((await collect([read("H", {}, changedText)])).unchanged).toBe(0);
-        await settle("I");
+        await collect([read("E", { capturedAt }, changedText)]);
+        expect((await collect([read("F", {}, changedText)])).unchanged).toBe(1);
       }
+      expect(await runs()).toBe(stored + 7);
     });
   });
 
@@ -746,6 +789,7 @@ describe("streamed collection application boundary", () => {
     const adapter: SourceAdapter = {
       provider: "synthetic-bank",
       parserVersion: "synthetic-bank-v1",
+      retainProviderEvidence: () => ({}),
       extract(raw, context) {
         received = raw;
         return {

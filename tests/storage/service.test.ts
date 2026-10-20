@@ -6,7 +6,11 @@ import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { ConflictError } from "../../src/domain/errors.js";
-import { transactionInputSchema } from "../../src/domain/model.js";
+import {
+  parsedLedgerFacts,
+  storedPaymentContext,
+  transactionInputSchema,
+} from "../../src/domain/model.js";
 import { calAdapter } from "../../src/providers/cal/adapter.js";
 import {
   type Database,
@@ -14,10 +18,11 @@ import {
 } from "../../src/storage/sqlite/database.js";
 import {
   cards,
+  syncRunBodies,
   syncRuns,
-  transactions,
 } from "../../src/storage/sqlite/schema.js";
 import { retained as retainedEvidence } from "../helpers/provider-evidence.js";
+import { insertTransaction } from "../helpers/sqlite-transactions.js";
 
 const connectionId = "synthetic-cal";
 const accountKey = "synthetic-account";
@@ -39,6 +44,7 @@ async function capture(
 ) {
   return await db.ingestRun(
     {
+      debugArchiveDays: 2,
       runId,
       connectionId,
       responses: [
@@ -150,8 +156,6 @@ describe("local SQLite service integration", () => {
     expect(changed).toMatchObject({ wallet: "apple_pay", cardPresent: true });
     expect(changed.annotation?.data.notes).toBe("Retain user note");
     expect(changed.details.sourceRefs.map((ref) => ref.runId)).toEqual([
-      "cal-enriched",
-      "cal-null-enrichment",
       "cal-new-enrichment",
     ]);
   });
@@ -182,6 +186,7 @@ describe("local SQLite service integration", () => {
       expect(
         await db.ingestRun(
           {
+            debugArchiveDays: 2,
             connectionId,
             runId: `distinct-cal-${index}`,
             responses: [
@@ -226,7 +231,7 @@ describe("local SQLite service integration", () => {
       ...Array<string>(21).fill("transaction.imported"),
       "sync.baseline",
     ]);
-    const archived = (await db.orm.select().from(syncRuns).get())!;
+    const archived = (await db.orm.select().from(syncRunBodies).get())!;
     expect(archived.snapshot.responses[0]?.responseText).toBe(
       fixture("recent-01"),
     );
@@ -298,7 +303,7 @@ describe("local SQLite service integration", () => {
     ).rejects.toThrow(ConflictError);
   });
 
-  it("refreshes flag/history details without versioning installment component dates", async () => {
+  it("versions flag/history changes while keeping installment component dates off purchases", async () => {
     await capture(db, "recent-01");
     const regular = await transaction(db, "SYNTHETIC-TXN-REGULAR");
     const history = await transaction(db, "SYNTHETIC-TXN-HISTORY");
@@ -311,11 +316,11 @@ describe("local SQLite service integration", () => {
     expect(retainedEvidence(history.details, "paymentHistory")).toHaveLength(2);
     await capture(db, "recent-02", 2);
     expect(await db.getTransaction(regular.id)).toMatchObject({
-      version: 1,
+      version: 2,
       reviewStale: false,
     });
     expect(await db.getTransaction(history.id)).toMatchObject({
-      version: 1,
+      version: 2,
       billingDate: null,
     });
     expect(
@@ -331,6 +336,10 @@ describe("local SQLite service integration", () => {
     ).toMatchObject([
       {
         type: "transaction.imported",
+      },
+      {
+        type: "transaction.updated",
+        after: { providerEvidence: expect.any(Array) },
       },
     ]);
   });
@@ -419,7 +428,12 @@ describe("local SQLite service integration", () => {
       .from(syncRuns)
       .where(eq(syncRuns.id, partial.runId))
       .get())!;
-    expect(archived.snapshot.responses[0]?.responseText).toBe(
+    const body = (await db.orm
+      .select()
+      .from(syncRunBodies)
+      .where(eq(syncRunBodies.runId, partial.runId))
+      .get())!;
+    expect(body.snapshot.responses[0]?.responseText).toBe(
       fixture("malformed-pending"),
     );
     expect(
@@ -463,6 +477,8 @@ describe("local SQLite service integration", () => {
     expect(await db.listEvents()).toEqual([]);
     expect(await db.orm.select().from(syncRuns).get()).toMatchObject({
       appliedAt: null,
+    });
+    expect(await db.orm.select().from(syncRunBodies).get()).toMatchObject({
       snapshot: { responses: [{ responseText: fixture("recent-01") }] },
     });
     await db.client.executeMultiple("DROP TRIGGER synthetic_failure");
@@ -548,6 +564,7 @@ describe("local SQLite service integration", () => {
         collectorVersion: "synthetic",
         parserVersion: "synthetic",
         snapshot: { schemaVersion: 1, responses: [] },
+        evidenceDigest: "0".repeat(64),
         coverage: [],
         warnings: [],
       })
@@ -573,19 +590,22 @@ describe("local SQLite service integration", () => {
         identityStrength: "native",
         details: details_json,
       });
-      await db.orm
-        .insert(transactions)
-        .values({
-          ...input,
-          id,
-          connectionId: "synthetic-bank",
-          presence,
-          version,
-          firstSeenAt: "2040-08-01T00:00:00Z",
-          lastSeenAt: "2040-08-01T00:00:00Z",
-          lastSeenRunId: "bank-run",
-        })
-        .run();
+      await insertTransaction(db.orm, {
+        ...input,
+        counterpartyName: input.counterpartyName ?? null,
+        ...parsedLedgerFacts(input),
+        ...storedPaymentContext(input, undefined),
+        cardId: null,
+        supersededById: null,
+        purchaseId: null,
+        id,
+        connectionId: "synthetic-bank",
+        presence,
+        version,
+        firstSeenAt: "2040-08-01T00:00:00Z",
+        lastSeenAt: "2040-08-01T00:00:00Z",
+        lastSeenRunId: "bank-run",
+      });
     }
     const rows = await db.listTransactions({ connectionId: "synthetic-bank" });
     expect(rows).toHaveLength(3);
@@ -859,8 +879,8 @@ describe("local SQLite service integration", () => {
         (
           await db.orm
             .select()
-            .from(syncRuns)
-            .where(eq(syncRuns.id, "historical"))
+            .from(syncRunBodies)
+            .where(eq(syncRunBodies.runId, "historical"))
             .get()
         )?.snapshot.responses[0]?.responseText,
       ).toBe(historicalText);
@@ -1058,13 +1078,13 @@ describe("local SQLite service integration", () => {
     for (const current of [retainedInstallment, retainedHistory]) {
       expect(
         new Set(current.details.sourceRefs.map((reference) => reference.runId)),
-      ).toEqual(new Set(["observations-first", "observations-later"]));
+      ).toEqual(new Set(["observations-later"]));
     }
     expect(retainedInstallment).toMatchObject({
       version: 1,
       billingDate: null,
     });
-    expect(retainedHistory.version).toBe(1);
+    expect(retainedHistory.version).toBe(2);
   });
 
   it("reports partial when valid rows apply from failed partitions and keeps the next import out of baseline mode", async () => {
@@ -1308,14 +1328,14 @@ describe("local SQLite service integration", () => {
           JSON.stringify(envelope),
         )
       ).updated,
-    ).toBe(0);
+    ).toBe(1);
     const retained = (await db.getTransaction(first.id))!;
     expect(retainedEvidence(retained.details, "paymentHistory")).toHaveLength(
       2,
     );
     expect(
       new Set(retained.details.sourceRefs.map((reference) => reference.runId)),
-    ).toEqual(new Set(["duplicate-history-first", "duplicate-history-single"]));
+    ).toEqual(new Set(["duplicate-history-single"]));
     row.paymentsMade = [{ ...payment }, payment];
     expect(
       (
@@ -1327,8 +1347,8 @@ describe("local SQLite service integration", () => {
           JSON.stringify(envelope),
         )
       ).updated,
-    ).toBe(0);
-    expect(await db.getTransaction(first.id)).toMatchObject({ version: 1 });
+    ).toBe(1);
+    expect(await db.getTransaction(first.id)).toMatchObject({ version: 3 });
     expect(
       retainedEvidence(
         (await db.getTransaction(first.id))!.details,
@@ -1338,6 +1358,8 @@ describe("local SQLite service integration", () => {
     expect((await db.listEvents()).map((change) => change.type)).toEqual([
       "transaction.imported",
       "sync.baseline",
+      "transaction.updated",
+      "transaction.updated",
     ]);
   });
 

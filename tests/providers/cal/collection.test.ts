@@ -24,7 +24,7 @@ import {
   createCalTransport,
 } from "../../../src/providers/cal/transport.js";
 import { openDatabase } from "../../../src/storage/sqlite/database.js";
-import { syncRuns } from "../../../src/storage/sqlite/schema.js";
+import { syncRunBodies, syncRuns } from "../../../src/storage/sqlite/schema.js";
 
 // Invented credentials and identifiers. No private source or live CAL requests.
 const credentials = {
@@ -1075,7 +1075,7 @@ describe("CAL synthetic direct collection", () => {
     try {
       const summary = await collectFromStore(
         db,
-        { connectionId: "synthetic-invalid", range },
+        { connectionId: "synthetic-invalid", range, debugArchiveDays: 2 },
         {
           provider: "cal",
           collectorVersion: "synthetic-invalid-v1",
@@ -1091,7 +1091,7 @@ describe("CAL synthetic direct collection", () => {
       });
       const runs = await db.orm.select().from(syncRuns).all();
       expect(
-        runs
+        (await db.orm.select().from(syncRunBodies).all())
           .flatMap((run) => run.snapshot.responses)
           .filter((capture) => capture.responseText === JSON.stringify(raw)),
       ).toHaveLength(3);

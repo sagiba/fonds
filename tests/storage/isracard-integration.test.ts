@@ -24,7 +24,7 @@ import {
   type Database,
   openDatabase,
 } from "../../src/storage/sqlite/database.js";
-import { syncRuns } from "../../src/storage/sqlite/schema.js";
+import { syncRunBodies, syncRuns } from "../../src/storage/sqlite/schema.js";
 
 const fixture = JSON.parse(
   readFileSync(
@@ -128,15 +128,16 @@ describe("Isracard collection through shared storage", () => {
   async function collect(
     script: ReturnType<typeof scriptedTransport>,
     range?: CollectionRange,
-    executionOptions: Pick<
-      CollectIsracardOptions,
-      "callBudget" | "signal"
-    > = {},
+    executionOptions: Pick<CollectIsracardOptions, "callBudget" | "signal"> & {
+      debugArchiveDays?: number;
+    } = {},
   ) {
+    const { debugArchiveDays, ...providerOptions } = executionOptions;
     return collectFromStore(
       db,
       {
         connectionId,
+        ...(debugArchiveDays !== undefined && { debugArchiveDays }),
         ...(range && { range }),
         ...(executionOptions.signal && { signal: executionOptions.signal }),
       },
@@ -146,7 +147,7 @@ describe("Isracard collection through shared storage", () => {
         drainsOnAbort: true,
         collect: (options) =>
           collectIsracard({
-            ...executionOptions,
+            ...providerOptions,
             ...options,
             credentials: {
               username: "invented-user",
@@ -170,7 +171,9 @@ describe("Isracard collection through shared storage", () => {
 
   it("keeps stable IDs and annotations on repeat and never unlists another billing month", async () => {
     const first = scriptedTransport();
-    expect(await collect(first)).toMatchObject({
+    expect(
+      await collect(first, undefined, { debugArchiveDays: 2 }),
+    ).toMatchObject({
       status: "completed",
       captures: 2,
       failures: 0,
@@ -209,7 +212,8 @@ describe("Isracard collection through shared storage", () => {
     const runs = await db.orm.select().from(syncRuns).all();
     expect(runs).toHaveLength(6);
     const archived = JSON.parse(
-      runs[0]!.snapshot.responses[0]!.responseText,
+      (await db.orm.select().from(syncRunBodies).get())!.snapshot.responses[0]!
+        .responseText,
     ) as IsracardCapture;
     expect(archived.responses.digital).toContain("VOUCHER-2040-07");
     expect(archived.responses.legacy).toContain("VOUCHER-2040-07");
@@ -358,7 +362,10 @@ describe("Isracard collection through shared storage", () => {
       abortController,
     });
     expect(
-      await collect(script, undefined, { signal: abortController.signal }),
+      await collect(script, undefined, {
+        signal: abortController.signal,
+        debugArchiveDays: 2,
+      }),
     ).toMatchObject({
       status: "partial",
       captures: 2,
@@ -373,7 +380,9 @@ describe("Isracard collection through shared storage", () => {
       "digital:2040-07",
     ]);
     const runs = await db.orm.select().from(syncRuns).all();
-    const archived = runs.flatMap((run) => run.snapshot.responses);
+    const archived = (await db.orm.select().from(syncRunBodies).all()).flatMap(
+      (run) => run.snapshot.responses,
+    );
     expect(archived).toHaveLength(2);
     expect(new Set(archived.map((capture) => capture.accountKey)).size).toBe(2);
     expect(
@@ -426,6 +435,7 @@ describe("Isracard collection through shared storage", () => {
           {
             connectionId,
             runId,
+            debugArchiveDays: 2,
             responses: [
               {
                 accountKey,
@@ -480,11 +490,11 @@ describe("Isracard collection through shared storage", () => {
         lastSeenRunId: initial.lastSeenRunId,
         annotation: { data: { notes: "Preserve owner's synthetic note" } },
       });
-      const archived = await db.orm.select().from(syncRuns).all();
+      const archived = await db.orm.select().from(syncRunBodies).all();
       expect(archived).toHaveLength(2);
       expect(
-        archived.find((run) => run.id === "digital-only")?.snapshot.responses[0]
-          ?.responseText,
+        archived.find((run) => run.runId === "digital-only")?.snapshot
+          .responses[0]?.responseText,
       ).toBe(serializeIsracardCapture(digitalOnly));
     },
   );
@@ -501,6 +511,7 @@ describe("Isracard collection through shared storage", () => {
         {
           connectionId,
           runId,
+          debugArchiveDays: 2,
           responses: [
             {
               accountKey,
@@ -550,10 +561,10 @@ describe("Isracard collection through shared storage", () => {
       unlisted: 0,
     });
     expect(await db.listTransactions()).toEqual(newest);
-    const archived = await db.orm.select().from(syncRuns).all();
+    const archived = await db.orm.select().from(syncRunBodies).all();
     expect(
-      archived.find((run) => run.id === "older-current")?.snapshot.responses[0]
-        ?.responseText,
+      archived.find((run) => run.runId === "older-current")?.snapshot
+        .responses[0]?.responseText,
     ).toBe(serializeIsracardCapture(older));
   });
 });

@@ -4,6 +4,7 @@ import {
   createApplication,
   inProcessInvoker,
 } from "../../src/application/operations.js";
+import { createSyncDiagnosticReport } from "../../src/application/sync-diagnostics.js";
 import { NotFoundError } from "../../src/domain/errors.js";
 import type {
   CollectionEvent,
@@ -27,14 +28,14 @@ import { row, synthetic } from "../helpers/storage-harness.js";
 const connectionId = "refresh-connection";
 const range = { from: "2040-01-15", to: "2040-03-10" };
 
-function capture(sourceKey: string): CollectionEvent {
+function capture(sourceKey: string, amountMinor = -100): CollectionEvent {
   return {
     type: "capture",
     capture: {
       accountKey: "account",
       endpoint: "synthetic",
       capturedAt: new Date().toISOString(),
-      responseText: JSON.stringify([row(sourceKey)]),
+      responseText: JSON.stringify([row(sourceKey, { amountMinor })]),
     },
   };
 }
@@ -71,6 +72,120 @@ describe("refresh service", () => {
       ...options,
     });
   }
+
+  it("commits refresh and ledger results even when the operational logger throws or rejects", async () => {
+    for (const mode of ["throw", "reject"]) {
+      const log = vi.fn(() => {
+        if (mode === "throw") {
+          throw new Error("private-log-error");
+        }
+        return Promise.reject(new Error("private-log-error"));
+      });
+      const refreshes = service(
+        async () =>
+          source(async function* () {
+            yield capture(mode);
+          }),
+        { log },
+      );
+      const [result] = await refreshes.wait([
+        await refreshes.start(connectionId, {
+          trigger: "manual",
+          operator: true,
+        }),
+      ]);
+      await refreshes.settled();
+      expect(result?.refresh).toMatchObject({
+        status: "completed",
+        counts: { observed: 1, created: 1, updated: 0 },
+      });
+      expect(
+        (await db.listTransactions()).some(
+          (transaction) => transaction.sourceKey === mode,
+        ),
+      ).toBe(true);
+      expect(log).toHaveBeenCalled();
+    }
+  });
+
+  it("returns observed, unchanged and meaningful enrichment changes in the ordinary refresh response", async () => {
+    let address = "First invented address";
+    let observation = 0;
+    const refreshes = service(async () =>
+      source(async function* () {
+        const event = capture("same") as Extract<
+          CollectionEvent,
+          { type: "capture" }
+        >;
+        const transaction = row("same");
+        transaction.details.merchant.address = address;
+        event.capture.responseText = JSON.stringify([transaction]);
+        event.capture.capturedAt = new Date(
+          Date.now() + ++observation * 1_000,
+        ).toISOString();
+        yield event;
+      }),
+    );
+    const invoker = inProcessInvoker(
+      createApplication(db, { refreshes: ownerRefreshes(refreshes) }),
+    );
+
+    async function refresh() {
+      const [result] = await refreshes.wait([
+        await refreshes.start(connectionId, {
+          trigger: "manual",
+          operator: true,
+        }),
+      ]);
+      return invoker.invoke("get_refresh", { refreshId: result!.refresh!.id });
+    }
+
+    expect(await refresh()).toMatchObject({
+      refresh: {
+        counts: {
+          observed: 1,
+          unchangedTransactions: 0,
+          created: 1,
+          updated: 0,
+        },
+      },
+    });
+    const first = (await db.listTransactions())[0]!;
+    const annotation = await db.editAnnotation({
+      transactionId: first.id,
+      expectedVersion: 0,
+      notes: "Independent owner annotation",
+    });
+    expect(await refresh()).toMatchObject({
+      refresh: {
+        counts: {
+          observed: 1,
+          unchangedTransactions: 1,
+          unchanged: 1,
+          created: 0,
+          updated: 0,
+        },
+      },
+    });
+    address = "Corrected invented address";
+    expect(await refresh()).toMatchObject({
+      refresh: {
+        counts: {
+          observed: 1,
+          unchangedTransactions: 0,
+          unchanged: 0,
+          created: 0,
+          updated: 1,
+          unlisted: 0,
+        },
+      },
+    });
+    expect(await db.getTransaction(first.id)).toMatchObject({
+      version: first.version + 1,
+      details: { merchant: { address } },
+      annotation,
+    });
+  });
 
   it("refuses a connection it cannot collect and a range over 120 months", async () => {
     const refreshes = service(async () => source(async function* () {}));
@@ -226,6 +341,840 @@ describe("refresh service", () => {
     });
   });
 
+  it("preserves committed unit counts across interruption and counts resumed observations without duplicating creations", async () => {
+    const shutdown = new AbortController();
+    const ready = Promise.withResolvers<void>();
+    const stopping = service(
+      async () =>
+        source(async function* (options) {
+          yield capture("observed-before-interruption");
+          ready.resolve();
+          await new Promise((resolve) =>
+            options.signal?.addEventListener("abort", resolve, { once: true }),
+          );
+        }),
+      { signal: shutdown.signal },
+    );
+    const started = await stopping.start(connectionId, {
+      trigger: "manual",
+      range: { from: "2040-03-01", to: "2040-03-31" },
+    });
+    await ready.promise;
+    shutdown.abort();
+    await stopping.settled();
+    expect(await db.getRefresh(started.refresh!.id)).toMatchObject({
+      status: "running",
+      windows: [{ status: "running" }],
+      counts: {
+        captures: 1,
+        observed: 1,
+        created: 1,
+        updated: 0,
+        unchanged: 0,
+        unchangedTransactions: 0,
+      },
+    });
+    const restarted = service(async () =>
+      source(async function* () {
+        yield capture("observed-before-interruption");
+      }),
+    );
+    await restarted.resumeStalled();
+    await restarted.settled();
+    expect(await db.getRefresh(started.refresh!.id)).toMatchObject({
+      status: "completed",
+      windows: [{ status: "completed" }],
+      counts: {
+        captures: 2,
+        observed: 2,
+        created: 1,
+        updated: 0,
+        unchanged: 1,
+        unchangedTransactions: 1,
+      },
+    });
+    expect(await db.listTransactions()).toHaveLength(1);
+    expect(
+      (await db.listEvents()).filter(
+        (event) => event.type === "transaction.imported",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it.each([false, true])(
+    "finishes a thrown ranged capture with terminal window status and prior evidence preserved (accepted=%s)",
+    async (accepted) => {
+      await db.client.execute(
+        "CREATE TRIGGER reject_later_ranged_capture BEFORE INSERT ON transactions WHEN NEW.amount_minor = -200 BEGIN SELECT RAISE(ABORT, 'private-ranged-capture-failure'); END",
+      );
+      const requested: string[] = [];
+      const refreshes = service(async () =>
+        source(async function* (options) {
+          requested.push(options.range!.from);
+          if (options.range!.from === "2040-03-01") {
+            yield capture("completed-march");
+            return;
+          }
+          if (accepted) {
+            yield capture("accepted-february");
+          }
+          yield capture("rejected-february", -200);
+        }),
+      );
+      const [result] = await refreshes.wait([
+        await refreshes.start(connectionId, { trigger: "manual", range }),
+      ]);
+      expect(requested).toEqual(["2040-03-01", "2040-02-01"]);
+      expect(result!.refresh).toMatchObject({
+        status: "partial",
+        finishedAt: expect.any(String),
+        windows: [
+          { status: "completed" },
+          { status: accepted ? "partial" : "failed" },
+          { status: "pending" },
+        ],
+        counts: {
+          created: accepted ? 2 : 1,
+          captures: accepted ? 2 : 1,
+          observed: accepted ? 2 : 1,
+          failures: 1,
+        },
+      });
+      expect(
+        result!.refresh!.windows.some((window) => window.status === "running"),
+      ).toBe(false);
+      await refreshes.resumeStalled();
+      await refreshes.settled();
+      expect(requested).toHaveLength(2);
+    },
+  );
+
+  it("keeps committed counts when a later capture fails and charges recovery to its executing refresh once", async () => {
+    await db.client.execute(
+      "CREATE TRIGGER interrupt_second_capture BEFORE INSERT ON transactions WHEN NEW.amount_minor = -200 BEGIN SELECT RAISE(ABORT, 'private-second-capture-failure'); END",
+    );
+    const first = service(async () =>
+      source(async function* () {
+        yield capture("committed-first");
+        yield capture("pending-second", -200);
+      }),
+    );
+    const [failed] = await first.wait([
+      await first.start(connectionId, { trigger: "manual", operator: true }),
+    ]);
+    expect(failed!.refresh).toMatchObject({
+      status: "partial",
+      counts: { captures: 1, observed: 1, created: 1, failures: 1 },
+    });
+    const pending = (await db.listSyncRuns(connectionId, { limit: 10 })).find(
+      (run) => run.status === "started",
+    )!;
+    await db.client.execute("DROP TRIGGER interrupt_second_capture");
+    const report = createSyncDiagnosticReport();
+    const resumed = service(
+      async () =>
+        source(async function* () {
+          yield capture("pending-second", -200);
+        }),
+      { log: report.log },
+    );
+    const [finished] = await resumed.wait([
+      await resumed.start(connectionId, { trigger: "manual", operator: true }),
+    ]);
+    expect(finished!.refresh).toMatchObject({
+      status: "completed",
+      counts: {
+        captures: 2,
+        observed: 2,
+        created: 1,
+        updated: 0,
+        unchanged: 1,
+        unchangedTransactions: 1,
+        failures: 0,
+      },
+    });
+    expect((await db.getRefresh(failed!.refresh!.id))!.counts).toEqual(
+      failed!.refresh!.counts,
+    );
+    expect(report.report().entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          refreshId: finished!.refresh!.id,
+          captureId: pending.id,
+          stage: "commit",
+          outcome: "completed",
+        }),
+      ]),
+    );
+    await db.applyRun(pending.id, synthetic, undefined, finished!.refresh!.id);
+    expect((await db.getRefresh(finished!.refresh!.id))!.counts).toEqual(
+      finished!.refresh!.counts,
+    );
+  });
+
+  it("retries a temporary recovery commit failure without losing earlier counts or requiring attention", async () => {
+    await db.client.execute(
+      "CREATE TRIGGER stage_recovery_runs BEFORE INSERT ON transactions BEGIN SELECT RAISE(ABORT, 'synthetic-stage-recovery'); END",
+    );
+    const stagedAt = Date.now() - 2_000;
+    for (const [key, amount] of [
+      ["recover-first", -100],
+      ["recover-second", -200],
+    ] as const) {
+      const event = capture(key, amount) as Extract<
+        CollectionEvent,
+        { type: "capture" }
+      >;
+      await expect(
+        db.ingestRun(
+          {
+            runId: crypto.randomUUID(),
+            connectionId,
+            startedAt: new Date(
+              stagedAt + (key === "recover-first" ? 0 : 1),
+            ).toISOString(),
+            responses: [event.capture],
+          },
+          synthetic,
+        ),
+      ).rejects.toThrow();
+    }
+    await db.client.execute("DROP TRIGGER stage_recovery_runs");
+    await db.client.execute(
+      "CREATE TRIGGER interrupt_second_recovery BEFORE INSERT ON transactions WHEN NEW.amount_minor = -200 BEGIN SELECT RAISE(ABORT, 'private-second-recovery-failure'); END",
+    );
+    let interruptedProgress: Awaited<ReturnType<Database["getRefresh"]>>;
+    let interruptOnce = true;
+    const transientStore: Database = {
+      ...db,
+      withCollectionLock: (id, work) =>
+        db.withCollectionLock(id, (locked, signal) =>
+          work(
+            {
+              ...locked,
+              async recoverPendingRuns(...args) {
+                try {
+                  return await locked.recoverPendingRuns(...args);
+                } catch (error) {
+                  if (interruptOnce) {
+                    interruptOnce = false;
+                    interruptedProgress = await locked.getRefresh(args[2]!);
+                    await db.client.execute(
+                      "DROP TRIGGER interrupt_second_recovery",
+                    );
+                  }
+                  throw error;
+                }
+              },
+            },
+            signal,
+          ),
+        ),
+    };
+    const collect = vi.fn(async function* () {
+      yield capture("recover-second", -200);
+    });
+    const report = createSyncDiagnosticReport();
+    const refreshes = service(async () => source(collect), {
+      log: report.log,
+      store: transientStore,
+      retryDelaysMs: [0],
+    });
+    const [result] = await refreshes.wait([
+      await refreshes.start(connectionId, {
+        trigger: "manual",
+        operator: true,
+      }),
+    ]);
+    expect(interruptedProgress).toMatchObject({
+      status: "running",
+      requiresAttention: false,
+      counts: { captures: 1, created: 1, observed: 1, failures: 0 },
+    });
+    expect(result!.refresh).toMatchObject({
+      status: "completed",
+      requiresAttention: false,
+      counts: {
+        captures: 3,
+        observed: 3,
+        created: 2,
+        unchanged: 1,
+        unchangedTransactions: 1,
+        failures: 0,
+      },
+    });
+    expect(collect).toHaveBeenCalledTimes(1);
+    expect(
+      (await db.listTransactions())
+        .map((transaction) => transaction.sourceKey)
+        .sort(),
+    ).toEqual(["recover-first", "recover-second"]);
+    expect(report.report().entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          stage: "commit",
+          outcome: "failed",
+          failureCategory: "persistence",
+        }),
+        expect.objectContaining({
+          stage: "recovery",
+          outcome: "failed",
+          reason: "persistence_failure",
+          requiresAttention: false,
+          failureCategory: "persistence",
+        }),
+        expect.objectContaining({
+          stage: "recovery",
+          outcome: "completed",
+          counts: { recoveredRuns: 1 },
+        }),
+      ]),
+    );
+    expect(JSON.stringify(report.report())).not.toContain("private-");
+  });
+
+  it.each([
+    { code: "authentication_failed", attention: true },
+    { code: "authentication_challenge", attention: true },
+    { code: "rate_limited", attention: false },
+    { code: "budget_exhausted", attention: false },
+  ] as const)(
+    "finishes a recovered $code stop before constructing a collector",
+    async ({ code, attention }) => {
+      await db.client.execute(
+        "CREATE TRIGGER stage_provider_stop BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT, 'synthetic-stage-provider-stop'); END",
+      );
+      await expect(
+        db.ingestRun(
+          {
+            runId: crypto.randomUUID(),
+            connectionId,
+            responses: [],
+            failures: [{ accountKey: null, endpoint: "collection", code }],
+          },
+          synthetic,
+        ),
+      ).rejects.toThrow();
+      await db.client.execute("DROP TRIGGER stage_provider_stop");
+      const collect = vi.fn(async function* () {
+        yield capture("must-not-request-after-provider-stop");
+      });
+      const collector = vi.fn(async () => source(collect));
+      const refreshes = service(collector);
+      const [result] = await refreshes.wait([
+        await refreshes.start(connectionId, {
+          trigger: "manual",
+          operator: true,
+        }),
+      ]);
+      expect(result!.refresh).toMatchObject({
+        status: "failed",
+        providerStopReason: code,
+        requiresAttention: attention,
+        counts: { failures: 1, captures: 0, created: 0, observed: 0 },
+      });
+      expect(collector).not.toHaveBeenCalled();
+      expect(collect).not.toHaveBeenCalled();
+      expect(
+        (await refreshes.start(connectionId, { trigger: "manual" })).reason,
+      ).toBe(attention ? "requires_attention" : "cooldown");
+    },
+  );
+
+  it.each([
+    { empty: false, stagedStop: false },
+    { empty: true, stagedStop: false },
+    { empty: false, stagedStop: true },
+    { empty: true, stagedStop: true },
+  ])(
+    "preserves recent acceptance across a stopped execution crash (empty=$empty, stagedStop=$stagedStop)",
+    async ({ empty, stagedStop }) => {
+      await abandoned(new Date().toISOString(), { range: null, windows: [] });
+      const accepted = capture("recent-accepted-before-stop") as Extract<
+        CollectionEvent,
+        { type: "capture" }
+      >;
+      if (empty) {
+        accepted.capture.responseText = "[]";
+      }
+      await db.ingestRun(
+        {
+          runId: crypto.randomUUID(),
+          connectionId,
+          refreshId: "abandoned",
+          responses: [accepted.capture],
+        },
+        synthetic,
+      );
+      expect((await db.getRefresh("abandoned"))!.hasAcceptedEvidence).toBe(
+        true,
+      );
+      const stopped: CollectionEvent = {
+        type: "failure",
+        failure: {
+          accountKey: null,
+          endpoint: "collection",
+          code: "rate_limited",
+        },
+        fatal: true,
+      };
+      const stopInput = {
+        runId: crypto.randomUUID(),
+        connectionId,
+        refreshId: "abandoned",
+        responses: [],
+        failures: [stopped.failure],
+      };
+      if (stagedStop) {
+        await db.client.execute(
+          "CREATE TRIGGER stage_recent_stop BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT, 'synthetic-stage-recent-stop'); END",
+        );
+        await expect(db.ingestRun(stopInput, synthetic)).rejects.toThrow();
+        await db.client.execute("DROP TRIGGER stage_recent_stop");
+      } else {
+        await db.ingestRun(stopInput, synthetic);
+      }
+      const collector = vi.fn(async () => source(async function* () {}));
+      const resumed = service(collector);
+      await resumed.resumeStalled();
+      await resumed.settled();
+      const resumedRefresh = (await db.getRefresh("abandoned"))!;
+      expect(resumedRefresh).toMatchObject({
+        status: "partial",
+        hasAcceptedEvidence: true,
+        windows: [],
+        counts: {
+          captures: 1,
+          created: empty ? 0 : 1,
+          observed: empty ? 0 : 1,
+          failures: 1,
+        },
+      });
+      expect(collector).not.toHaveBeenCalled();
+      const uninterrupted = service(async () =>
+        source(async function* () {
+          yield accepted;
+          yield stopped;
+        }),
+      );
+      const [normal] = await uninterrupted.wait([
+        await uninterrupted.start(connectionId, {
+          trigger: "manual",
+          operator: true,
+        }),
+      ]);
+      expect(resumedRefresh.status).toBe(normal!.refresh!.status);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps earlier recent acceptance when a resumed attempt only fails (empty=%s)",
+    async (empty) => {
+      await abandoned(new Date().toISOString(), { range: null, windows: [] });
+      const accepted = capture("recent-accepted-before-retry") as Extract<
+        CollectionEvent,
+        { type: "capture" }
+      >;
+      if (empty) {
+        accepted.capture.responseText = "[]";
+      }
+      await db.ingestRun(
+        {
+          runId: crypto.randomUUID(),
+          connectionId,
+          refreshId: "abandoned",
+          responses: [accepted.capture],
+        },
+        synthetic,
+      );
+      const resumed = service(async () =>
+        source(async function* () {
+          yield {
+            type: "failure",
+            failure: {
+              accountKey: null,
+              endpoint: "collection",
+              code: "network_error",
+            },
+            fatal: false,
+          };
+        }),
+      );
+      await resumed.resumeStalled();
+      await resumed.settled();
+      expect(await db.getRefresh("abandoned")).toMatchObject({
+        status: "partial",
+        hasAcceptedEvidence: true,
+        counts: {
+          captures: 1,
+          created: empty ? 0 : 1,
+          observed: empty ? 0 : 1,
+          failures: 1,
+        },
+      });
+    },
+  );
+
+  it("does not claim recent acceptance from unrelated recovery counts", async () => {
+    await abandoned(new Date().toISOString(), { range: null, windows: [] });
+    const stagedAt = Date.now() - 2_000;
+    const foreign = capture("unrelated-recovery") as Extract<
+      CollectionEvent,
+      { type: "capture" }
+    >;
+    await db.client.execute(
+      "CREATE TRIGGER stage_foreign_recovery BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT, 'synthetic-stage-foreign-recovery'); END",
+    );
+    await expect(
+      db.ingestRun(
+        {
+          runId: crypto.randomUUID(),
+          startedAt: new Date(stagedAt).toISOString(),
+          connectionId,
+          responses: [foreign.capture],
+        },
+        synthetic,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      db.ingestRun(
+        {
+          runId: crypto.randomUUID(),
+          startedAt: new Date(stagedAt + 1).toISOString(),
+          connectionId,
+          responses: [],
+          failures: [
+            { accountKey: null, endpoint: "collection", code: "rate_limited" },
+          ],
+        },
+        synthetic,
+      ),
+    ).rejects.toThrow();
+    await db.client.execute("DROP TRIGGER stage_foreign_recovery");
+    const collector = vi.fn(async () => source(async function* () {}));
+    const resumed = service(collector);
+    await resumed.resumeStalled();
+    await resumed.settled();
+    expect(await db.getRefresh("abandoned")).toMatchObject({
+      status: "failed",
+      hasAcceptedEvidence: false,
+      counts: { created: 1, observed: 1, captures: 1, failures: 1 },
+    });
+    expect(collector).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { empty: false, stagedStop: false },
+    { empty: true, stagedStop: false },
+    { empty: false, stagedStop: true },
+    { empty: true, stagedStop: true },
+  ])(
+    "preserves partial window acceptance across a stopped checkpoint crash (empty=$empty, stagedStop=$stagedStop)",
+    async ({ empty, stagedStop }) => {
+      const requestedRange = { from: "2040-01-01", to: "2040-01-31" };
+      await abandoned(new Date().toISOString(), {
+        range: requestedRange,
+        windows: [{ ...requestedRange, status: "running" }],
+      });
+      const accepted = capture("accepted-before-stop") as Extract<
+        CollectionEvent,
+        { type: "capture" }
+      >;
+      if (empty) {
+        accepted.capture.responseText = "[]";
+      }
+      await db.ingestRun(
+        {
+          runId: crypto.randomUUID(),
+          connectionId,
+          refreshId: "abandoned",
+          responses: [accepted.capture],
+        },
+        synthetic,
+      );
+      expect(
+        (await db.getRefresh("abandoned"))!.windows[0]!.hasAcceptedEvidence,
+      ).toBe(true);
+      const stopped: CollectionEvent = {
+        type: "failure",
+        failure: {
+          accountKey: null,
+          endpoint: "collection",
+          code: "rate_limited",
+        },
+        fatal: true,
+      };
+      const stopInput = {
+        runId: crypto.randomUUID(),
+        connectionId,
+        refreshId: "abandoned",
+        responses: [],
+        failures: [stopped.failure],
+      };
+      if (stagedStop) {
+        await db.client.execute(
+          "CREATE TRIGGER stage_window_stop BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT, 'synthetic-stage-window-stop'); END",
+        );
+        await expect(db.ingestRun(stopInput, synthetic)).rejects.toThrow();
+        await db.client.execute("DROP TRIGGER stage_window_stop");
+      } else {
+        await db.ingestRun(stopInput, synthetic);
+      }
+      const collector = vi.fn(async () => source(async function* () {}));
+      const resumed = service(collector);
+      await resumed.resumeStalled();
+      await resumed.settled();
+      const resumedRefresh = (await db.getRefresh("abandoned"))!;
+      expect(resumedRefresh).toMatchObject({
+        status: "partial",
+        windows: [{ status: "partial", hasAcceptedEvidence: true }],
+        counts: {
+          captures: 1,
+          created: empty ? 0 : 1,
+          observed: empty ? 0 : 1,
+          failures: 1,
+        },
+      });
+      expect(collector).not.toHaveBeenCalled();
+      const uninterrupted = service(async () =>
+        source(async function* () {
+          yield accepted;
+          yield stopped;
+        }),
+      );
+      const [normal] = await uninterrupted.wait([
+        await uninterrupted.start(connectionId, {
+          trigger: "manual",
+          operator: true,
+          range: requestedRange,
+        }),
+      ]);
+      expect(resumedRefresh.status).toBe(normal!.refresh!.status);
+      expect(resumedRefresh.windows[0]!.status).toBe(
+        normal!.refresh!.windows[0]!.status,
+      );
+    },
+  );
+
+  it.each([false, true])(
+    "keeps earlier accepted evidence when the resumed window attempt only fails (empty=%s)",
+    async (empty) => {
+      const requestedRange = { from: "2040-01-01", to: "2040-01-31" };
+      await abandoned(new Date().toISOString(), {
+        range: requestedRange,
+        windows: [{ ...requestedRange, status: "running" }],
+      });
+      const accepted = capture("accepted-before-retry") as Extract<
+        CollectionEvent,
+        { type: "capture" }
+      >;
+      if (empty) {
+        accepted.capture.responseText = "[]";
+      }
+      await db.ingestRun(
+        {
+          runId: crypto.randomUUID(),
+          connectionId,
+          refreshId: "abandoned",
+          responses: [accepted.capture],
+        },
+        synthetic,
+      );
+      const resumed = service(async () =>
+        source(async function* () {
+          yield {
+            type: "failure",
+            failure: {
+              accountKey: null,
+              endpoint: "collection",
+              code: "network_error",
+            },
+            fatal: false,
+          };
+        }),
+      );
+      await resumed.resumeStalled();
+      await resumed.settled();
+      expect(await db.getRefresh("abandoned")).toMatchObject({
+        status: "partial",
+        windows: [{ status: "partial", hasAcceptedEvidence: true }],
+        counts: {
+          captures: 1,
+          created: empty ? 0 : 1,
+          observed: empty ? 0 : 1,
+          failures: 1,
+        },
+      });
+    },
+  );
+
+  it.each([
+    { code: "authentication_failed", attention: true },
+    { code: "authentication_challenge", attention: true },
+    { code: "rate_limited", attention: false },
+    { code: "budget_exhausted", attention: false },
+  ] as const)(
+    "resumes a persisted $code stop without restarting the provider or leaving a running month",
+    async ({ code, attention }) => {
+      await abandoned(new Date().toISOString(), {
+        windows: [
+          { from: "2040-02-01", to: "2040-02-29", status: "completed" },
+          { from: "2040-01-01", to: "2040-01-31", status: "running" },
+        ],
+      });
+      await db.ingestRun(
+        {
+          runId: crypto.randomUUID(),
+          connectionId,
+          refreshId: "abandoned",
+          responses: [],
+          failures: [{ accountKey: null, endpoint: "collection", code }],
+        },
+        synthetic,
+      );
+      const collector = vi.fn(async () => source(async function* () {}));
+      const refreshes = service(collector);
+      await refreshes.resumeStalled();
+      await refreshes.settled();
+      expect(await db.getRefresh("abandoned")).toMatchObject({
+        status: "partial",
+        providerStopReason: code,
+        requiresAttention: attention,
+        finishedAt: expect.any(String),
+        windows: [{ status: "completed" }, { status: "failed" }],
+        counts: { failures: 1 },
+      });
+      expect(collector).not.toHaveBeenCalled();
+      expect(
+        (await refreshes.start(connectionId, { trigger: "manual" })).reason,
+      ).toBe(attention ? "requires_attention" : "cooldown");
+    },
+  );
+
+  it("blocks deterministic extraction failures during recovery and reports their phase without retrying automatically", async () => {
+    await db.client.execute(
+      "CREATE TRIGGER stage_poisoned_capture BEFORE INSERT ON transactions BEGIN SELECT RAISE(ABORT, 'synthetic-stage-poisoned'); END",
+    );
+    const event = capture("poisoned") as Extract<
+      CollectionEvent,
+      { type: "capture" }
+    >;
+    await expect(
+      db.ingestRun(
+        {
+          runId: crypto.randomUUID(),
+          connectionId,
+          responses: [event.capture],
+        },
+        synthetic,
+      ),
+    ).rejects.toThrow();
+    await db.client.execute("DROP TRIGGER stage_poisoned_capture");
+    const extract = vi.fn(() => {
+      throw new Error("private-extraction-payload");
+    });
+    const collector = vi.fn(async () =>
+      source(async function* () {
+        yield capture("must-not-collect");
+      }),
+    );
+    const report = createSyncDiagnosticReport();
+    const refreshes = service(collector, {
+      log: report.log,
+      targets: async () => ({
+        targets: [
+          { connectionId, adapter: { ...synthetic, extract }, collector },
+        ],
+        failures: 0,
+      }),
+    });
+    const [result] = await refreshes.wait([
+      await refreshes.start(connectionId, {
+        trigger: "manual",
+        operator: true,
+      }),
+    ]);
+    expect(result!.refresh).toMatchObject({
+      status: "failed",
+      requiresAttention: true,
+      counts: { created: 0, captures: 0, failures: 1 },
+    });
+    expect(report.report().entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ stage: "extraction", outcome: "failed" }),
+        expect.objectContaining({
+          stage: "recovery",
+          outcome: "failed",
+          reason: "manual_recovery_required",
+          failureCategory: "execution",
+          requiresAttention: true,
+        }),
+      ]),
+    );
+    await refreshes.resumeStalled();
+    await refreshes.settled();
+    expect(
+      (await refreshes.start(connectionId, { trigger: "scheduled" })).reason,
+    ).toBe("requires_attention");
+    expect(extract).toHaveBeenCalledTimes(1);
+    expect(collector).not.toHaveBeenCalled();
+    expect(JSON.stringify(report.report())).not.toContain("private-");
+  });
+
+  it("reports parser-incompatible pending evidence as a bounded manual recovery block", async () => {
+    await db.client.execute(
+      "CREATE TRIGGER stage_incompatible_capture BEFORE INSERT ON transactions BEGIN SELECT RAISE(ABORT, 'synthetic-stage-incompatible'); END",
+    );
+    const event = capture("incompatible") as Extract<
+      CollectionEvent,
+      { type: "capture" }
+    >;
+    await expect(
+      db.ingestRun(
+        {
+          runId: crypto.randomUUID(),
+          connectionId,
+          responses: [event.capture],
+        },
+        { ...synthetic, parserVersion: "private-incompatible-parser-version" },
+      ),
+    ).rejects.toThrow();
+    await db.client.execute("DROP TRIGGER stage_incompatible_capture");
+    const collect = vi.fn(async function* () {
+      yield capture("never-requested");
+    });
+    const report = createSyncDiagnosticReport();
+    const refreshes = service(async () => source(collect), { log: report.log });
+    const [result] = await refreshes.wait([
+      await refreshes.start(connectionId, {
+        trigger: "manual",
+        operator: true,
+      }),
+    ]);
+    expect(result!.refresh).toMatchObject({
+      status: "failed",
+      requiresAttention: true,
+      counts: { captures: 0, created: 0, observed: 0, failures: 1 },
+    });
+    expect(report.report().entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          refreshId: result!.refresh!.id,
+          stage: "recovery",
+          outcome: "failed",
+          reason: "manual_recovery_required",
+          requiresAttention: true,
+          failureCategory: "collection",
+        }),
+      ]),
+    );
+    expect(collect).not.toHaveBeenCalled();
+    expect(
+      (await refreshes.start(connectionId, { trigger: "manual" })).reason,
+    ).toBe("requires_attention");
+    expect(JSON.stringify(report.report())).not.toContain("private-");
+  });
+
   it("answers a start that meets an active refresh at once, ahead of the cooldown", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -283,6 +1232,9 @@ describe("refresh service", () => {
         counts: {
           captures: 0,
           unchanged: 0,
+          observed: 0,
+          unchangedTransactions: 0,
+          unlisted: 0,
           failures: 0,
           created: 0,
           updated: 0,
@@ -361,6 +1313,9 @@ describe("refresh service", () => {
         counts: {
           captures: 0,
           unchanged: 0,
+          observed: 0,
+          unchangedTransactions: 0,
+          unlisted: 0,
           failures: 0,
           created: 0,
           updated: 0,
@@ -403,18 +1358,133 @@ describe("refresh service", () => {
     });
   });
 
-  it("fails a refresh still unfinished a day after its creation, without the provider", async () => {
-    await abandoned(new Date(Date.now() - 25 * 3_600_000).toISOString());
+  it.each([false, true])(
+    "expires unfinished ranges without a running checkpoint or provider call (prior completed=%s)",
+    async (completedBefore) => {
+      await abandoned(new Date(Date.now() - 25 * 3_600_000).toISOString(), {
+        range: {
+          from: "2040-01-01",
+          to: completedBefore ? "2040-02-29" : "2040-01-31",
+        },
+        windows: [
+          ...(completedBefore
+            ? [{ from: "2040-02-01", to: "2040-02-29", status: "completed" }]
+            : []),
+          { from: "2040-01-01", to: "2040-01-31", status: "running" },
+        ],
+      });
+      const collector = vi.fn(async () => source(async function* () {}));
+      const refreshes = service(collector);
+      await refreshes.resumeStalled();
+      await refreshes.settled();
+      expect(collector).not.toHaveBeenCalled();
+      const expired = (await db.getRefresh("abandoned"))!;
+      expect(expired).toMatchObject({
+        status: "failed",
+        failureReason: "expired",
+        counts: { failures: 1 },
+      });
+      expect(expired.windows.map((window) => window.status)).toEqual(
+        completedBefore ? ["completed", "failed"] : ["failed"],
+      );
+    },
+  );
+
+  it("preserves an accepted partial window when expiry requires the overall refresh to fail", async () => {
+    await abandoned(new Date(Date.now() - 25 * 3_600_000).toISOString(), {
+      range: { from: "2040-01-01", to: "2040-01-31" },
+      windows: [{ from: "2040-01-01", to: "2040-01-31", status: "running" }],
+    });
+    const accepted = capture("accepted-before-expiry") as Extract<
+      CollectionEvent,
+      { type: "capture" }
+    >;
+    await db.ingestRun(
+      {
+        runId: crypto.randomUUID(),
+        connectionId,
+        refreshId: "abandoned",
+        responses: [accepted.capture],
+      },
+      synthetic,
+    );
     const collector = vi.fn(async () => source(async function* () {}));
     const refreshes = service(collector);
     await refreshes.resumeStalled();
     await refreshes.settled();
-    expect(collector).not.toHaveBeenCalled();
     expect(await db.getRefresh("abandoned")).toMatchObject({
       status: "failed",
       failureReason: "expired",
-      counts: { failures: 1 },
+      windows: [{ status: "partial", hasAcceptedEvidence: true }],
+      counts: { created: 1, observed: 1, failures: 1 },
     });
+    expect(collector).not.toHaveBeenCalled();
+  });
+
+  it("traces recovered ingestion stages through the refresh logger with original correlation IDs", async () => {
+    const refreshId = crypto.randomUUID();
+    const captureId = crypto.randomUUID();
+    await abandoned(new Date().toISOString(), {
+      id: refreshId,
+      range: null,
+      windows: [],
+    });
+    await db.client.execute(
+      "CREATE TRIGGER interrupt_financial_application BEFORE INSERT ON transactions BEGIN SELECT RAISE(ABORT, 'synthetic interrupted application'); END",
+    );
+    const event = capture("recovered-for-diagnostics") as Extract<
+      CollectionEvent,
+      { type: "capture" }
+    >;
+    await expect(
+      db.ingestRun(
+        {
+          runId: captureId,
+          refreshId,
+          connectionId,
+          responses: [event.capture],
+        },
+        synthetic,
+      ),
+    ).rejects.toThrow();
+    await db.client.execute("DROP TRIGGER interrupt_financial_application");
+    const report = createSyncDiagnosticReport();
+    const refreshes = service(
+      async () =>
+        source(async function* () {
+          yield capture("fresh-after-recovery");
+        }),
+      { log: report.log },
+    );
+    await refreshes.resumeStalled();
+    await refreshes.settled();
+    expect(await db.getRefresh(refreshId)).toMatchObject({
+      status: "completed",
+      counts: { created: 2, observed: 2 },
+    });
+    expect(report.report().entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          refreshId,
+          captureId,
+          stage: "extraction",
+          outcome: "completed",
+          counts: { extracted: 1 },
+        }),
+        expect.objectContaining({
+          refreshId,
+          captureId,
+          stage: "commit",
+          outcome: "completed",
+        }),
+        expect.objectContaining({
+          refreshId,
+          stage: "recovery",
+          outcome: "completed",
+          counts: { recoveredRuns: 1 },
+        }),
+      ]),
+    );
   });
 
   it("finishes an abandoned refresh when a read polls it", async () => {
@@ -652,7 +1722,10 @@ describe("provider sessions across a backfill", () => {
     return { calls, expire: () => valid.clear() };
   }
 
-  async function backfill(collector: ProviderCollector) {
+  async function backfill(
+    collector: ProviderCollector,
+    debugArchiveDays?: number,
+  ) {
     const [result] = await runOperatorRefresh({
       store: db,
       targets: async () => ({
@@ -666,6 +1739,7 @@ describe("provider sessions across a backfill", () => {
         failures: 0,
       }),
       connectionId: calConnection,
+      ...(debugArchiveDays !== undefined && { debugArchiveDays }),
       range: { from: "2040-01-01", to: "2040-03-31" },
     });
     return result?.refresh;
@@ -740,10 +1814,11 @@ describe("provider sessions across a backfill", () => {
         username: "SYNTHETIC-USER",
         password: "SYNTHETIC-PASSWORD",
       }),
+      2,
     );
     expect(refresh?.status).toBe("partial");
     const archived = await db.client.execute(
-      "SELECT snapshot_json FROM sync_runs",
+      "SELECT metadata_json AS evidence FROM sync_runs UNION ALL SELECT snapshot_json AS evidence FROM sync_run_bodies",
     );
     expect(JSON.stringify(archived.rows)).not.toContain("SYNTHETIC-TOKEN");
   });
@@ -757,20 +1832,23 @@ describe("provider sessions across a backfill", () => {
       password: "SYNTHETIC-PASSWORD",
     });
     let months = 0;
-    const refresh = await backfill({
-      ...collector,
-      async *collect(options) {
-        // The second month replaces token 1 with token 2; the third echoes token 1.
-        if (++months === 2) {
-          cal.expire();
-        }
-        yield* collector.collect(options);
+    const refresh = await backfill(
+      {
+        ...collector,
+        async *collect(options) {
+          // The second month replaces token 1 with token 2; the third echoes token 1.
+          if (++months === 2) {
+            cal.expire();
+          }
+          yield* collector.collect(options);
+        },
       },
-    });
+      2,
+    );
     expect(cal.calls.logins).toBe(2);
     expect(refresh?.status).toBe("partial");
     const archived = await db.client.execute(
-      "SELECT snapshot_json FROM sync_runs",
+      "SELECT metadata_json AS evidence FROM sync_runs UNION ALL SELECT snapshot_json AS evidence FROM sync_run_bodies",
     );
     expect(JSON.stringify(archived.rows)).not.toContain("SYNTHETIC-TOKEN");
   });

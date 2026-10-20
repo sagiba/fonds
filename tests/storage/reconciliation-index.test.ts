@@ -1,6 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { emptyDetails, type TransactionInput } from "../../src/domain/model.js";
+import {
+  emptyDetails,
+  type JsonObject,
+  type JsonValue,
+  type TransactionInput,
+} from "../../src/domain/model.js";
+import {
+  currentSourceRowIndices,
+  currentSourceRows,
+  evidenceList,
+  evidenceObject,
+  mergeDeclaredEvidence,
+} from "../../src/domain/provider-evidence.js";
 import type { SourceAdapter } from "../../src/domain/source-adapter.js";
 import { calAdapter } from "../../src/providers/cal/adapter.js";
 import { normalizeCalSearchFilters } from "../../src/providers/cal/search.js";
@@ -11,8 +23,11 @@ import {
 import {
   type CollectionScope,
   syncRuns,
-  transactions,
 } from "../../src/storage/sqlite/schema.js";
+import {
+  readTransactions,
+  updateTransaction,
+} from "../helpers/sqlite-transactions.js";
 
 const accountKey = "synthetic-account";
 const connectionId = "synthetic-bank";
@@ -52,6 +67,15 @@ function bankAdapter(overrides: Partial<SourceAdapter> = {}): SourceAdapter {
   return {
     provider: "synthetic-bank",
     parserVersion: "synthetic-v1",
+    retainProviderEvidence: () => ({}),
+    projectProviderState: (value) =>
+      evidenceObject(value, {
+        identity: {
+          baseKey: "scalar",
+          occurrenceCount: "scalar",
+          currentRows: ["scalar"],
+        },
+      }),
     extract(raw, context) {
       return {
         transactions: (JSON.parse(raw) as TransactionInput[]).map(
@@ -111,7 +135,7 @@ describe("reconciliation indexes and provider boundaries", () => {
     );
   }
 
-  const rows = () => db.orm.select().from(transactions).all();
+  const rows = () => readTransactions(db.orm);
 
   it("retains month-scoped pending absence and health across rollover while native reobservations keep their ID", async () => {
     const july: CollectionScope = {
@@ -228,7 +252,6 @@ describe("reconciliation indexes and provider boundaries", () => {
     expect(sparse.amountMinor).toBe(0);
     expect(sparse.installmentCount).toBe(0);
     expect(sparse.details.sourceRefs.map((ref) => ref.runId)).toEqual([
-      "enriched",
       "sparse",
     ]);
     const replacement = emptyDetails();
@@ -277,7 +300,7 @@ describe("reconciliation indexes and provider boundaries", () => {
       wallet: null,
       threeDSecureUsed: null,
       recurring: null,
-      version: replaced.version,
+      version: replaced.version + 1,
     });
     expect((await db.getTransaction(original.id))?.annotation?.data.notes).toBe(
       "User-owned note",
@@ -387,7 +410,7 @@ describe("reconciliation indexes and provider boundaries", () => {
       billingDate: null,
       fxFeeMinor: null,
       fxFeeCurrency: null,
-      version: 1,
+      version: 2,
     });
     expect(purchase.details.currencyExchange).toBeUndefined();
     expect(purchase.details.issues).toContain("conflicting_installment_plan");
@@ -552,7 +575,7 @@ describe("reconciliation indexes and provider boundaries", () => {
     expect(enriched).toMatchObject({
       id: original.id,
       amountMinor: original.amountMinor,
-      version: original.version,
+      version: original.version + 1,
       lastSeenAt: original.lastSeenAt,
       lastSeenRunId: original.lastSeenRunId,
       presence: original.presence,
@@ -671,6 +694,120 @@ describe("reconciliation indexes and provider boundaries", () => {
     });
   });
 
+  it.each(["weak", "ambiguous"] as const)(
+    "keeps %s identity matching quiet after retaining partial evidence from another scope",
+    async (identityStrength) => {
+      const project = (value: JsonObject) =>
+        evidenceObject(value, {
+          rows: [{ label: "scalar", marker: "scalar" }],
+        });
+      const adapter = bankAdapter({
+        retainProviderEvidence: project,
+        projectProviderState: (value) =>
+          evidenceObject(value, {
+            identity: {
+              baseKey: "scalar",
+              occurrenceCount: "scalar",
+              currentRows: ["scalar"],
+            },
+          }),
+        mergeProviderEvidence: (previous, incoming) =>
+          mergeDeclaredEvidence(previous, incoming, {
+            project,
+            componentKey: (row: JsonValue) =>
+              row &&
+              typeof row === "object" &&
+              !Array.isArray(row) &&
+              typeof row.label === "string"
+                ? row.label
+                : null,
+          }),
+      });
+      const inputs = ["A", "B"].map((label) =>
+        entry("same-uncertain-key", {
+          identityStrength,
+          details: {
+            ...emptyDetails(),
+            provider: {
+              "synthetic-bank": { rows: [{ label, marker: "complete" }] },
+            },
+          },
+        }),
+      );
+      await capture("complete", inputs, adapter);
+      const original = await rows();
+      expect(original).toHaveLength(2);
+      const noted = original.find(
+        (row) =>
+          (
+            currentSourceRows(
+              row.details.provider[adapter.provider]!,
+            )[0] as JsonObject
+          ).label === "A",
+      )!;
+      const annotation = await db.editAnnotation({
+        transactionId: noted.id,
+        expectedVersion: 0,
+        notes: "Keep the A occurrence",
+      });
+      for (const row of original) {
+        const namespace = row.details.provider[adapter.provider]!;
+        const current = currentSourceRows(namespace);
+        const partial = { label: (current[0] as JsonObject).label! };
+        const merged = adapter.mergeProviderEvidence!(
+          { rows: [partial] },
+          namespace,
+        );
+        await updateTransaction(db.orm, row.id, {
+          details: {
+            ...row.details,
+            provider: {
+              [adapter.provider]: {
+                ...adapter.projectProviderState!(namespace),
+                ...merged,
+                identity: {
+                  ...((namespace.identity as JsonObject) ?? {}),
+                  currentRows: currentSourceRowIndices(
+                    evidenceList(merged.rows),
+                    current,
+                  ),
+                },
+              },
+            },
+          },
+        });
+      }
+      const before = await rows();
+      for (const [index, incoming] of [
+        [...inputs].reverse(),
+        inputs,
+      ].entries()) {
+        expect(
+          await capture(`repeat-${index}`, incoming, adapter),
+        ).toMatchObject({ created: 0, updated: 0, unchanged: 2 });
+        expect(
+          (await rows())
+            .map((row) => [row.id, row.version, row.identityStrength])
+            .sort(),
+        ).toEqual(
+          before
+            .map((row) => [row.id, row.version, row.identityStrength])
+            .sort(),
+        );
+      }
+      expect((await db.getTransaction(noted.id))!.annotation).toEqual(
+        annotation,
+      );
+      expect(
+        (await rows()).every(
+          (row) =>
+            evidenceList(row.details.provider[adapter.provider]!.rows)
+              .length === 2,
+        ),
+      ).toBe(true);
+    },
+  );
+
   it("preserves duplicate uncertain identities when reordered, and keeps a changed multiplicity separate", async () => {
     const duplicate = entry("weak", { identityStrength: "weak" });
     const different = entry("weak", {
@@ -688,7 +825,7 @@ describe("reconciliation indexes and provider boundaries", () => {
     ).toEqual(original.map((row) => [row.id, row.amountMinor]).sort());
     expect(await capture("shrunk", [duplicate, different])).toMatchObject({
       created: 2,
-      updated: 0,
+      updated: 3,
     });
     const current = (await rows()).filter((row) => row.presence === "seen");
     expect(current).toHaveLength(2);

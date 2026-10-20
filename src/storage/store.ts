@@ -4,7 +4,11 @@ import {
   consumerSchema,
   cursorFor,
 } from "../application/change-delivery.js";
-import type { LockedCollectionStore } from "../application/collection-lock.js";
+import {
+  type LockedCollectionStore,
+  ManualRecoveryRequiredError,
+  RetryableRecoveryError,
+} from "../application/collection-lock.js";
 import {
   connectionInputSchema,
   type InternalStore,
@@ -30,6 +34,12 @@ import {
   OCCURRENCE_LEASE_MS,
   OCCURRENCE_RETENTION_MS,
 } from "../application/scheduled-collections.js";
+import {
+  elapsedMs,
+  syncCorrelationIds,
+  syncDiagnostics,
+  type SyncDiagnosticSink,
+} from "../application/sync-diagnostics.js";
 import { cardDiscoverySchema } from "../domain/cards.js";
 import { InvalidInputError, NotFoundError } from "../domain/errors.js";
 import {
@@ -48,21 +58,37 @@ import {
 import { FinancialPlan } from "../domain/plans/state.js";
 import {
   extractRun,
+  finishTransactionContent,
   planRun,
   type RunInput,
   type SyncResult,
 } from "../domain/plans/sync.js";
 import { calculateTotals, presentTransaction } from "../domain/read-model.js";
 import type { Connection, ConnectionConfig } from "../domain/records.js";
+import { PROVIDER_STOP_REASONS } from "../domain/refreshes.js";
 import type { SourceAdapter } from "../domain/source-adapter.js";
 import {
-  assertSameEvidence,
+  contentDigest,
   prepareRun,
   replayResult,
+  requireEvidenceRetention,
   retainedRun,
+  runEvidenceDigest,
 } from "./run-evidence.js";
 import type { PlanScope } from "./sql.js";
 import type { RefreshRow, RefreshWindowRow, Statements } from "./statements.js";
+
+// Keep public error identity (for example version conflicts) while classifying recovery.
+const interpretationErrors = new WeakSet<Error>();
+
+function interpretationError(cause: unknown): Error {
+  const error =
+    cause instanceof Error
+      ? cause
+      : new Error("Archived evidence cannot be interpreted", { cause });
+  interpretationErrors.add(error);
+  return error;
+}
 
 export type WriteResults<Writes extends readonly PromiseLike<unknown>[]> = {
   -readonly [Index in keyof Writes]: Awaited<Writes[Index]>;
@@ -91,12 +117,17 @@ function refreshFromRow(
     startedAt: row.startedAt,
     finishedAt: row.finishedAt,
     requiresAttention: row.requiresAttention,
+    providerStopReason: row.providerStopReason,
+    hasAcceptedEvidence: row.hasAcceptedEvidence,
     counts: {
       captures: row.captures,
       unchanged: row.unchanged,
       failures: row.failures,
       created: row.created,
       updated: row.updated,
+      observed: row.observed,
+      unchangedTransactions: row.unchangedTransactions,
+      unlisted: row.unlisted,
     },
     failureCodes: row.failureCodes,
     failureReason: row.failureReason,
@@ -108,6 +139,7 @@ function refreshFromRow(
       from: window.rangeFrom,
       to: window.rangeTo,
       status: window.status,
+      hasAcceptedEvidence: window.hasAcceptedEvidence,
     })),
   };
 }
@@ -127,6 +159,8 @@ function refreshRow(refresh: Refresh): RefreshRow {
     startedAt: refresh.startedAt,
     finishedAt: refresh.finishedAt,
     requiresAttention: refresh.requiresAttention,
+    providerStopReason: refresh.providerStopReason ?? null,
+    hasAcceptedEvidence: refresh.hasAcceptedEvidence ?? false,
     ...refresh.counts,
     failureCodes: refresh.failureCodes,
     failureReason: refresh.failureReason,
@@ -217,21 +251,34 @@ export function lockedCollectionStore<Db>(
     updateConfig: store.updateConfig,
     ledgerRevision: store.ledgerRevision,
     updateRefresh: store.updateRefresh,
-    async recoverPendingRuns(adapter) {
+    async recoverPendingRuns(adapter, onDiagnostic, refreshId) {
       signal.throwIfAborted();
-      const pending = await db.execute(
-        statements.pendingRuns(db.root, connectionId, 101),
-      );
+      const pending = await db
+        .execute(statements.pendingRuns(db.root, connectionId, 101))
+        .catch(() => {
+          signal.throwIfAborted();
+          throw new RetryableRecoveryError();
+        });
       if (
         pending.length > 100 ||
         pending.some((run) => run.parserVersion !== adapter.parserVersion)
       ) {
-        throw new Error("Archived collection requires manual recovery");
+        throw new ManualRecoveryRequiredError();
       }
       const results: SyncResult[] = [];
       for (const run of pending) {
         signal.throwIfAborted();
-        results.push(await store.applyRun(run.id, adapter));
+        try {
+          results.push(
+            await store.applyRun(run.id, adapter, onDiagnostic, refreshId),
+          );
+        } catch (error) {
+          signal.throwIfAborted();
+          if (error instanceof Error && interpretationErrors.has(error)) {
+            throw new ManualRecoveryRequiredError("execution");
+          }
+          throw new RetryableRecoveryError();
+        }
       }
       return results;
     },
@@ -387,6 +434,7 @@ function buildStore<Db>(
               rangeFrom: window.from,
               rangeTo: window.to,
               status: window.status,
+              hasAcceptedEvidence: window.hasAcceptedEvidence ?? false,
             })),
           ),
         ]);
@@ -417,14 +465,24 @@ function buildStore<Db>(
       ),
     updateRefresh: (id, progress) =>
       db.transaction(async (tx) => {
-        const row = (await statements.refresh(tx, id))[0];
+        const reference = (await statements.refresh(tx, id))[0];
         const connection =
-          row && (await statements.lockConnection(tx, row.connectionId))[0];
+          reference &&
+          (await statements.lockConnection(tx, reference.connectionId))[0];
+        const row = connection && (await statements.refresh(tx, id))[0];
         if (!row || !connection) {
           throw new NotFoundError("Refresh not found");
         }
         const { window, counts, ...fields } = progress;
-        const set = { ...fields, ...counts };
+        const cumulative = counts && { ...counts };
+        if (cumulative) {
+          for (const key of Object.keys(
+            cumulative,
+          ) as (keyof typeof cumulative)[]) {
+            cumulative[key] = Math.max(row[key], cumulative[key]);
+          }
+        }
+        const set = { ...fields, ...cumulative };
         await commit(tx, connection, [
           ...(Object.keys(set).length
             ? [statements.updateRefresh(tx, id, set)]
@@ -461,10 +519,16 @@ function buildStore<Db>(
     }
   }
 
-  async function savePlan(tx: Db, plan: FinancialPlan, runId?: string) {
+  async function savePlan(
+    tx: Db,
+    plan: FinancialPlan,
+    runId?: string,
+    after: Iterable<PromiseLike<unknown>> = [],
+  ) {
     // Catalog rows precede financial writes inside the same transaction/batch.
     await commit(tx, plan.snapshot.connection, [
       ...statements.applyPlan(tx, plan, runId),
+      ...after,
     ]);
   }
 
@@ -553,73 +617,418 @@ function buildStore<Db>(
       relatedIds,
     );
     const result = command(plan);
+    finishTransactionContent(
+      plan,
+      undefined,
+      undefined,
+      plan.events[0]?.createdAt ?? new Date().toISOString(),
+      new Set(),
+      plan.events[0]?.actor ?? "owner",
+    );
     await savePlan(tx, plan);
     return result;
   }
 
-  async function ingestRun(input: RunInput, adapter: SourceAdapter) {
+  async function ingestRun(
+    input: RunInput,
+    adapter: SourceAdapter,
+    onDiagnostic?: SyncDiagnosticSink,
+  ) {
     const run = prepareRun(input, adapter);
-    await db.transaction(async (tx) => {
-      const connection = (
-        await statements.lockConnection(tx, run.connectionId)
-      )[0];
-      if (!connection) {
-        throw new NotFoundError("Connection not found");
-      }
-      if (connection.provider !== adapter.provider) {
-        throw new Error("Connection provider mismatch");
-      }
-      const [inserted] = await commit(tx, connection, [
-        statements.insertRun(tx, retainedRun(run, adapter)),
-      ]);
-      if (!inserted.length) {
-        // Retained evidence is immutable, so this may follow the commit.
-        assertSameEvidence((await statements.run(tx, run.runId))[0]!, run);
-      }
+    const digest = await runEvidenceDigest(run);
+    const emit = syncDiagnostics(onDiagnostic);
+    const ids = syncCorrelationIds({
+      captureId: run.runId,
+      refreshId: run.refreshId,
     });
-    return applyRun(run.runId, adapter);
+    const started = performance.now();
+    let staged = false;
+    emit({ event: "fonds_sync", ...ids, stage: "archive", outcome: "started" });
+    await db
+      .transaction(async (tx) => {
+        const connection = (
+          await statements.lockConnection(tx, run.connectionId)
+        )[0];
+        if (!connection) {
+          throw new NotFoundError("Connection not found");
+        }
+        if (connection.provider !== adapter.provider) {
+          throw new Error("Connection provider mismatch");
+        }
+        const existing = (await statements.runState(tx, run.runId))[0];
+        if (existing) {
+          if (existing.evidenceDigest !== digest) {
+            throw new Error("Run ID already refers to different evidence");
+          }
+        } else {
+          const retained = retainedRun(run, adapter, digest);
+          await commit(tx, connection, [
+            statements.insertRun(tx, retained),
+            statements.insertRunBody(tx, retained),
+          ]);
+          staged = true;
+        }
+      })
+      .catch((error: unknown) => {
+        emit({
+          event: "fonds_sync",
+          ...ids,
+          stage: "archive",
+          outcome: "failed",
+          reason: "persistence_failure",
+          failureCategory: "persistence",
+        });
+        throw error;
+      });
+    emit({
+      event: "fonds_sync",
+      ...ids,
+      stage: "archive",
+      outcome: "completed",
+      reason: staged ? "body_staged" : "receipt_exists",
+      durationMs: elapsedMs(started),
+    });
+    return applyRun(run.runId, adapter, onDiagnostic);
   }
 
   async function applyRun(
     id: string,
     adapter: SourceAdapter,
+    onDiagnostic?: SyncDiagnosticSink,
+    executionRefreshId?: string,
   ): Promise<SyncResult> {
+    const emit = syncDiagnostics(onDiagnostic);
+    const ids = syncCorrelationIds({
+      captureId: id,
+      refreshId: executionRefreshId,
+    });
+    try {
+      requireEvidenceRetention(adapter);
+    } catch (error) {
+      emit({
+        event: "fonds_sync",
+        ...ids,
+        stage: "read",
+        outcome: "failed",
+        failureCategory: "execution",
+      });
+      throw interpretationError(error);
+    }
     const stored = (
-      await db.execute(statements.runWithConnection(db.root, id))
+      await db
+        .execute(statements.runWithConnection(db.root, id))
+        .catch((error: unknown) => {
+          emit({
+            event: "fonds_sync",
+            ...ids,
+            stage: "read",
+            outcome: "failed",
+            failureCategory: "persistence",
+          });
+          throw error;
+        })
     )[0];
     if (!stored) {
-      throw new NotFoundError("Run not found");
+      emit({
+        event: "fonds_sync",
+        ...ids,
+        stage: "read",
+        outcome: "failed",
+        failureCategory: "execution",
+      });
+      throw interpretationError(new NotFoundError("Run not found"));
     }
     const { run: archived, connection } = stored;
+    Object.assign(
+      ids,
+      syncCorrelationIds({
+        refreshId: executionRefreshId ?? archived.refreshId ?? undefined,
+      }),
+    );
     if (connection.provider !== adapter.provider) {
-      throw new Error("Connection provider mismatch");
+      emit({
+        event: "fonds_sync",
+        ...ids,
+        stage: "read",
+        outcome: "failed",
+        failureCategory: "execution",
+      });
+      throw interpretationError(new Error("Connection provider mismatch"));
     }
     if (archived.appliedAt) {
       return replayResult(archived);
     }
     if (archived.parserVersion !== adapter.parserVersion) {
-      throw new Error("Run parser version differs from adapter");
-    }
-    const extraction = extractRun(archived, adapter);
-    return db.transaction(async (tx) => {
-      const locked = (await statements.lockConnection(tx, connection.id))[0]!;
-      const state = (await statements.runState(tx, id))[0]!;
-      const run = { ...archived, ...state };
-      if (run.appliedAt) {
-        return replayResult(run);
-      }
-      const plan = await loadPlan(tx, locked, undefined, [], true);
-      const result = planRun(
-        plan,
-        run,
-        adapter,
-        extraction,
-        new Date().toISOString(),
-        () => crypto.randomUUID(),
+      emit({
+        event: "fonds_sync",
+        ...ids,
+        stage: "read",
+        outcome: "failed",
+        failureCategory: "execution",
+      });
+      throw interpretationError(
+        new Error("Run parser version differs from adapter"),
       );
-      await savePlan(tx, plan, id);
-      return result;
+    }
+    if (!archived.bodyAvailable) {
+      emit({
+        event: "fonds_sync",
+        ...ids,
+        stage: "read",
+        outcome: "failed",
+        failureCategory: "execution",
+      });
+      throw interpretationError(
+        new Error("Unapplied run has no recoverable source body"),
+      );
+    }
+    const started = performance.now();
+    emit({
+      event: "fonds_sync",
+      ...ids,
+      stage: "extraction",
+      outcome: "started",
     });
+    let extraction: ReturnType<typeof extractRun>;
+    try {
+      extraction = extractRun(archived, adapter);
+    } catch (error) {
+      emit({
+        event: "fonds_sync",
+        ...ids,
+        stage: "extraction",
+        outcome: "failed",
+        failureCategory: "invalid_response",
+      });
+      throw interpretationError(error);
+    }
+    emit({
+      event: "fonds_sync",
+      ...ids,
+      stage: "extraction",
+      outcome: "completed",
+      durationMs: elapsedMs(started),
+      counts: {
+        extracted: extraction.extracted.reduce(
+          (count, item) => count + item.result.transactions.length,
+          0,
+        ),
+      },
+    });
+    let phase: "read" | "reconciliation" | "commit" = "read";
+    let commitStarted = performance.now();
+    const result = await db
+      .transaction(async (tx) => {
+        const locked = (await statements.lockConnection(tx, connection.id))[0]!;
+        const state = (await statements.runState(tx, id))[0]!;
+        const run = { ...archived, ...state };
+        if (run.appliedAt) {
+          return replayResult(run);
+        }
+        const plan = await loadPlan(tx, locked, undefined, [], true);
+        phase = "reconciliation";
+        const reconciliationStarted = performance.now();
+        emit({
+          event: "fonds_sync",
+          ...ids,
+          stage: "reconciliation",
+          outcome: "started",
+        });
+        let result: SyncResult;
+        try {
+          result = planRun(
+            plan,
+            run,
+            adapter,
+            extraction,
+            new Date().toISOString(),
+            () => crypto.randomUUID(),
+          );
+        } catch (error) {
+          throw interpretationError(error);
+        }
+        emit({
+          event: "fonds_sync",
+          ...ids,
+          stage: "reconciliation",
+          outcome: "completed",
+          durationMs: elapsedMs(reconciliationStarted),
+          counts: {
+            observed: result.observed ?? 0,
+            created: result.created,
+            changed: result.updated,
+            unchangedTransactions: result.unchanged ?? 0,
+            absent: result.unlisted,
+            deferred: plan.deferredCandidates.length,
+          },
+        });
+        const deferred = await Promise.all(
+          plan.deferredCandidates.map(async (candidate) => ({
+            id: await contentDigest({
+              digestSchema: "fonds-deferred-evidence-v1",
+              connectionId: connection.id,
+              ...candidate,
+            }),
+            connectionId: connection.id,
+            ...candidate,
+            firstSeenRunId: id,
+            lastSeenRunId: id,
+          })),
+        );
+        phase = "commit";
+        commitStarted = performance.now();
+        emit({
+          event: "fonds_sync",
+          ...ids,
+          stage: "commit",
+          outcome: "started",
+        });
+        const refreshId = executionRefreshId ?? run.refreshId;
+        const refresh = refreshId
+          ? (await statements.refresh(tx, refreshId))[0]
+          : undefined;
+        if (refreshId && (!refresh || refresh.connectionId !== connection.id)) {
+          throw new Error("Run refresh does not belong to its connection");
+        }
+        const activeWindows =
+          refresh &&
+          refresh.rangeFrom !== null &&
+          refresh.id === run.refreshId &&
+          result.status !== "failed"
+            ? (await statements.refreshWindows(tx, refresh.id)).filter(
+                (window) => window.status === "running",
+              )
+            : [];
+        const acceptedWindow =
+          activeWindows.length === 1 && !activeWindows[0]!.hasAcceptedEvidence
+            ? activeWindows[0]
+            : undefined;
+        const captures = run.snapshot.responses.length;
+        const delta = {
+          captures,
+          observed: result.observed ?? 0,
+          unchangedTransactions: result.unchanged ?? 0,
+          created: result.created,
+          updated: result.updated,
+          unlisted: result.unlisted,
+          failures: result.status === "completed" ? 0 : 1,
+          unchanged:
+            result.status === "completed" &&
+            result.created === 0 &&
+            result.updated === 0 &&
+            result.unlisted === 0 &&
+            result.observed !== undefined &&
+            result.unchanged === result.observed
+              ? captures
+              : 0,
+        };
+        const refreshCounts = { ...delta };
+        if (refresh) {
+          for (const key of Object.keys(delta) as (keyof typeof delta)[]) {
+            refreshCounts[key] += refresh[key];
+            if (!Number.isSafeInteger(refreshCounts[key])) {
+              throw new Error("Refresh count exhausted");
+            }
+          }
+        }
+        await savePlan(tx, plan, id, [
+          ...(acceptedWindow
+            ? [
+                statements.markRefreshWindowAccepted(
+                  tx,
+                  acceptedWindow.refreshId,
+                  acceptedWindow.rangeFrom,
+                ),
+              ]
+            : []),
+          ...(refresh
+            ? [
+                statements.updateRefresh(tx, refresh.id, {
+                  ...refreshCounts,
+                  hasAcceptedEvidence:
+                    refresh.hasAcceptedEvidence ||
+                    (refresh.id === run.refreshId &&
+                      result.status !== "failed"),
+                  providerStopReason:
+                    refresh.providerStopReason ??
+                    PROVIDER_STOP_REASONS.find((code) =>
+                      run.snapshot.failures?.some(
+                        (failure) => failure.code === code,
+                      ),
+                    ) ??
+                    null,
+                  failureCodes: [
+                    ...new Set([
+                      ...refresh.failureCodes,
+                      ...(result.failureCode ? [result.failureCode] : []),
+                    ]),
+                  ].sort(),
+                  requiresAttention:
+                    refresh.requiresAttention ||
+                    (run.snapshot.failures ?? []).some(
+                      (failure) =>
+                        failure.code === "authentication_failed" ||
+                        failure.code === "authentication_challenge",
+                    ),
+                }),
+              ]
+            : []),
+          ...[...new Map(deferred.map((row) => [row.id, row])).values()].map(
+            (row) => statements.upsertDeferredEvidence(tx, row),
+          ),
+          ...statements.finishRunEvidence(tx, id, archived.bodyExpiresAt),
+        ]);
+        return result;
+      })
+      .catch((error: unknown) => {
+        emit({
+          event: "fonds_sync",
+          ...ids,
+          stage: phase,
+          outcome: "failed",
+          failureCategory:
+            phase === "reconciliation" ? "execution" : "persistence",
+        });
+        throw error;
+      });
+    emit({
+      event: "fonds_sync",
+      ...ids,
+      stage: "commit",
+      outcome: "completed",
+      durationMs: elapsedMs(commitStarted),
+    });
+    emit({
+      event: "fonds_sync",
+      ...ids,
+      stage: "archive",
+      outcome: "completed",
+      reason:
+        archived.bodyExpiresAt === null
+          ? "body_released"
+          : "debug_body_retained",
+    });
+    // Expiration is maintenance after the atomic financial commit; failure cannot undo it.
+    try {
+      await db.execute(
+        statements.pruneDebugBodies(db.root, new Date().toISOString()),
+      );
+      emit({
+        event: "fonds_sync",
+        ...ids,
+        stage: "purge",
+        outcome: "completed",
+      });
+    } catch {
+      emit({
+        event: "fonds_sync",
+        ...ids,
+        stage: "purge",
+        outcome: "failed",
+        failureCategory: "persistence",
+      });
+    }
+    return result;
   }
 
   async function latestEventId(connectionId?: string) {

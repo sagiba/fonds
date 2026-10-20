@@ -12,14 +12,13 @@ import {
   type IsracardCapture,
   isracardCaptureContext,
   isracardCaptureSchema,
-  isracardContentFingerprint,
   serializeIsracardCapture,
 } from "../../../src/providers/isracard/capture.js";
 import {
   type Database,
   openDatabase,
 } from "../../../src/storage/sqlite/database.js";
-import { syncRuns } from "../../../src/storage/sqlite/schema.js";
+import { syncRuns, transactions } from "../../../src/storage/sqlite/schema.js";
 
 function baseline(): IsracardCapture {
   return JSON.parse(
@@ -49,107 +48,26 @@ function session(
   };
 }
 
-const fingerprint = (capture: IsracardCapture) =>
-  isracardContentFingerprint(serializeIsracardCapture(capture));
-
-describe("Isracard content fingerprint", () => {
+describe("Isracard capture context", () => {
   it("keeps the actual request flag without changing old capture context", () => {
     const old = baseline();
     delete old.isNextBillingDate;
     const oldText = serializeIsracardCapture(old);
     expect(JSON.parse(oldText)).not.toHaveProperty("isNextBillingDate");
     const contexts = [false, true].map((isNextBillingDate) => {
-      const current = { ...old, isNextBillingDate };
-      const text = serializeIsracardCapture(current);
+      const text = serializeIsracardCapture({ ...old, isNextBillingDate });
       expect(JSON.parse(text).isNextBillingDate).toBe(isNextBillingDate);
-      expect(fingerprint(current)).not.toBe(fingerprint(old));
       return isracardCaptureContext(text);
     });
     expect(contexts).toEqual([
       isracardCaptureContext(oldText),
       isracardCaptureContext(oldText),
     ]);
-    expect(fingerprint({ ...old, isNextBillingDate: false })).not.toBe(
-      fingerprint({ ...old, isNextBillingDate: true }),
-    );
     for (const isNextBillingDate of [null, "Next", 1]) {
       expect(
         isracardCaptureSchema.safeParse({ ...old, isNextBillingDate }).success,
       ).toBe(false);
     }
-  });
-
-  it("ignores the session GUIDs of an otherwise identical capture", () => {
-    expect(fingerprint(session("SESSION-A"))).toBe(
-      fingerprint(session("SESSION-B")),
-    );
-  });
-
-  it("distinguishes a card list whose GUID no longer binds to the capture's card", () => {
-    expect(fingerprint(session("SESSION-A", "OTHER"))).not.toBe(
-      fingerprint(session("SESSION-A")),
-    );
-  });
-
-  it("compares a numeric card-list GUID by its lexeme, as binding does", () => {
-    const bound = fingerprint(session("123", new LosslessNumber("123")));
-    expect(bound).toBe(fingerprint(session("SESSION-A")));
-    expect(fingerprint(session("123", new LosslessNumber("456")))).not.toBe(
-      bound,
-    );
-  });
-
-  it("distinguishes any change to financial response text, month or card", () => {
-    const capture = session("SESSION-A");
-    const reference = fingerprint(capture);
-    expect(
-      fingerprint({
-        ...capture,
-        responses: {
-          ...capture.responses,
-          digital: `${capture.responses.digital!} `,
-        },
-      }),
-    ).not.toBe(reference);
-    expect(
-      fingerprint({
-        ...capture,
-        responses: {
-          ...capture.responses,
-          legacy: `${capture.responses.legacy ?? ""} `,
-        },
-      }),
-    ).not.toBe(reference);
-    expect(
-      fingerprint({
-        ...capture,
-        responses: {
-          ...capture.responses,
-          details: capture.responses.details!.map((detail) => ({
-            ...detail,
-            responseText: `${detail.responseText} `,
-          })),
-        },
-      }),
-    ).not.toBe(reference);
-    expect(fingerprint({ ...capture, billingMonth: "2041-01" })).not.toBe(
-      reference,
-    );
-    expect(
-      fingerprint({
-        ...capture,
-        card: { ...capture.card, cardSuffix: "9999" },
-      }),
-    ).not.toBe(reference);
-  });
-
-  it("falls back to the exact text, tagged apart from any normalized capture", () => {
-    expect(isracardContentFingerprint("not json")).toBe("raw:not json");
-    const normalized = fingerprint(session("SESSION-A"));
-    // A response whose text is itself a normalized fingerprint is no capture.
-    expect(
-      isracardContentFingerprint(normalized.slice("capture:".length)),
-    ).not.toBe(normalized);
   });
 });
 
@@ -167,7 +85,6 @@ describe("Isracard identical repeat captures", () => {
       type: "capture",
       capture: {
         ...isracardCaptureContext(responseText),
-        // Only freshly fetched captures can be reused.
         capturedAt: new Date().toISOString(),
         responseText,
       },
@@ -188,28 +105,54 @@ describe("Isracard identical repeat captures", () => {
     );
   const runs = async () => (await db.orm.select().from(syncRuns).all()).length;
 
-  it("skips a settled repeat from a new session without archiving it", async () => {
+  it("records each session reread receipt without changing retained transaction content", async () => {
     expect((await collect(read(session("SESSION-1")))).created).toBeGreaterThan(
       0,
     );
-    expect((await collect(read(session("SESSION-2")))).unchanged).toBe(0);
+    expect((await collect(read(session("SESSION-2")))).unchanged).toBe(1);
     const stored = await runs();
-    expect(await collect(read(session("SESSION-3")))).toMatchObject({
+    const rowsBefore = await db.orm.select().from(transactions).all();
+    const eventIdBefore = await db.latestEventId("synthetic");
+    const summary = await collect(read(session("SESSION-3")));
+    expect(summary).toMatchObject({
       status: "completed",
       captures: 1,
       unchanged: 1,
-      runIds: [],
+      created: 0,
+      updated: 0,
     });
-    expect(await runs()).toBe(stored);
+    expect(summary.runIds).toHaveLength(1);
+    expect(await runs()).toBe(stored + 1);
+    expect(await db.orm.select().from(transactions).all()).toEqual(rowsBefore);
+    expect(await db.latestEventId("synthetic")).toBe(eventIdBefore);
   });
 
-  it("archives a repeat whose card list no longer binds to its card", async () => {
+  it("records a receipt for a repeat whose card list no longer binds to its card", async () => {
     await collect(read(session("SESSION-1")));
     await collect(read(session("SESSION-2")));
     const stored = await runs();
-    expect((await collect(read(session("SESSION-3", "OTHER")))).unchanged).toBe(
-      0,
-    );
+    const rowsBefore = await db.orm.select().from(transactions).all();
+    expect(await collect(read(session("SESSION-3", "OTHER")))).toMatchObject({
+      status: "failed",
+      unchanged: 0,
+      created: 0,
+      updated: 0,
+    });
+    expect(await db.orm.select().from(transactions).all()).toEqual(rowsBefore);
     expect(await runs()).toBe(stored + 1);
   });
+  it.each([
+    ["123", true],
+    ["456", false],
+  ] as const)(
+    "checks numeric card-list GUID lexeme %s against the capture binding",
+    async (guid, valid) => {
+      const result = await collect(
+        read(session("123", new LosslessNumber(guid))),
+      );
+      expect(result.status).toBe(valid ? "completed" : "failed");
+      expect((await db.listTransactions()).length > 0).toBe(valid);
+      expect(await runs()).toBe(1);
+    },
+  );
 });

@@ -3,16 +3,24 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
+  type JsonObject,
+  type JsonValue,
   parsedLedgerFacts,
   storedPaymentContext,
   transactionInputSchema,
 } from "../../../src/domain/model.js";
+import {
+  currentSourceRowIndices,
+  currentSourceRows,
+  evidenceList,
+} from "../../../src/domain/provider-evidence.js";
 import { isracardAdapter } from "../../../src/providers/isracard/adapter.js";
 import {
   type IsracardCapture,
   isracardCardKey,
   serializeIsracardCapture,
 } from "../../../src/providers/isracard/capture.js";
+import { mergeIsracardEvidence } from "../../../src/providers/isracard/evidence.js";
 import { extractIsracard } from "../../../src/providers/isracard/extract.js";
 import { compatibleIsracardPostingGroups } from "../../../src/providers/isracard/posting-evidence.js";
 import { openDatabase } from "../../../src/storage/sqlite/database.js";
@@ -477,6 +485,169 @@ describe("Isracard authorization extraction", () => {
 });
 
 describe("Isracard singleton posting admission", () => {
+  it("keeps legacy digital-looking noise from changing the proved digital merchant", () => {
+    const source = example();
+    change(source, (payload) => {
+      (
+        payload.data.approvals as { approvedTransactions: unknown[] }
+      ).approvedTransactions = [approval()];
+    });
+    const legacy = JSON.parse(source.responses.legacy!) as {
+      CardsTransactionsListBean: {
+        Index0: { CurrentCardTransactions: { txnIsrael: Row[] }[] };
+      };
+    };
+    Object.assign(
+      legacy.CardsTransactionsListBean.Index0.CurrentCardTransactions[0]!
+        .txnIsrael[0]!,
+      {
+        businessName: "Forged legacy merchant",
+        transactionCode: 1,
+        seqVoucherNumber: "FORGED-LEGACY-VOUCHER",
+        currencyIso: "USD",
+      },
+    );
+    source.responses.legacy = JSON.stringify(legacy);
+    const rows = facts(source);
+    const pending = rows.filter((row) => row.status === "pending");
+    const posted = rows.filter(
+      (row) => row.status === "posted" && row.kind === "purchase",
+    );
+    expect(compatibleIsracardPostingGroups(pending, posted)).toBe(true);
+    expect(JSON.stringify(posted[0]!.details.provider.isracard)).not.toContain(
+      "Forged legacy merchant",
+    );
+  });
+  it("uses current complete statements after retaining partial approval and voucher evidence", () => {
+    const source = facts(capture({ posted: true }));
+    const approval = source.find((row) => row.status === "pending")!;
+    const purchase = source.find((row) => row.status === "posted")!;
+    const withHistory = (row: typeof approval) => {
+      const namespace = row.details.provider.isracard!;
+      const current = currentSourceRows(namespace);
+      const { businessName: _omitted, ...partial } = current[0] as JsonObject;
+      const merged = mergeIsracardEvidence({ rows: [partial] }, namespace);
+      const rows = evidenceList(merged.rows);
+      return {
+        row: {
+          ...row,
+          details: {
+            ...row.details,
+            provider: {
+              isracard: {
+                ...namespace,
+                ...merged,
+                identity: {
+                  ...((namespace.identity as JsonObject) ?? {}),
+                  currentRows: currentSourceRowIndices(rows, current),
+                },
+              },
+            },
+          },
+        },
+        rows,
+        partial,
+      };
+    };
+    const pending = withHistory(approval);
+    const posted = withHistory(purchase);
+    expect(pending.rows).toHaveLength(2);
+    expect(posted.rows).toHaveLength(2);
+    expect(compatibleIsracardPostingGroups([pending.row], [posted.row])).toBe(
+      true,
+    );
+    const partialPending = {
+      ...pending.row,
+      details: {
+        ...pending.row.details,
+        provider: {
+          isracard: {
+            ...pending.row.details.provider.isracard,
+            identity: {
+              currentRows: currentSourceRowIndices(pending.rows, [
+                pending.partial,
+              ]),
+            },
+          },
+        },
+      },
+    };
+    const partialPosted = {
+      ...posted.row,
+      details: {
+        ...posted.row.details,
+        provider: {
+          isracard: {
+            ...posted.row.details.provider.isracard,
+            identity: {
+              currentRows: currentSourceRowIndices(posted.rows, [
+                posted.partial,
+              ]),
+            },
+          },
+        },
+      },
+    };
+    expect(
+      compatibleIsracardPostingGroups([partialPending], [posted.row]),
+    ).toBe(false);
+    expect(
+      compatibleIsracardPostingGroups([pending.row], [partialPosted]),
+    ).toBe(false);
+  });
+
+  it("requires digital source origins even when legacy rows carry digital-looking fields", () => {
+    const source = facts(capture({ posted: true }));
+    const pending = source.filter((row) => row.status === "pending");
+    const purchase = source.find((row) => row.status === "posted")!;
+    const namespace = purchase.details.provider.isracard!;
+    const row = currentSourceRows(namespace)[0]!;
+    const change = (rows: JsonValue[], generations: string[]) => ({
+      ...purchase,
+      details: {
+        ...purchase.details,
+        provider: {
+          isracard: {
+            ...namespace,
+            rows,
+            observations: generations.map((generation) => ({
+              generation,
+              path: "synthetic-source-origin",
+            })),
+          },
+        },
+      },
+    });
+    expect(
+      compatibleIsracardPostingGroups(pending, [change([row], ["legacy"])]),
+    ).toBe(false);
+    expect(
+      compatibleIsracardPostingGroups(pending, [
+        change([row, row], ["digital", "legacy"]),
+      ]),
+    ).toBe(false);
+    expect(
+      compatibleIsracardPostingGroups(pending, [
+        change([{}, row], ["digital", "legacy"]),
+      ]),
+    ).toBe(false);
+    expect(
+      compatibleIsracardPostingGroups(pending, [
+        change(
+          [{ ...(row as JsonObject), seqVoucherNumber: {} }, row],
+          ["digital", "legacy"],
+        ),
+      ]),
+    ).toBe(false);
+    expect(compatibleIsracardPostingGroups(pending, [change([row], [])])).toBe(
+      false,
+    );
+    expect(
+      compatibleIsracardPostingGroups(pending, [
+        change([row], ["unrecognized"]),
+      ]),
+    ).toBe(false);
+  });
   it("admits a source-proven unknown authorization and verified purchase only by exact normalized merchant", () => {
     const source = capture({ posted: true });
     const rows = facts(source);

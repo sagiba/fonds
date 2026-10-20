@@ -16,6 +16,16 @@ export const SKIP_REASONS = [
 ] as const;
 /** Why a refresh failed without a provider outcome: still unfinished a day after its start. */
 export const FAILURE_REASONS = ["expired"] as const;
+/** Provider outcomes that end an entire refresh, independently of owner attention. */
+export const PROVIDER_STOP_REASONS = [
+  "authentication_failed",
+  "authentication_challenge",
+  "rate_limited",
+  "budget_exhausted",
+] as const;
+
+export type ProviderStopReason = (typeof PROVIDER_STOP_REASONS)[number];
+
 export const WINDOW_STATUSES = [
   "pending",
   "running",

@@ -23,6 +23,7 @@ for (const backend of backends) {
     async function capture(input: TransactionInput, day: number) {
       return db.ingestRun(
         {
+          debugArchiveDays: 2,
           connectionId: "synthetic",
           runId: `correction-${day}`,
           responses: [
@@ -85,7 +86,7 @@ for (const backend of backends) {
           after: { [field]: correctedValue },
         });
         const archived = await db.raw(
-          "SELECT snapshot_json FROM sync_runs WHERE id = ?",
+          "SELECT snapshot_json FROM sync_run_bodies WHERE run_id = ?",
           ["correction-2"],
         );
         expect(
@@ -104,13 +105,28 @@ for (const backend of backends) {
 
         const diagnosticInput = structuredClone(correctedInput);
         diagnosticInput.details.merchant.phone = "Synthetic corrected phone";
-        // Payment context is enrichment: it updates quietly, without a version or event.
+        // Mapped enrichment follows the same version and event rule as money.
         diagnosticInput.wallet = "apple_pay";
         diagnosticInput.authorizationMethod = "contactless";
-        expect(await capture(diagnosticInput, 4)).toMatchObject({ updated: 0 });
-        expect(await db.listEvents({ after: changes[0]!.id })).toEqual([]);
+        expect(await capture(diagnosticInput, 4)).toMatchObject({ updated: 1 });
+        expect(await db.listEvents({ after: changes[0]!.id })).toMatchObject([
+          {
+            type: "transaction.updated",
+            transactionId: original.id,
+            before: {
+              merchantPhone: null,
+              wallet: null,
+              authorizationMethod: null,
+            },
+            after: {
+              merchantPhone: "Synthetic corrected phone",
+              wallet: "apple_pay",
+              authorizationMethod: "contactless",
+            },
+          },
+        ]);
         expect(await db.getTransaction(original.id)).toMatchObject({
-          version: original.version + 1,
+          version: original.version + 2,
           lastSeenRunId: "correction-4",
           annotation,
           wallet: "apple_pay",

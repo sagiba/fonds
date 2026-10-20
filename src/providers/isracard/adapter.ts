@@ -1,5 +1,9 @@
 import type { SourceAdapter } from "../../domain/source-adapter.js";
-import { isracardContentFingerprint } from "./capture.js";
+import {
+  mergeIsracardEvidence,
+  projectIsracardState,
+  retainIsracardEvidence,
+} from "./evidence.js";
 import { extractIsracard } from "./extract.js";
 import { compatibleIsracardPostingGroups } from "./posting-evidence.js";
 import { normalizeIsracardScope, validateIsracardScope } from "./scope.js";
@@ -7,7 +11,10 @@ import { ISRACARD_ENDPOINTS } from "./transport.js";
 
 export const isracardAdapter: SourceAdapter = {
   provider: "isracard",
-  parserVersion: "isracard-v12",
+  parserVersion: "isracard-v13",
+  retainProviderEvidence: retainIsracardEvidence,
+  mergeProviderEvidence: mergeIsracardEvidence,
+  projectProviderState: projectIsracardState,
   extract: extractIsracard,
   validateScope: validateIsracardScope,
   normalizeScope: normalizeIsracardScope,
@@ -17,7 +24,6 @@ export const isracardAdapter: SourceAdapter = {
     postedAmountBasis: "purchase_commitment",
     compatibleGroups: compatibleIsracardPostingGroups,
   },
-  contentFingerprint: isracardContentFingerprint,
   resourceKey(endpoint) {
     return endpoint === ISRACARD_ENDPOINTS.transactions ||
       endpoint === ISRACARD_ENDPOINTS.legacy ||

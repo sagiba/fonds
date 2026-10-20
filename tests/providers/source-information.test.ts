@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
+import { presentWireTransaction } from "../../src/application/wire-output.js";
 import { calAdapter } from "../../src/providers/cal/adapter.js";
 import { extractCal } from "../../src/providers/cal/extract.js";
 import { isracardAdapter } from "../../src/providers/isracard/adapter.js";
@@ -95,7 +96,7 @@ describe("source explanatory information", () => {
     expect(transaction.details).not.toHaveProperty("fees");
   });
 
-  it("projects CAL transaction-type details and the ongoing-transaction comment as text, keeping the raw rows exact", () => {
+  it("projects CAL explanatory text while discarding undeclared nested contents", () => {
     const source = calResponse(null);
     const row = source.result.transactions[0]!;
     row.transTypeCommentDetails = [
@@ -117,7 +118,12 @@ describe("source explanatory information", () => {
     expect(transaction.details.provider.cal).toMatchObject({
       rows: [
         {
-          transTypeCommentDetails: row.transTypeCommentDetails,
+          transTypeCommentDetails: [
+            "  ",
+            "Synthetic installment note",
+            "\u200fSynthetic amount - \u200e$9.99\u200f",
+            {},
+          ],
           onGoingTransactionsComment: "Synthetic ongoing note",
         },
       ],
@@ -207,8 +213,12 @@ describe("source explanatory information", () => {
               : rows.find((item) => item.transactionDate === "2040-06-11")!;
           transactionId ??= row.id;
           expect(row.id).toBe(transactionId);
-          expect(row.details.additionalInformation).toEqual(
-            index === 3 ? [] : [index === 2 ? messages[1] : message],
+          const information =
+            index === 3 ? [] : [index === 2 ? messages[1] : message];
+          expect(row.details.additionalInformation ?? []).toEqual(information);
+          expect(presentWireTransaction(row, true)).toHaveProperty(
+            "additionalInformation",
+            information,
           );
           if (provider === "cal" && index > 0) {
             expect(retained(row.details, "comments")).toContainEqual({

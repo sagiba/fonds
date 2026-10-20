@@ -154,10 +154,10 @@ committed runtime inputs: preserve the embedded SQL byte for byte, never derive
 expected declarations from a private ledger and never relax validation to accept
 unexplained drift.
 
-For a new migration, add the next numbered file to `migrations/` and
-`migrations/postgres/`, then run `node --import tsx scripts/generate-storage-schema.ts`
-with a disposable local PostgreSQL 18 `FONDS_TEST_POSTGRES_URL` (the role needs
-`CREATEDB`). It embeds the files, writes the D1 copies, and records the
+Before first release, update `0001` in `migrations/` and
+`migrations/postgres/`; after release, append the next numbered migration.
+Run `node --import tsx scripts/generate-storage-schema.ts` against disposable
+PostgreSQL 18 `FONDS_TEST_POSTGRES_URL` (the role needs `CREATEDB`). It embeds the files, writes the D1 copies, and records the
 declarations of fresh SQLite and PostgreSQL databases migrated to the latest
 version; `--check` verifies every artifact without writing files. SQLite
 migrations run in a transaction with foreign keys on, which SQLite cannot switch
