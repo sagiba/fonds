@@ -11,6 +11,7 @@ import { isracardAdapter } from "../../../src/providers/isracard/adapter.js";
 import {
   type IsracardCapture,
   isracardCaptureContext,
+  isracardCaptureSchema,
   isracardContentFingerprint,
   serializeIsracardCapture,
 } from "../../../src/providers/isracard/capture.js";
@@ -52,6 +53,32 @@ const fingerprint = (capture: IsracardCapture) =>
   isracardContentFingerprint(serializeIsracardCapture(capture));
 
 describe("Isracard content fingerprint", () => {
+  it("keeps the actual request flag without changing old capture context", () => {
+    const old = baseline();
+    delete old.isNextBillingDate;
+    const oldText = serializeIsracardCapture(old);
+    expect(JSON.parse(oldText)).not.toHaveProperty("isNextBillingDate");
+    const contexts = [false, true].map((isNextBillingDate) => {
+      const current = { ...old, isNextBillingDate };
+      const text = serializeIsracardCapture(current);
+      expect(JSON.parse(text).isNextBillingDate).toBe(isNextBillingDate);
+      expect(fingerprint(current)).not.toBe(fingerprint(old));
+      return isracardCaptureContext(text);
+    });
+    expect(contexts).toEqual([
+      isracardCaptureContext(oldText),
+      isracardCaptureContext(oldText),
+    ]);
+    expect(fingerprint({ ...old, isNextBillingDate: false })).not.toBe(
+      fingerprint({ ...old, isNextBillingDate: true }),
+    );
+    for (const isNextBillingDate of [null, "Next", 1]) {
+      expect(
+        isracardCaptureSchema.safeParse({ ...old, isNextBillingDate }).success,
+      ).toBe(false);
+    }
+  });
+
   it("ignores the session GUIDs of an otherwise identical capture", () => {
     expect(fingerprint(session("SESSION-A"))).toBe(
       fingerprint(session("SESSION-B")),

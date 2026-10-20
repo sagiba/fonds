@@ -15,8 +15,8 @@
         "limitData": { "limit": "1000", "used": "100" },
         "isActive": true,
         "isPartner": false,
-        "cardChargeNext": { "billingDate": "10/08/2040" },
-        "cardChargeLast": { "billingDate": "10/07/2040" }
+        "cardChargeNext": { "billingDate": "10/08/2040", "period": "Next" },
+        "cardChargeLast": { "billingDate": "10/07/2040", "period": "Last" }
       },
       {
         "companyCode": "77",
@@ -31,8 +31,8 @@
         "limitData": { "limit": "2000", "used": "200" },
         "isActive": true,
         "isPartner": false,
-        "cardChargeNext": { "billingDate": "10/08/2040" },
-        "cardChargeLast": { "billingDate": "10/07/2040" }
+        "cardChargeNext": { "billingDate": "10/08/2040", "period": "Next" },
+        "cardChargeLast": { "billingDate": "10/07/2040", "period": "Last" }
       },
       {
         "companyCode": "11",
@@ -46,8 +46,8 @@
         "accountNumber": "777000013",
         "isActive": true,
         "isPartner": false,
-        "cardChargeNext": { "billingDate": "10/08/2040" },
-        "cardChargeLast": { "billingDate": "10/07/2040" }
+        "cardChargeNext": { "billingDate": "10/08/2040", "period": "Next" },
+        "cardChargeLast": { "billingDate": "10/07/2040", "period": "Last" }
       }
     ]
   }

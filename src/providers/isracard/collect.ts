@@ -36,7 +36,7 @@ import {
 
 export type { IsracardCredentials } from "./credentials.js";
 
-export const ISRACARD_COLLECTOR_VERSION = "isracard-web-v1";
+export const ISRACARD_COLLECTOR_VERSION = "isracard-web-v2";
 
 /**
  * One logged-in session shared by consecutive collections: its transport keeps
@@ -180,6 +180,19 @@ function billingMonth(value: unknown): string | null {
     ? value.split("/").reverse().join("-")
     : value.slice(0, 10);
   return validDate(date) ? date.slice(0, 7) : null;
+}
+
+function isNextBillingDate(
+  card: Record<string, unknown>,
+  month: string,
+): boolean {
+  // The issuer selects the first matching discovered period, including when
+  // next and last share a month. Its literal period controls the request.
+  const selected = [card.cardChargeNext, card.cardChargeLast].find(
+    (period) =>
+      isIsracardObject(period) && billingMonth(period.billingDate) === month,
+  );
+  return isIsracardObject(selected) && selected.period === "Next";
 }
 
 function defaultSleep(
@@ -661,15 +674,18 @@ export async function* collectIsracard(
         scope = { kind: mode, month, cardKey: accountKey };
         try {
           remainingFinancialCalls--;
+          const nextBillingDate = isNextBillingDate(discovered.raw, month);
           const digital = await call(ISRACARD_ENDPOINTS.transactions, {
             card4Number: discovered.card.cardSuffix,
-            isNextBillingDate: false,
+            isNextBillingDate: nextBillingDate,
             cardStatus: discovered.raw.isActive ? 0 : 1,
             billingMonth: `01/${month.slice(5)}/${month.slice(0, 4)}`,
             companyCode: Number(discovered.card.companyCode),
             isPartner: discovered.raw.isPartner,
           });
-          captureFor(discovered.card).responses.digital = digital.responseText;
+          const capture = captureFor(discovered.card);
+          capture.isNextBillingDate = nextBillingDate;
+          capture.responses.digital = digital.responseText;
           totalBytes += byteLength(digital.responseText);
           if (totalBytes > MAX_MONTH_SOURCE_BYTES) {
             throw new IsracardTransportError("invalid_response");

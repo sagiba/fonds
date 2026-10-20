@@ -4,8 +4,8 @@
 
 Isracard's JSON comes from private endpoints with no public contract. These
 observations come from owner-authorized collection, a value-free
-[archive profiler](../../../tests/providers/isracard/scripts/audit-isracard-db.ts) and the pinned public
-upstream sources cited below: they are maintainer attestations, not publicly
+[archive profiler](../../../tests/providers/isracard/scripts/audit-isracard-db.ts) and cited public
+implementations. Private observations are maintainer attestations, not publicly
 reproducible validation. No credentials, values or identifiers are published, and
 the [fixtures](../../../tests/providers/isracard/fixtures/README.md) are invented. Nothing here
 certifies every Isracard account, card type or a future shape, and establishing
@@ -41,48 +41,82 @@ cases in the linked suites.
   and details with `Header.Status` `1`. DigitalV3 data holds
   `israelAbroadVouchers` (the statement list, its `totalForStatement` and the
   `outOfStatementChargeDateVouchers` immediate-charge groups), `approvals` and
-  `currentTransactionsList`. An empty month is exactly
-  `{"approvals":null,"israelAbroadVouchers":null,"currentTransactionsList":null}`.
+  `currentTransactionsList`. Empty posted responses were observed with all
+  sections null, a recognized approval-list object beside null
+  voucher/current-transactions sections, or a pending summary beside null
+  approvals/vouchers. Malformed approval containers remain unsupported.
   Legacy groups under `CardsTransactionsListBean.Index<n>.CurrentCardTransactions[]`
   carry one partition each (`txnIsrael`, `txnAbroad` or `txnInfo`), null when
   empty. The detail route answers in `PirteyIska_204Bean`.
-- **Negative findings:** `approvals` was null in every observed capture, so no
-  pending row shape is known. Application success does not prove completeness,
-  and an empty month proves neither inactivity nor history depth.
-- **Policy:** only an accepted response is archived; an application error becomes
-  a typed failure and its body is discarded. Other null shapes, unknown group
-  keys and non-array partitions make coverage partial while known siblings stay.
+- **Approvals:** authorized collection established the
+  `approvals.approvedTransactions` row list; the public frontend also reads its
+  container's `totalEstimatedAmount`. The frontend treats root `errorCode` `1`
+  and `13` as approval-section failures, independently of `isSuccess`. With no
+  section error, explicit null approvals render no approval section, as an empty
+  array does. Its optional chaining also tolerates missing fields; Fonds does not
+  treat that as evidence for absent or malformed containers.
+- **Public frontend provenance:** inspected on 2026-10-20:
+  [transactions][issuer-transactions], SHA-256
+  `236f9f87e7ec470b4a8b8f63d48831dab74e02efd1b8478718c183034a435a64`, and
+  [approval details][issuer-approval-details], SHA-256
+  `679ba9a285027b6367ee9ed05629b9c67c503bf714995ba6daa4c81680838eee`.
+  These public implementations establish client behavior, not server guarantees.
+- **Policy:** collection archives only transport-accepted responses. Top-level
+  application failures and nonzero DigitalV3 root error codes become typed
+  failures with bodies discarded; collection does not distinguish section
+  failures. That DigitalV3 month is unavailable even if another section could
+  supply rows. Imported responses remain archived, but failed DigitalV3 evidence
+  supplies no ledger facts. Unsupported partitions stay raw; recognized
+  successful siblings remain usable with incomplete coverage.
 - **Checks:** [extraction] "accepts the observed all-null DigitalV3 month…",
-  "reads the observed one-partition legacy groups…", "reports unverified null
-  empty shapes as partial…", "keeps recognized legacy rows when a sibling
-  container is unsupported", "never manufactures pending rows…"; [transport]
-  "never retries a password or treats a failed legacy status as an empty month".
+  "accepts the observed approvals-only response…", "keeps unverified
+  approval-bearing null-voucher shapes partial…", "rejects imported failed
+  DigitalV3 facts…", "retains imported approval archives verbatim…", "reads the
+  observed one-partition legacy groups…"; [transport] "rejects successful
+  DigitalV3 envelopes carrying root errorCode…", "never retries a password…".
 
 ## isracard.window: billing months, history and pending summary
 
-- **Observed:** DigitalV3 answers one card and billing month per request; the
-  legacy statement answers one month for all Isracard cards. DigitalV3 returns
-  roughly the last four years of billing months, and older months come only from
-  the legacy route. Multi-year ranges were collected through the combined
-  routes, and a transient legacy failure recovered on a targeted monthly retry.
-  Co-branded cards have no demonstrated legacy or detail route, and there is no
-  separate legacy-only fallback mode. Optional details
-  exist for only some transactions.
-- **Pending summary:** `currentTransactionsList` lists, per upcoming
-  `currentBillingMonth` (`DD/MM/YYYY`) and currency, `transactionsTotal`,
-  `transactionsCurrency`, `transactionsSymbol` and `transactionsCount` for
-  transactions not yet billed. They are absent from the statement and immediate
-  lists, and the summary names no merchant or date.
-- **Policy:** a billing month is not a purchase-date window or a calendar
-  cutoff, so no partition is comparable for absence. The summary stays raw, and
-  its presence does not reduce posted coverage. A card absent from discovery has
-  no proven session GUID, so its rows are never assigned by suffix.
-- **Unknown:** complete source history, every old card, future-period behavior
-  and pending semantics. A month's combined responses are not an atomic
-  provider snapshot.
+- **Observed:** DigitalV3 answers one card/month per request, with roughly four
+  years available; legacy answers one month/all cards and alone supplies older history.
+  Combined multi-year collection succeeded; monthly retry recovered a transient legacy
+  failure. Co-branded cards have no demonstrated legacy/detail route; no
+  legacy-only fallback exists. Details cover some transactions.
+- **Request selection:** the public frontend sets `isNextBillingDate` from the
+  selected card/month's discovered billing `period` `Next`, rather than calendar
+  comparison. It searches cached next before last, so next wins a same-month tie.
+  An authorized paired probe manually selected the next calendar month: null
+  `approvals` with false, an approval list with true. Lossless structural
+  comparison found identical `israelAbroadVouchers` in those paired responses;
+  this does not establish preservation for other accounts or months.
+- **Pending list limits:** the frontend maps and renders the entire returned
+  approval array without a five-row limit in that path. This establishes neither
+  server completeness nor a server row limit.
+- **Pending summary:** `currentTransactionsList` groups unbilled transactions by
+  upcoming `currentBillingMonth` (`DD/MM/YYYY`) and currency, stating
+  `transactionsTotal`, `transactionsCurrency`, `transactionsSymbol` and
+  `transactionsCount`. These transactions are absent from statement/immediate
+  lists; merchant and date are unstated.
+- **Policy:** collection follows discovered periods within its existing month
+  range. A bound, successful response requested with the archived next-period
+  flag supplies the current pending snapshot when its approval array or explicit
+  null matches a recognized envelope. Pending absence is comparable only inside
+  that billing month's scope; rollover does not prove disappearance. Posted
+  partitions remain noncomparable: a billing month is neither a purchase-date
+  window nor calendar cutoff. The summary stays raw without reducing posted
+  coverage. A card absent from discovery has no proven session GUID, so its rows
+  are never assigned by suffix.
+- **Unknown:** complete source history, every old card, server pending limits
+  and completeness, coverage across rollover, lifetime identity stability, and
+  posted preservation beyond the paired check. Snapshot completeness is an
+  adopted policy supported by the full-list UI, not a server guarantee.
+  Application success alone does not prove completeness; an empty
+  month proves neither inactivity nor history depth. Combined monthly responses
+  are not an atomic provider snapshot.
 - **Checks:** [extraction] "marks history explicitly and never permits
   disappearance…", "keeps the pending summary raw…", "reports a non-null
-  current-transactions partition beside vouchers as partial…"; [collection]
+  current-transactions partition beside vouchers as partial…"; [pending]
+  "recognizes explicit empty Next authorization coverage…"; [collection]
   "collects open and just-closed periods…", "bounds history before login…";
   [scope].
 
@@ -127,25 +161,43 @@ cases in the linked suites.
   payments and padded to seven digits in legacy. Fee rows reuse one-digit
   vouchers, and an unrelated row can share a plan's voucher. Legacy card indices
   correspond to cards through the string `cardNumberList` entries.
+- **Approval identity evidence:** the public frontend uses `confirmationNumber`
+  for its display key. Authorized schema analysis found colon-composite display
+  keys and opaque digit/separator `confirmationTimeStamp` strings. Approval detail
+  addressing requires
+  `confirmationLocation`, `seqConfirmationNumber` and `confirmationTimeStamp`,
+  together with `last4digits`, `companyCode` and `isPartner`. Owner-authorized
+  comparisons retained the tuple for unchanged uniquely described source rows
+  within a session and after a fresh login. This supports practical stability,
+  not lifetime uniqueness or correspondence to a posted voucher.
 - **Policy:** card, voucher and purchase date are identity evidence, not proof
   of global uniqueness. Per-row vouchers stay strings with their leading zeros,
   and numeric-equivalent lexemes across generations are reviewed, never
   normalized; the plan voucher is the one padded value compared without leading
   zeros. DigitalV3 is preferred, and legacy fills what it omits, notably standing
-  orders (`isHoraatKeva`).
+  orders (`isHoraatKeva`). Approvals use the card-qualified full detail tuple as
+  native identity; missing or colliding tuples never become trusted unique rows.
+- **Continuation policy:** there is no demonstrated shared approval/voucher ID.
+  The adapter narrows the [shared heuristic][matching-design] to a unique
+  approval and verified posted purchase with exact merchant equality and known
+  original money. Pending kind remains unknown; posted evidence supplies the
+  purchase classification. Opaque codes add no invented meaning. Cancellation
+  followed by an unrelated identical purchase remains a possible false link.
 - **Checks:** [extraction] "prefers DigitalV3, joins unique voucher evidence…",
   "joins equal numeric voucher lexemes and flags numeric-equivalent mismatches…",
   "preserves all duplicate voucher occurrences…", "keeps card and transaction
   identity when a later login issues a new session cardGuid", "matches reordered
-  duplicate rows by source facts…"; [fingerprint].
+  duplicate rows by source facts…"; [pending] "uses the full opaque detail-address
+  tuple…", "automatically continues a same-month singleton on the pending ID…";
+  [fingerprint].
 
 ## isracard.money: signs and currency codes
 
 - **Sign:** the signed convention is source-derived from upstream PR
   [#1159][upstream-1159], inspected at head
-  `41021421497a531493d8c569c453f29db0cd0997` on 2026-10-16:
+  `41021421497a531493d8c569c453f29db0cd0997` on 2026-10-20:
   `base-isracard/base-isracard-utils.ts` negates DigitalV3 `billingAmount` and
-  `originalAmount`, and the legacy scraper negates `paymentSum` or
+  `originalAmount`, including approvals, and the legacy scraper negates `paymentSum` or
   `paymentSumOutbound`. It is not an issuer codebook or live validation of every
   type, so every row keeps a review issue for it. A literal `"-"` legacy
   `paymentSumSign` accompanies an already negative `paymentSum`.
@@ -157,6 +209,12 @@ cases in the linked suites.
   [`src/constants.ts`][upstream-constants] (`ALT_SHEKEL_CURRENCY`) and the legacy
   `convertCurrency` in [`src/scrapers/base-isracard-amex.ts`][upstream-amex].
   Other markers stay unresolved.
+- **Approval money:** the public detail UI displays `originalAmount` with
+  `originalCurrencySimbol`, labels the original currency using `currencyIso`, and
+  displays `ilsBillingAmount` separately in ILS. The list's `originalCurrency`
+  is a visual sorting code, not ISO numeric currency. Fonds uses the stated ISO
+  original money as an authorization and retains unknown kind; neither a sign
+  nor an opaque transaction code establishes purchase or refund classification.
 - **Checks:** [extraction] "uses the observed USD currency code…", "maps billing
   currency code 100 to EUR and the legacy dollar text to USD", "maps the legacy
   shekel texts %s to ILS", "maps the source-derived legacy NIS alias to ILS…",
@@ -314,8 +372,8 @@ and every code had one label. That label is the evidence for a kind:
   (`dealSumType` `1` for ILS, `T` for USD) and zero-voucher summaries; the abroad
   list carries `TOTAL FOR DATE` rows whose sums include the `CASH ADVANCE FEE`
   lines.
-- **Policy:** `dealSumType` `1` rows and all-zero-voucher lines (summaries,
-  `TOTAL FOR DATE` and fee lines) stay raw and create no rows. A disagreeing
+- **Policy:** Domestic `T` totals stay raw regardless of voucher, alongside
+  `1` rows and all-zero-voucher lines. A disagreeing
   total is a warning, never a failure, and an agreeing one does not prove no row
   is missing; equal card totals never justify skipping transactions.
 - **Checks:** [amount basis] "source totals"; [extraction] "keeps known legacy
@@ -326,9 +384,13 @@ and every code had one label. That label is the evidence for a kind:
 [extraction]: ../../../tests/providers/isracard/extraction.test.ts
 [fingerprint]: ../../../tests/providers/isracard/fingerprint.test.ts
 [installments]: ../../../tests/providers/isracard/installments.test.ts
+[matching-design]: ../../../docs/design.md#pending-to-posted-matching
 [node http]: ../../../tests/providers/isracard/node-http.test.ts
+[pending]: ../../../tests/providers/isracard/pending.test.ts
 [scope]: ../../../tests/providers/isracard/scope.test.ts
 [transport]: ../../../tests/providers/isracard/transport.test.ts
 [upstream-1159]: https://github.com/eshaham/israeli-bank-scrapers/pull/1159
+[issuer-transactions]: https://web.isracard.co.il/ocp/transactions/DigitalV3.Transactions/DigitalV3.Transactions.Frontend/prod/assets/index-Dt-M-_KF.js
+[issuer-approval-details]: https://web.isracard.co.il/DigitalV3.ApprovalDetails/DigitalV3.ApprovalDetails.Frontend/prod/assets/index-udjkD_jr.js
 [upstream-constants]: https://github.com/eshaham/israeli-bank-scrapers/blob/5170a65ffaf8df2d22f32b0fa1656350a8337590/src/constants.ts
 [upstream-amex]: https://github.com/eshaham/israeli-bank-scrapers/blob/5170a65ffaf8df2d22f32b0fa1656350a8337590/src/scrapers/base-isracard-amex.ts

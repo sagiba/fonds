@@ -1,21 +1,23 @@
 import type { TransactionFacts } from "../../src/domain/model.js";
-import type { PostingMatchEvidence } from "../../src/domain/source-adapter.js";
 
-/** Invented provider evidence; individual tests override fields without CAL details. */
-export function postingEvidence(
-  row: Pick<
-    TransactionFacts,
-    "merchantName" | "merchantCategoryCode" | "merchantProviderId"
-  >,
-): PostingMatchEvidence {
-  return {
-    merchantName: row.merchantName,
-    categoryCode: row.merchantCategoryCode ?? "5411",
-    sourceTypeCode: "5",
-    cardPresent: false,
-    tokenCode: "0",
-    paymentCount: 0,
-    abroad: null,
-    merchantProviderId: row.merchantProviderId,
-  };
+/** Invented exact-merchant policy, independent of either real provider. */
+export function compatiblePostingGroups(
+  pending: readonly TransactionFacts[],
+  posted: readonly TransactionFacts[],
+): boolean {
+  const rows = [...pending, ...posted];
+  const merchant = rows[0]?.merchantName;
+  return (
+    pending.length > 0 &&
+    posted.length > 0 &&
+    !!merchant &&
+    rows.every(
+      (row) =>
+        row.merchantName === merchant &&
+        (row.kind === "purchase" || row.kind === "refund") &&
+        row.details.issues.every(
+          (issue) => issue === "possible_pending_posted_match",
+        ),
+    )
+  );
 }

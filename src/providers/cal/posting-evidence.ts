@@ -1,6 +1,17 @@
 import type { JsonObject, TransactionFacts } from "../../domain/model.js";
 import { canonicalJson } from "../../domain/observations.js";
-import type { PostingMatchEvidence } from "../../domain/source-adapter.js";
+
+/** Opaque CAL discriminators; null is missing evidence, never false or zero. */
+export interface CalPostingEvidence {
+  merchantName: string | null;
+  categoryCode: string | null;
+  sourceTypeCode: string | null;
+  cardPresent: boolean | null;
+  tokenCode: string | null;
+  paymentCount: number | null;
+  abroad: boolean | null;
+  merchantProviderId: string | null;
+}
 
 function object(value: unknown): value is JsonObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -58,7 +69,7 @@ function aliases<T>(
 
 function rowEvidence(
   raw: JsonObject,
-): { card: string; evidence: PostingMatchEvidence } | null {
+): { card: string; evidence: CalPostingEvidence } | null {
   const card = aliases(raw, ["cardUniqueID", "cardUniqueId"], identifier);
   const merchantName = aliases(raw, ["merchantName"], name);
   const categoryCode = aliases(raw, ["internationalBranchID"], code);
@@ -119,7 +130,7 @@ function rowEvidence(
  */
 export function calPostingEvidence(
   row: Pick<TransactionFacts, "details">,
-): PostingMatchEvidence | null {
+): CalPostingEvidence | null {
   const rows = row.details.provider.cal?.rows;
   if (!Array.isArray(rows) || rows.length === 0) {
     return null;
@@ -133,4 +144,77 @@ export function calPostingEvidence(
     )
     ? representative.evidence
     : null;
+}
+
+/** NFC only: preserve case, punctuation, quotes and compatibility distinctions. */
+function normalizedEvidence(evidence: CalPostingEvidence | null) {
+  if (
+    evidence === null ||
+    evidence.merchantName === null ||
+    evidence.categoryCode === null ||
+    evidence.sourceTypeCode === null ||
+    evidence.cardPresent === null ||
+    evidence.tokenCode === null ||
+    evidence.paymentCount === null
+  ) {
+    return null;
+  }
+  const merchantName = evidence.merchantName
+    .normalize("NFC")
+    .replace(/\p{White_Space}+/gu, " ")
+    .trim();
+  return /[\p{L}\p{N}]/u.test(merchantName)
+    ? { ...evidence, merchantName }
+    : null;
+}
+
+function homogeneousEvidence(rows: readonly TransactionFacts[]) {
+  const evidence = rows.map((row) =>
+    (row.kind === "purchase" || row.kind === "refund") &&
+    row.details.issues.every(
+      (issue) => issue === "possible_pending_posted_match",
+    )
+      ? normalizedEvidence(calPostingEvidence(row))
+      : null,
+  );
+  const representative = evidence[0];
+  return representative &&
+    evidence.every(
+      (item) =>
+        item !== null && canonicalJson(item) === canonicalJson(representative),
+    )
+    ? representative
+    : null;
+}
+
+/** CAL's observed merchant truncation and source discriminators admit whole twins. */
+export function compatibleCalPostingGroups(
+  pending: readonly TransactionFacts[],
+  posted: readonly TransactionFacts[],
+): boolean {
+  const left = homogeneousEvidence(pending);
+  const right = homogeneousEvidence(posted);
+  if (!left || !right) {
+    return false;
+  }
+  const compatibleName =
+    left.merchantName === right.merchantName ||
+    (left.merchantName.startsWith(right.merchantName + " ") &&
+      right.merchantName
+        .split(" ")
+        .filter((token) => /[\p{L}\p{N}]/u.test(token)).length >= 2);
+  return (
+    compatibleName &&
+    left.categoryCode === right.categoryCode &&
+    left.sourceTypeCode === right.sourceTypeCode &&
+    left.cardPresent === right.cardPresent &&
+    left.tokenCode === right.tokenCode &&
+    left.paymentCount === right.paymentCount &&
+    (["abroad", "merchantProviderId"] as const).every(
+      (field) =>
+        left[field] === null ||
+        right[field] === null ||
+        left[field] === right[field],
+    )
+  );
 }

@@ -130,6 +130,45 @@ describe("Isracard bounded session transport", () => {
     },
   );
 
+  it.each([1, 13, 91, "1", "13", "unknown"])(
+    "rejects successful DigitalV3 envelopes carrying root errorCode %s",
+    async (errorCode) => {
+      for (const endpoint of [
+        ISRACARD_ENDPOINTS.cards,
+        ISRACARD_ENDPOINTS.transactions,
+      ]) {
+        const request = vi.fn(async () =>
+          response(JSON.stringify({ isSuccess: true, errorCode, data: {} })),
+        );
+        const transport = createIsracardTransport({ httpClient: { request } });
+        await expect(transport.request(endpoint, {})).rejects.toMatchObject({
+          code: "invalid_response",
+          fatal: false,
+        });
+        expect(request).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
+  it.each([undefined, null, 0, "0", ""])(
+    "accepts successful DigitalV3 envelopes carrying root errorCode %s",
+    async (errorCode) => {
+      for (const endpoint of [
+        ISRACARD_ENDPOINTS.cards,
+        ISRACARD_ENDPOINTS.transactions,
+      ]) {
+        const request = vi.fn(async () =>
+          response(JSON.stringify({ isSuccess: true, errorCode, data: {} })),
+        );
+        const transport = createIsracardTransport({ httpClient: { request } });
+        await expect(transport.request(endpoint, {})).resolves.toMatchObject({
+          payload: { isSuccess: true, data: {} },
+        });
+        expect(request).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
   it("rejects invalid destinations and query parameters before I/O", async () => {
     const request = vi.fn();
     const transport = createIsracardTransport({ httpClient: { request } });

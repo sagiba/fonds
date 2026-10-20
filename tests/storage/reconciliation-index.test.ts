@@ -113,6 +113,88 @@ describe("reconciliation indexes and provider boundaries", () => {
 
   const rows = () => db.orm.select().from(transactions).all();
 
+  it("retains month-scoped pending absence and health across rollover while native reobservations keep their ID", async () => {
+    const july: CollectionScope = {
+      kind: "recent",
+      month: "2040-07",
+      cardKey: "synthetic-card",
+    };
+    const august: CollectionScope = { ...july, month: "2040-08" };
+    const authorization = entry("authorization", {
+      status: "pending",
+      amountBasis: "authorization",
+    });
+    await capture(
+      "july",
+      [authorization],
+      bankAdapter(),
+      july,
+      "2040-07-02T00:00:00Z",
+    );
+    const original = (await rows())[0]!;
+    await db.editAnnotation({
+      transactionId: original.id,
+      expectedVersion: 0,
+      notes: "Owner's authorization note",
+    });
+    const base = bankAdapter();
+    const failed = bankAdapter({
+      extract(raw, context) {
+        const result = base.extract(raw, context);
+        for (const part of result.partitions) {
+          part.success = false;
+          part.comparable = false;
+        }
+        return result;
+      },
+    });
+    await capture("july-failure", [], failed, july, "2040-07-03T00:00:00Z");
+    await capture(
+      "august-empty",
+      [],
+      bankAdapter(),
+      august,
+      "2040-08-02T00:00:00Z",
+    );
+    expect((await rows())[0]).toMatchObject({
+      id: original.id,
+      presence: "seen",
+      lastSeenRunId: "july",
+    });
+    expect(
+      (await db.listEvents()).filter(
+        (event) => event.type === "sync.recovered",
+      ),
+    ).toEqual([]);
+    await capture(
+      "august-reobserved",
+      [authorization],
+      bankAdapter(),
+      august,
+      "2040-08-03T00:00:00Z",
+    );
+    expect(await db.getTransaction(original.id)).toMatchObject({
+      id: original.id,
+      lastSeenRunId: "august-reobserved",
+      annotation: { data: { notes: "Owner's authorization note" } },
+    });
+    await capture(
+      "july-recovery",
+      [],
+      bankAdapter(),
+      july,
+      "2040-08-04T00:00:00Z",
+    );
+    const recovered = (await db.listEvents()).filter(
+      (event) => event.type === "sync.recovered",
+    );
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]).toMatchObject({
+      runId: "july-recovery",
+      after: { failedScopes: [] },
+    });
+  });
+
   it("retains known merchant/payment enrichment through sparse reads and accepts newer explicit values", async () => {
     const details = emptyDetails();
     details.merchant = {

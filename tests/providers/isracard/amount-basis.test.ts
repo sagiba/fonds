@@ -599,63 +599,75 @@ describe("Isracard amount basis", () => {
       expect(mismatched.transactions).toHaveLength(3);
     });
 
-    it("compares legacy USD totals and abroad dated totals, fee lines included", () => {
-      const zero = "000000000";
-      const legacy = (usdTotal: string, abroadTotal: string) =>
-        capture({
-          digital: (data) => {
-            data.data.israelAbroadVouchers.vouchers.israelAbroadVouchersList =
-              [];
-          },
-          legacy: (data) => {
-            const group =
-              data.CardsTransactionsListBean.Index0.CurrentCardTransactions[0]!;
-            group.txnIsrael = [
-              {
-                fullPurchaseDate: "11/06/2040",
-                voucherNumberRatz: "SYNTHETIC-USD-1",
-                paymentSum: "7.25",
-                currencyId: "USD",
-              },
-              {
-                voucherNumberRatz: zero,
-                dealSumType: "T",
-                paymentSum: usdTotal,
-              },
-            ];
-            group.txnAbroad = [
-              {
-                fullPurchaseDateOutbound: "11/06/2040",
-                voucherNumberRatzOutbound: "SYNTHETIC-ATM-1",
-                fullSupplierNameOutbound: "SYNTHETIC ATM",
-                paymentSumOutbound: "100.00",
-                currencyId: "NIS",
-              },
-              ...[
-                ["CASH ADVANCE FEE", "2.00"],
-                ["TOTAL FOR DATE", abroadTotal],
-              ].map(([label, amount]) => ({
-                voucherNumberRatzOutbound: zero,
-                fullSupplierNameOutbound: label,
-                paymentSumOutbound: amount,
-                currencyId: "NIS",
-              })),
-            ];
-          },
-        });
-      expect(extract(legacy("7.25", "102.00")).warnings).not.toContain(
-        "legacy_total_mismatch",
-      );
-      for (const [usdTotal, abroadTotal] of [
-        ["7.00", "102.00"],
-        ["7.25", "100.00"],
-      ] as const) {
-        const result = extract(legacy(usdTotal, abroadTotal));
-        expect(result.warnings, `${usdTotal} ${abroadTotal}`).toContain(
-          "legacy_total_mismatch",
-        );
-        expect(result.partitions[0]!.success).toBe(true);
-      }
-    });
+    it.each(["000000000", "SYNTHETIC-USD-TOTAL"])(
+      "compares legacy USD totals with voucher %s and abroad dated totals, fee lines included",
+      (totalVoucher) => {
+        const zero = "000000000";
+        const legacy = (usdTotal: string, abroadTotal: string) =>
+          capture({
+            digital: (data) => {
+              data.data.israelAbroadVouchers.vouchers.israelAbroadVouchersList =
+                [];
+            },
+            legacy: (data) => {
+              const group =
+                data.CardsTransactionsListBean.Index0
+                  .CurrentCardTransactions[0]!;
+              group.txnIsrael = [
+                {
+                  fullPurchaseDate: "11/06/2040",
+                  voucherNumberRatz: "SYNTHETIC-USD-1",
+                  paymentSum: "7.25",
+                  currencyId: "USD",
+                },
+                {
+                  voucherNumberRatz: totalVoucher,
+                  fullPurchaseDate: "11/06/2040",
+                  dealSumType: "T",
+                  paymentSum: usdTotal,
+                  currencyId: "USD",
+                },
+              ];
+              group.txnAbroad = [
+                {
+                  fullPurchaseDateOutbound: "11/06/2040",
+                  voucherNumberRatzOutbound: "SYNTHETIC-ATM-1",
+                  fullSupplierNameOutbound: "SYNTHETIC ATM",
+                  paymentSumOutbound: "100.00",
+                  currencyId: "NIS",
+                },
+                ...[
+                  ["CASH ADVANCE FEE", "2.00"],
+                  ["TOTAL FOR DATE", abroadTotal],
+                ].map(([label, amount]) => ({
+                  voucherNumberRatzOutbound: zero,
+                  fullSupplierNameOutbound: label,
+                  paymentSumOutbound: amount,
+                  currencyId: "NIS",
+                })),
+              ];
+            },
+          });
+        const source = legacy("7.25", "102.00");
+        const reconciled = extract(source);
+        expect(reconciled.transactions).toHaveLength(2);
+        expect(reconciled.transactions.map((row) => row.sourceKey)).toEqual([
+          expect.stringContaining("SYNTHETIC-USD-1"),
+          expect.stringContaining("SYNTHETIC-ATM-1"),
+        ]);
+        expect(source.responses.legacy).toContain(totalVoucher);
+        expect(reconciled.warnings).not.toContain("legacy_total_mismatch");
+        for (const [usdTotal, abroadTotal] of [
+          ["7.00", "102.00"],
+          ["7.25", "100.00"],
+        ] as const) {
+          const result = extract(legacy(usdTotal, abroadTotal));
+          expect(result.warnings, `${usdTotal} ${abroadTotal}`).toContain(
+            "legacy_total_mismatch",
+          );
+          expect(result.partitions[0]!.success).toBe(true);
+        }
+      },
+    );
   });
 });
