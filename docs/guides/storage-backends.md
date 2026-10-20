@@ -37,7 +37,7 @@ one target from the table below:
 
 ```sh
 npm ci
-npm run build:targets -- postgres # or sqlite, turso, turso-web, d1-web
+npm run build:targets -- turso # or sqlite, postgres, turso-web, d1-web
 ```
 
 Each command builds only the named target under `dist/targets/<target>/`. With no

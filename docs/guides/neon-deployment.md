@@ -208,7 +208,6 @@ adds any missing generated values to the env file and, in a terminal, asks how
 scheduled refreshes should run:
 
 ```sh
-git checkout vX.Y.Z
 npm ci
 npm run neon:setup -- --env-file "$FONDS_ENV" \
   --project-id PROJECT_ID --branch-id BRANCH_ID --profile PROFILE
@@ -270,6 +269,7 @@ only when you intend to replace what runs there; try a release on a separate
 project first when it changes setup, schemas or login.
 
 ```sh
+git checkout vX.Y.Z
 npm ci
 npm run neon:setup -- --env-file "$FONDS_ENV" \
   --project-id PROJECT_ID --branch-id BRANCH_ID --profile PROFILE

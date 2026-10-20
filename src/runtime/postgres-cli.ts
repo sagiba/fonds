@@ -26,11 +26,11 @@ export function postgresBackend(
     name: "postgres",
     title: "PostgreSQL target",
     invocation: "fonds",
-    description: `With no command, node server.js serves: the hosted service when FONDS_PUBLIC_ORIGIN is
-set, otherwise the loopback HTTP/MCP API; --transport stdio serves MCP over stdio to a
-trusted local client instead. The database is FONDS_DATABASE_URL; without it, use the
-SQLite CLI (node dist/cli.js). Secrets come only from FONDS_STATE_DIR/fonds.env, the
-service's state, and a database bound to other secrets is refused.`,
+    description: `fonds serve runs the loopback HTTP/MCP API, --transport stdio serves MCP over stdio
+to a trusted local client, and --hosted runs the hosted service at FONDS_PUBLIC_ORIGIN.
+The database is FONDS_DATABASE_URL; without it, fonds uses SQLite. Secrets come only
+from FONDS_STATE_DIR/fonds.env, the service's state, and a database bound to other
+secrets is refused.`,
     globalOptions: {},
     forbiddenDirectory,
     async open(_globals, mode) {
@@ -38,7 +38,7 @@ service's state, and a database bound to other secrets is refused.`,
       return openPostgresSession(env, current, { initialize: mode.create });
     },
     unavailable: {
-      demo: "demo is not available on PostgreSQL: run it with the SQLite CLI (node dist/cli.js demo).",
+      demo: "demo is not available on PostgreSQL: unset FONDS_DATABASE_URL to run fonds demo on SQLite.",
       backup:
         "backup is not available on PostgreSQL: back up with pg_dump plus the state directory's fonds.env (docs/database.md#state-directory-and-backup).",
     },
