@@ -162,7 +162,6 @@ Scheduled collection is off until the operator turns it on with
 | `daily` (recommended)    | Once a day at the installation's `FONDS_COLLECTION_TIME`                                 |
 | `hourly`                 | Every hour, at that time's minute                                                        |
 | Hours, such as `9,13,18` | At each listed hour (0–23), at that minute: for example a few times during working hours |
-| `enabled`                | Legacy alias for `hourly`, kept for existing Neon deployments                            |
 | Absent or anything else  | Nothing; scheduled collection is off                                                     |
 
 `FONDS_COLLECTION_TIME` (`HH:MM`) is generated once per installation, with a

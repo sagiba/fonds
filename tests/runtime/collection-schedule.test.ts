@@ -36,19 +36,17 @@ function schedule(
 }
 
 describe("collection schedule settings", () => {
-  it("accepts daily, hourly, the enabled alias and hour lists", () => {
+  it("accepts daily, hourly and hour lists", () => {
     expect(schedule("daily")).toEqual({
       mode: "daily",
       hours: [3],
       minute: 17,
       timeZone: "UTC",
     });
-    for (const value of ["hourly", "enabled"]) {
-      const hourly = schedule(value);
-      expect(hourly.mode).toBe("hourly");
-      expect(hourly.hours).toHaveLength(24);
-      expect(hourly.minute).toBe(17);
-    }
+    const hourly = schedule("hourly");
+    expect(hourly.mode).toBe("hourly");
+    expect(hourly.hours).toHaveLength(24);
+    expect(hourly.minute).toBe(17);
     // Sorted and deduplicated; the time's hour is unused, only its minute.
     expect(schedule(" 18, 9,13,9 ")).toEqual({
       mode: "hours",
@@ -60,7 +58,15 @@ describe("collection schedule settings", () => {
   });
 
   it("is off when absent or any other word, and needs no time then", () => {
-    for (const value of [undefined, "", "off", "disabled", "Daily", "weekly"]) {
+    for (const value of [
+      undefined,
+      "",
+      "off",
+      "disabled",
+      "enabled",
+      "Daily",
+      "weekly",
+    ]) {
       expect(
         parseCollectionSchedule({ FONDS_COLLECTION_SCHEDULE: value }, missing),
       ).toBeUndefined();
@@ -226,7 +232,6 @@ describe("UTC cron for Neon", () => {
     const now = at("2026-10-20T12:00:00Z");
     expect(utcCron(schedule("daily", "03:17"), now)).toBe("17 3 * * *");
     expect(utcCron(schedule("hourly", "22:05"), now)).toBe("5 * * * *");
-    expect(utcCron(schedule("enabled", "22:05"), now)).toBe("5 * * * *");
     expect(utcCron(schedule("18,9,13", "00:40"), now)).toBe("40 9,13,18 * * *");
   });
 

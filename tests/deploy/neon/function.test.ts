@@ -2,9 +2,9 @@ import { Pool } from "pg";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  COLLECTION_TRIGGER_NAME,
   createNeonService,
   neonConfiguration,
+  REFRESH_TRIGGER_NAME,
 } from "../../../deploy/neon/function.js";
 import { generateCredentialsKey } from "../../../src/runtime/credential-vault.js";
 
@@ -391,7 +391,11 @@ describe("Neon configuration", () => {
     vi.stubEnv("FONDS_COLLECTION_SCHEDULE", undefined);
     try {
       const { default: config } = await import("../../../neon.js");
-      expect(config.triggers?.[COLLECTION_TRIGGER_NAME]).toEqual({
+      // Literal on both sides: the declaration and the function's envelope
+      // gate must name the same trigger, or every native invocation is denied.
+      expect(REFRESH_TRIGGER_NAME).toBe("scheduled-refresh");
+      expect(Object.keys(config.triggers ?? {})).toEqual(["scheduled-refresh"]);
+      expect(config.triggers?.[REFRESH_TRIGGER_NAME]).toEqual({
         type: "schedule",
         function: "fonds",
         cron: "12 * * * *",
@@ -437,7 +441,7 @@ describe("Neon configuration", () => {
       }
       vi.resetModules();
       const { default: config } = await import("../../../neon.js");
-      const declared = config.triggers?.[COLLECTION_TRIGGER_NAME];
+      const declared = config.triggers?.[REFRESH_TRIGGER_NAME];
       return declared?.type === "schedule"
         ? { cron: declared.cron, enabled: declared.enabled }
         : undefined;
@@ -452,8 +456,8 @@ describe("Neon configuration", () => {
           FONDS_COLLECTION_TIMEZONE: undefined,
         }),
       ).toEqual({ cron: "17 3 * * *", enabled: true });
-      // The `enabled` value means hourly, at the random minute.
-      expect(await trigger({ FONDS_COLLECTION_SCHEDULE: "enabled" })).toEqual({
+      // Hourly runs at the installation's random minute.
+      expect(await trigger({ FONDS_COLLECTION_SCHEDULE: "hourly" })).toEqual({
         cron: "17 * * * *",
         enabled: true,
       });
@@ -463,11 +467,14 @@ describe("Neon configuration", () => {
           FONDS_COLLECTION_TIMEZONE: "Asia/Jerusalem",
         }),
       ).toEqual({ cron: "17 7,11,16 * * *", enabled: true });
-      // Off keeps the declared cron, whatever the time.
-      expect(await trigger({ FONDS_COLLECTION_SCHEDULE: "off" })).toEqual({
-        cron: "12 * * * *",
-        enabled: false,
-      });
+      // Off, like any unrecognized word, keeps the declared cron, whatever
+      // the time.
+      for (const value of ["off", "enabled"]) {
+        expect(await trigger({ FONDS_COLLECTION_SCHEDULE: value })).toEqual({
+          cron: "12 * * * *",
+          enabled: false,
+        });
+      }
       vi.stubEnv("FONDS_COLLECTION_TIME", undefined);
       await expect(
         trigger({ FONDS_COLLECTION_SCHEDULE: "daily" }),

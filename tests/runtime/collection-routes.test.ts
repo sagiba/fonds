@@ -2,7 +2,10 @@ import { readFileSync } from "node:fs";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { neonTriggerAuthenticator } from "../../deploy/neon/function.js";
+import {
+  neonTriggerAuthenticator,
+  REFRESH_TRIGGER_NAME,
+} from "../../deploy/neon/function.js";
 import type {
   CollectionEvent,
   ProviderCollector,
@@ -35,7 +38,11 @@ const capture: CollectionEvent = {
 const payload = (invocation = "synthetic-occurrence") => ({
   version: 1,
   invocation_id: invocation,
-  trigger: { type: "schedule", id: "trigger-synthetic", name: "cal-hourly" },
+  trigger: {
+    type: "schedule",
+    id: "trigger-synthetic",
+    name: "scheduled-refresh",
+  },
   data: { scheduled_at: "2040-08-01T00:00:00Z" },
 });
 const request = (
@@ -64,7 +71,8 @@ describe("internal collection routes", () => {
   function setup(
     collect: ProviderCollector["collect"],
     options: Pick<CollectionRoutesOptions, "authenticateScheduledRequest"> = {
-      authenticateScheduledRequest: neonTriggerAuthenticator("cal-hourly"),
+      authenticateScheduledRequest:
+        neonTriggerAuthenticator(REFRESH_TRIGGER_NAME),
     },
     scheduledRun?: Parameters<typeof createCollectionRoutes>[2],
   ) {
@@ -179,6 +187,53 @@ describe("internal collection routes", () => {
         )
       )?.status,
     ).toBe(202);
+  });
+
+  it("admits an attested scheduled-refresh invocation through the deployed authenticator, and no other trigger", async () => {
+    const collect = vi.fn(async function* () {
+      yield capture;
+    });
+    const { routes } = setup(collect);
+    // Neon's ingress strips caller-supplied X-Neon-* headers, so inside the
+    // Function the invocation header matching the envelope is the attestation.
+    const native = (body: ReturnType<typeof payload>) =>
+      request(
+        "/internal/triggers/recent",
+        { "x-neon-trigger-invocation-id": body.invocation_id },
+        body,
+      );
+    const other = payload("other-occurrence");
+    const denied = await routes.handleRequest(
+      native({
+        ...other,
+        trigger: { ...other.trigger, name: "other-trigger" },
+      }),
+    );
+    expect(denied?.status).toBe(403);
+    expect(
+      vi
+        .mocked(console.info)
+        .mock.calls.map(([message]) => JSON.parse(String(message))),
+    ).toContainEqual({
+      event: "fonds_native_trigger_denied",
+      reason: "wrong_trigger",
+    });
+    expect(collect).not.toHaveBeenCalled();
+    const admitted = await routes.handleRequest(native(payload()));
+    expect(admitted?.status).toBe(200);
+    expect(await admitted!.json()).toMatchObject({
+      refreshes: [
+        {
+          connectionId: "cal-connection",
+          refresh: {
+            trigger: "scheduled",
+            status: "completed",
+            scheduledAt: "2040-08-01T00:00:00.000Z",
+          },
+        },
+      ],
+    });
+    expect(collect).toHaveBeenCalledOnce();
   });
 
   it("records one scheduled refresh per occurrence, and denies until an authenticator is supplied", async () => {
