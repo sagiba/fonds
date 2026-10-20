@@ -49,5 +49,12 @@ export function createSqliteCredentialStore(execute: Execute): CredentialStore {
         ],
       );
     },
+    async deleteCredentials(connectionId) {
+      const result = await execute(
+        "DELETE FROM provider_credentials WHERE connection_id=?",
+        [connectionId],
+      );
+      return result.rowsAffected > 0;
+    },
   };
 }

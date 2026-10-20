@@ -65,6 +65,18 @@ function storeContract(open: () => CredentialStore) {
     expect(await store.getCredentials("synthetic-connection")).toEqual(next);
   });
 
+  it("deletes one connection's credentials and reports whether any existed", async () => {
+    const store = open();
+    await store.saveCredentials(encrypted("synthetic-connection"));
+    await store.saveCredentials(encrypted("synthetic-other"));
+    expect(await store.deleteCredentials("synthetic-connection")).toBe(true);
+    expect(await store.getCredentials("synthetic-connection")).toBeUndefined();
+    expect(await store.deleteCredentials("synthetic-connection")).toBe(false);
+    expect(await store.getCredentials("synthetic-other")).toEqual(
+      encrypted("synthetic-other"),
+    );
+  });
+
   it("rejects malformed envelopes", async () => {
     const store = open();
     for (const invalid of [
@@ -87,6 +99,7 @@ describe("SQLite provider credentials", () => {
   beforeEach(async () => {
     db = await openDatabase(":memory:");
     await db.ensureConnection({ id: "synthetic-connection", provider: "cal" });
+    await db.ensureConnection({ id: "synthetic-other", provider: "cal" });
   });
 
   afterEach(async () => {
