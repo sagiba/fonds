@@ -53,5 +53,12 @@ export function createPostgresCredentialStore(pool: Pool): CredentialStore {
         ],
       );
     },
+    async deleteCredentials(connectionId) {
+      const result = await pool.query(
+        "DELETE FROM operations.provider_credentials WHERE connection_id=$1",
+        [connectionId],
+      );
+      return (result.rowCount ?? 0) > 0;
+    },
   };
 }

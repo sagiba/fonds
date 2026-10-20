@@ -30,6 +30,7 @@ function memoryStore(): CredentialStore & {
     saveCredentials: async (credentials) => {
       rows.set(credentials.connectionId, credentials);
     },
+    deleteCredentials: async (connectionId) => rows.delete(connectionId),
   };
 }
 

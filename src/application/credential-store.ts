@@ -21,4 +21,6 @@ export interface CredentialStore {
   ): Promise<EncryptedCredentials | undefined>;
   /** Replaces any previous credentials for the connection. */
   saveCredentials(credentials: EncryptedCredentials): Promise<void>;
+  /** Whether the connection had stored credentials to remove. */
+  deleteCredentials(connectionId: string): Promise<boolean>;
 }
