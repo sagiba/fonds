@@ -94,6 +94,11 @@ function withoutTimes(value: unknown): unknown {
   return value;
 }
 
+async function seedConnection(db: string, id: string, provider: string) {
+  expect((await cli("init", "--db", db)).status).toBe(0);
+  return cli("connect", provider, "--name", id, "--offline", "--db", db);
+}
+
 describe("operation commands", () => {
   let directory: string;
   let seed: string;
@@ -103,19 +108,7 @@ describe("operation commands", () => {
     chmodSync(directory, 0o700);
     vi.stubEnv("FONDS_STATE_DIR", directory);
     seed = join(directory, "seed.sqlite");
-    expect(
-      (
-        await cli(
-          "init",
-          "--db",
-          seed,
-          "--connection",
-          "synthetic-cli",
-          "--provider",
-          "cal",
-        )
-      ).status,
-    ).toBe(0);
+    expect((await seedConnection(seed, "synthetic-cli", "cal")).status).toBe(0);
     for (const [run, file] of [
       ["synthetic-run-1", "recent-01.json"],
       ["synthetic-run-2", "recent-02.json"],
@@ -550,19 +543,7 @@ describe("operation commands", () => {
           { connectionId: "." },
         ),
       ).rejects.toMatchObject({ code: "invalid_input" });
-      expect(
-        (
-          await cli(
-            "init",
-            "--db",
-            seed,
-            "--connection",
-            "..",
-            "--provider",
-            "cal",
-          )
-        ).status,
-      ).toBe(1);
+      expect((await seedConnection(seed, "..", "cal")).status).toBe(1);
       for (const [args, message] of [
         [
           ["list-connections", "--remote", "https://fonds.example.invalid"],

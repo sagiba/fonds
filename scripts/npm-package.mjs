@@ -770,13 +770,8 @@ async function checkPostgres(fonds, packed, scratch, serverUrl) {
       (await fondsOutput("--version")) === `${packed.version}\n`,
       "PostgreSQL --version",
     );
-    await fondsOutput(
-      "init",
-      "--connection",
-      "synthetic-pg",
-      "--provider",
-      "cal",
-    );
+    await fondsOutput("init");
+    await fondsOutput("connect", "cal", "--name", "synthetic-pg", "--offline");
     const responses = await stdioSession(
       fonds,
       ["serve", "--transport", "stdio"],
@@ -902,6 +897,10 @@ async function checkInstalled(packed, scratch) {
   assert(
     (await fondsOutput("serve", "--help")).includes("local SQLite HTTP/MCP"),
     "serve --help",
+  );
+  assert(
+    (await fondsOutput("help", "serve")).includes("local SQLite HTTP/MCP"),
+    "help serve",
   );
   const demo = await fondsOutput("demo");
   const database = demo.match(/^ {2}Database: +(.+)$/m)?.[1];

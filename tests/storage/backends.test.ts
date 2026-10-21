@@ -75,6 +75,25 @@ for (const backend of backends) {
     afterEach(async () => {
       await db?.close();
     });
+    it("allows only one concurrent creator of a new connection name", async () => {
+      const id = `${connectionId}-new`;
+      const results = await Promise.allSettled([
+        db.ensureConnection({ id, provider: "cal" }, { requireNew: true }),
+        db.ensureConnection({ id, provider: "isracard" }, { requireNew: true }),
+      ]);
+      expect(
+        results.filter((result) => result.status === "fulfilled"),
+      ).toHaveLength(1);
+      const rejected = results.find((result) => result.status === "rejected");
+      expect(rejected?.reason).toBeInstanceOf(ConflictError);
+      const created = results.find((result) => result.status === "fulfilled")!;
+      expect(await db.getConnection(id)).toMatchObject({
+        provider: created.value.provider,
+      });
+      await expect(
+        db.ensureConnection({ id, provider: "cal" }, { requireNew: true }),
+      ).rejects.toThrow(ConflictError);
+    });
     it("persists card discovery before failed financial reads without ledger changes", async () => {
       const card = {
         cardKey: "card",

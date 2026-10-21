@@ -2,7 +2,7 @@
 
 Install Fonds, try synthetic data, then connect ChatGPT desktop or Claude to
 your local SQLite ledger. No provider credentials are needed for the demo;
-refresh is opt-in. For internet access, use the [hosted-service guide](hosted-service.md).
+refresh is opt-in.
 
 ## Install and try the demo
 
@@ -15,10 +15,8 @@ fonds --version
 fonds demo
 ```
 
-The npm package is named `fonds-finance`; its executable is `fonds`. To update,
-repeat the install command. If `fonds` is not found, put npm's global `bin`
-directory on your `PATH`. With a Node version manager, install under the Node
-version you will keep using.
+The package `fonds-finance` installs `fonds`. Repeat the install command to
+update. If `fonds` is missing, add npm's global `bin` directory to `PATH`.
 
 Alternatively, from source:
 
@@ -94,30 +92,32 @@ before collecting. A connection represents one provider login, not one card or
 billing account. Multiple logins, including the same provider, share one ledger:
 
 ```sh
-fonds init --connection cal-personal --provider cal
-fonds connect --connection cal-personal
-fonds init --connection cal-other --provider cal
-fonds connect --connection cal-other
-fonds init --connection my-isracard --provider isracard
-fonds connect --connection my-isracard
+fonds init
+fonds connect cal
+fonds connect isracard
+fonds connect cal --name cal-other
 fonds list-connections
 fonds refresh
 fonds mcp-config
 ```
 
-Choose distinct IDs and use only accounts you own. `connect` prompts privately
+`init` creates storage only and is safe to repeat. `connect` requires it first;
+its default connection ID is the provider, and `--name` chooses another ID.
+Use only accounts you own. `connect` prompts privately
 for each login's fields and saves credentials for that connection; it does not
 validate the login with the provider. `refresh`
 without `--connection` refreshes all connections with saved credentials;
-`fonds refresh --connection my-isracard` targets one. Cards and billing accounts
+`fonds refresh --connection isracard` targets one. Cards and billing accounts
 are discovered within each connection. Avoid overlapping card access, even
 through different logins: connections remain separate, so ledger-wide totals
 count overlapping records twice. Use `fonds totals --connection-id ID` to scope
 totals to one login.
 One MCP registration exposes all connections, including ones added later.
-`fonds list --connection-id cal-personal` filters CLI results to one connection.
-If a combined refresh fails, use `fonds list-refreshes --connection-id ID` for
-each connection to find the failure before retrying it.
+`fonds list --connection cal` filters CLI results to one connection.
+Existing names are refused. To replace saved credentials, use
+`fonds connect --connection ID`; then `fonds refresh --connection ID` verifies
+the login. For offline archives, `fonds connect cal --name imported --offline`
+adds a connection without credentials, ready for `ingest`.
 
 ## Local HTTP (optional)
 
@@ -148,6 +148,7 @@ The [API reference](../api.md) owns routes, filters, cursors and the
 The CLI runs the [operations](../api.md#operations) as kebab-case commands and
 flags. `list`, `get`, `totals`, `events`, `annotate`, `link` and `remove` are
 short aliases; `<command> --help` prints one operation's description and flags.
+`--connection` also works as an alias for operation commands’ `--connection-id`.
 Set `DEMO_DB` to the path `demo` printed, or drop `--db` to use your default
 ledger:
 
@@ -183,18 +184,18 @@ exit codes: `fonds <command>`, from the npm package or the
 [Docker image](docker.md). A `postgresql://` `FONDS_DATABASE_URL` selects
 PostgreSQL; otherwise SQLite uses `--db` or the default ledger.
 
-| Command      | Does                                                                                          |
-| ------------ | --------------------------------------------------------------------------------------------- |
-| `init`       | Creates the database if needed, binds it to the state directory, and adds a connection        |
-| `connect`    | Stores a connection's provider credentials encrypted, from hidden input or `--credentials-fd` |
-| `disconnect` | Removes stored credentials; later refreshes skip it; the ledger stays                         |
-| `refresh`    | Refreshes now; without `--connection`, every connection with stored credentials, in turn      |
-| `consume`    | Delivers the event feed to stdout as JSON lines and advances a consumer cursor                |
-| `ingest`     | Archives and applies one captured provider response offline                                   |
-| `backup`     | SQLite: a coherent copy of the ledger; on PostgreSQL use `pg_dump` and the state directory    |
-| `login-link` | PostgreSQL: a one-time owner sign-in link for the hosted service                              |
-| `mcp-config` | SQLite: prints setup for a local MCP client without changing client settings                  |
-| `demo`       | SQLite: a separate ledger of synthetic CAL data                                               |
+| Command      | Does                                                                                       |
+| ------------ | ------------------------------------------------------------------------------------------ |
+| `init`       | Initializes storage and private state; adds no provider logins                             |
+| `connect`    | Adds a provider login, or updates credentials with `--connection <id>`                     |
+| `disconnect` | Removes stored credentials; later refreshes skip it; the ledger stays                      |
+| `refresh`    | Refreshes now; without `--connection`, every connection with stored credentials, in turn   |
+| `consume`    | Delivers the event feed to stdout as JSON lines and advances a consumer cursor             |
+| `ingest`     | Archives and applies one captured provider response offline                                |
+| `backup`     | SQLite: a coherent copy of the ledger; on PostgreSQL use `pg_dump` and the state directory |
+| `login-link` | PostgreSQL: a one-time owner sign-in link for the hosted service                           |
+| `mcp-config` | SQLite: prints setup for a local MCP client without changing client settings               |
+| `demo`       | SQLite: a separate ledger of synthetic CAL data                                            |
 
 Unavailable commands exit 3; otherwise 0 means success, 1 failure or `busy`, 2 partial
 refresh. `refresh` calls the provider and prints a

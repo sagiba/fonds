@@ -4,6 +4,10 @@
 // otherwise SQLite, where `fonds serve …` runs the HTTP/stdio server and
 // anything else the CLI. Each loads only its own bundle.
 const args = process.argv.slice(2);
+if (args[0] === "help" && args.length === 2) {
+  args.shift();
+  args.push("--help");
+}
 if (/^postgres(?:ql)?:/i.test(process.env.FONDS_DATABASE_URL ?? "")) {
   const { main } = await import("./postgres/server.js");
   await main(args);

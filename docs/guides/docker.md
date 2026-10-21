@@ -16,8 +16,8 @@ owned by the user it runs as; a named volume satisfies that:
 
 ```sh
 docker volume create fonds-data
-docker run --rm -v fonds-data:/data fonds init --connection cal-main --provider cal
-docker run --rm -it -v fonds-data:/data fonds connect --connection cal-main
+docker run --rm -v fonds-data:/data fonds init
+docker run --rm -it -v fonds-data:/data fonds connect cal --name cal-main
 docker run --rm -it -v fonds-data:/data fonds refresh --connection cal-main
 ```
 
@@ -60,8 +60,7 @@ the credentials with hidden input:
 
 ```sh
 docker compose exec fonds fonds login-link
-docker compose exec fonds fonds init --connection cal-main --provider cal
-docker compose exec fonds fonds connect --connection cal-main
+docker compose exec fonds fonds connect cal --name cal-main
 ```
 
 Nothing is refreshed until you choose a [schedule](hosted-service.md#scheduling).
