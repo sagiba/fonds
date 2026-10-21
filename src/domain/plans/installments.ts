@@ -46,22 +46,24 @@ export function awaitsRestatement(row: Pick<Transaction, "details">): boolean {
   );
 }
 
-/** Whether a plan purchase's live lines state counts or ordinals that contradict it. */
+/**
+ * Whether a plan purchase's live lines contradict it: they or the purchase
+ * state different counts, or an ordinal lies outside a stated count.
+ */
 function linesConflict(parent: Transaction, lines: Transaction[]): boolean {
-  let stated: number | null = null;
-  return lines.some((line) => {
-    const count = line.installmentCount;
-    const ordinal = line.installmentNumber;
-    const bound = count ?? parent.installmentCount;
-    const conflicting =
-      (count !== null &&
-        ((stated !== null && stated !== count) ||
-          (parent.installmentCount !== null &&
-            parent.installmentCount !== count))) ||
-      (bound !== null && ordinal !== null && (ordinal < 1 || ordinal > bound));
-    stated ??= count;
-    return conflicting;
-  });
+  const counts = new Set(
+    [parent, ...lines].flatMap((row) =>
+      row.installmentCount === null ? [] : [row.installmentCount],
+    ),
+  );
+  return (
+    counts.size > 1 ||
+    lines.some(
+      ({ installmentNumber: ordinal }) =>
+        ordinal !== null &&
+        [...counts].some((count) => ordinal < 1 || ordinal > count),
+    )
+  );
 }
 
 /** A purchase's plan conflicts, reevaluated against its live lines. */

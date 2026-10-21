@@ -425,6 +425,16 @@ describe.each(backends)("%s installment repair", (backend) => {
     expect(await db.listEvents()).toEqual(events);
   });
 
+  it("flags a line without a count whose ordinal exceeds another line's count", async () => {
+    await capture(10, [purchase(), line(1, 3), line(4, 3)]);
+    await capture(11, [line(4, null)]);
+    expect((await parent()).sourceIssues).toEqual([
+      "conflicting_installment_lines",
+      "conflicting_installment_plan",
+      "unknown_installment_count",
+    ]);
+  });
+
   it("flags unanimous lines that contradict the purchase's stated count", async () => {
     await capture(10, [purchase(3), line(1, 3), line(2, 3)]);
     await capture(11, [purchase(3), line(1, 4), line(2, 4)]);
