@@ -11,6 +11,7 @@ export function shellWord(value: string): string {
  * Desktop hosts need not inherit the shell's PATH or Fonds environment. Pin
  * the Node runtime and SQLite entry point as well as the ledger's state;
  * never copy the process environment, which may contain provider secrets.
+ * moduleUrl must be the root CLI entry point's URL, not this helper's URL.
  */
 export function localMcpSetup(
   databasePath: string,
@@ -40,7 +41,7 @@ export function localMcpSetup(
     `  codex mcp add ${name} --env ${state} -- ${invocation}`,
     "",
     "Restart the client, check /mcp (or its MCP settings), and ask it to list connections.",
-    "ChatGPT web needs a hosted connection; see docs/guides/chatgpt-connect.md.",
+    "ChatGPT web: https://github.com/sagiba/fonds/blob/main/docs/guides/chatgpt-connect.md",
     "Rerun mcp-config after moving the installation or changing Node versions.",
     "",
   ].join("\n");

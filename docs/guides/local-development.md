@@ -55,6 +55,9 @@ snippets; it does not install a client or modify its settings. The generated
 configuration pins Node, the server, database and state directory to absolute
 paths, so GUI apps need not inherit your shell's `PATH`, `FONDS_HOME` or
 `FONDS_STATE_DIR`. No credentials or tokens appear in it.
+For multiple ledgers in one client, give each a different server name: change
+`fonds` in the printed add command or JSON key. Connection IDs inside a ledger
+do not need separate MCP registrations.
 
 - **ChatGPT desktop:** in Settings → MCP servers → Add server, choose STDIO.
   Enter the generated JSON's `command`, `args` and `env` values, then save and
@@ -107,8 +110,10 @@ for each login's fields and saves credentials for that connection; it does not
 validate the login with the provider. `refresh`
 without `--connection` refreshes all connections with saved credentials;
 `fonds refresh --connection my-isracard` targets one. Cards and billing accounts
-are discovered within each connection. Avoid adding the same login twice:
-connections remain separate and totals can count overlapping records twice.
+are discovered within each connection. Avoid overlapping card access, even
+through different logins: connections remain separate, so ledger-wide totals
+count overlapping records twice. Use `fonds totals --connection-id ID` to scope
+totals to one login.
 One MCP registration exposes all connections, including ones added later.
 `fonds list --connection-id cal-personal` filters CLI results to one connection.
 If a combined refresh fails, use `fonds list-refreshes --connection-id ID` for

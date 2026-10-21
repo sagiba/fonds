@@ -30,8 +30,8 @@ The credential JSON object contains `username` (the login identity number),
 `password` and the six-digit `cardSuffix`. `connect` prompts for each with hidden
 input, or reads `--credentials-fd`, and stores them encrypted for later `refresh`
 runs ([provider credentials table](../database.md#provider-credentials-table)).
-The npm/tsx launcher does not preserve descriptor 3; use the built CLI or
-`node --import tsx src/cli.ts`. The hosted target accepts the same object when
+`npm run cli` (the tsx launcher) does not preserve descriptor 3; use the installed
+`fonds`, built CLI or `node --import tsx src/cli.ts`. Hosted setup accepts this object when
 `FONDS_CONNECTION_PROVIDER=isracard`
 ([hosted-service guide](../guides/hosted-service.md#adding-providers),
 [Neon runbook](../guides/neon-deployment.md)), but hosted refresh is
