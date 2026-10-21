@@ -997,7 +997,7 @@ describe.each(backends)("collection lease on %s", (backend) => {
     };
     const lost = await db.withCollectionLock(
       connectionId,
-      async (store) => {
+      async (store, signal) => {
         await expect(
           store.ingestRun(
             {
@@ -1020,10 +1020,14 @@ describe.each(backends)("collection lease on %s", (backend) => {
           "UPDATE collection_leases SET holder='synthetic-successor', expires_at=expires_at+600000 WHERE connection_id=?",
           [connectionId],
         );
+        // Renewal has not run, so only the write fence can refuse the apply.
+        expect(signal.aborted).toBe(false);
         await expect(store.applyRun(runId, synthetic)).rejects.toThrow();
+        expect(signal.aborted).toBe(false);
         return "lost";
       },
-      { leaseMs: 2_000 },
+      // Renewal every 150 s cannot notice the successor during the test.
+      { leaseMs: 600_000 },
     );
     expect(lost).toEqual({ acquired: true, result: "lost" });
     expect(

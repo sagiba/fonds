@@ -580,63 +580,46 @@ for (const backend of backends) {
       }
     });
 
-    it("never leaves a review approving facts that a concurrent correction replaced", async () => {
-      const peer = await db.peer();
-      try {
-        for (let attempt = 0; attempt < 4; attempt++) {
-          const key = `raced-native-${attempt}`;
-          await capture(
-            JSON.stringify([row(key, { amountMinor: -1000 })]),
+    it.each(["correction first", "review first"] as const)(
+      "never leaves a review approving facts a correction replaced (%s)",
+      async (order) => {
+        const key = `raced-native-${order.replace(" ", "-")}`;
+        const observe = (amountMinor: number, capturedAt: string) =>
+          capture(
+            JSON.stringify([row(key, { amountMinor })]),
             synthetic,
             nextRun(),
-            "2040-08-01T00:00:00Z",
+            capturedAt,
           );
-          const original = (await all()).find((t) =>
-            t.sourceKey.includes(key),
-          )!;
-          const [review, correction] = await Promise.allSettled([
-            db.editAnnotation({
-              transactionId: original.id,
-              expectedVersion: 0,
-              expectedTransactionVersion: original.version,
-              review: { status: "approved" },
-            }),
-            peer.ingestRun(
-              {
-                runId: nextRun(),
-                connectionId,
-                responses: [
-                  {
-                    accountKey: "account",
-                    endpoint: "synthetic:cal/recent",
-                    capturedAt: "2040-08-02T00:00:00Z",
-                    responseText: JSON.stringify([
-                      row(key, { amountMinor: -1001 }),
-                    ]),
-                  },
-                ],
-              },
-              synthetic,
-            ),
-          ]);
-          expect(correction.status).toBe("fulfilled");
-          const current = (await db.getTransaction(original.id))!;
-          expect(current.amountMinor).toBe(-1001);
-          if (review.status === "fulfilled") {
-            // The review committed first, so the correction must stale it.
-            expect(current).toMatchObject({
-              reviewStatus: "stale",
-              reviewStale: true,
-            });
-          } else {
-            expect(review.reason).toBeInstanceOf(ConflictError);
-            expect(current.reviewStatus).toBe("unreviewed");
-          }
+        await observe(-1000, "2040-08-01T00:00:00Z");
+        const original = (await all()).find((t) => t.sourceKey.includes(key))!;
+        const review = () =>
+          db.editAnnotation({
+            transactionId: original.id,
+            expectedVersion: 0,
+            expectedTransactionVersion: original.version,
+            review: { status: "approved" },
+          });
+        if (order === "correction first") {
+          await observe(-1001, "2040-08-02T00:00:00Z");
+          await expect(Promise.resolve().then(review)).rejects.toBeInstanceOf(
+            ConflictError,
+          );
+          expect(await db.getTransaction(original.id)).toMatchObject({
+            amountMinor: -1001,
+            reviewStatus: "unreviewed",
+          });
+        } else {
+          await review();
+          await observe(-1001, "2040-08-02T00:00:00Z");
+          expect(await db.getTransaction(original.id)).toMatchObject({
+            amountMinor: -1001,
+            reviewStatus: "stale",
+            reviewStale: true,
+          });
         }
-      } finally {
-        await peer.close();
-      }
-    });
+      },
+    );
 
     it("preserves fixture evidence, annotations, correction staleness, replay and exact totals", async () => {
       const runId = nextRun();
@@ -1111,6 +1094,7 @@ for (const backend of backends) {
           expect(await all()).toHaveLength(0);
           expect(await db.listEvents({ connectionId })).toHaveLength(0);
           for (const written of [
+            "transactions",
             "transaction_observations",
             "transaction_reconciliation",
             "transaction_posting_links",
@@ -1151,6 +1135,19 @@ for (const backend of backends) {
           created: 1,
         });
         expect(await all()).toHaveLength(1);
+        for (const written of [
+          "transactions",
+          "transaction_observations",
+          "transaction_reconciliation",
+          "transaction_posting_links",
+        ]) {
+          expect(
+            Number(
+              (await db.raw(`SELECT COUNT(*) AS count FROM ${written}`))[0]!
+                .count,
+            ),
+          ).toBe(1);
+        }
       },
     );
 
