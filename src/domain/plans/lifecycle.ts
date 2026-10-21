@@ -16,6 +16,7 @@ import {
 import { billedLinesByPurchase, inPerspective } from "../read-model.js";
 import { nextVersion, type Transaction } from "../records.js";
 import { canonicalAnnotation, reviewBasis, reviewState } from "./annotation.js";
+import { refreshInstallmentParents } from "./installments.js";
 import { FinancialPlan } from "./state.js";
 
 const versionSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
@@ -214,13 +215,25 @@ export function refreshDuplicatePlans(plan: FinancialPlan): Transaction[] {
   return changed;
 }
 
-/** Owner operations refresh lookalike plans and emit their review transitions. */
-function refreshDuplicatePlanReview(
+/**
+ * Owner operations reevaluate installment conflicts and lookalike plans, and
+ * emit their review transitions.
+ */
+function refreshPlanReview(
   plan: FinancialPlan,
   command: { actor: string; reason: string },
   now: string,
 ): void {
-  for (const before of refreshDuplicatePlans(plan)) {
+  const changed = new Map<string, Transaction>();
+  for (const before of [
+    ...refreshInstallmentParents(plan),
+    ...refreshDuplicatePlans(plan),
+  ]) {
+    if (!changed.has(before.id)) {
+      changed.set(before.id, before);
+    }
+  }
+  for (const before of changed.values()) {
     const annotation = plan.annotation(before.id)?.data;
     const beforeReview = reviewState(before, annotation);
     const afterReview = reviewState(plan.transaction(before.id)!, annotation);
@@ -584,7 +597,7 @@ export function planPosting(
     command,
     now,
   );
-  refreshDuplicatePlanReview(plan, command, now);
+  refreshPlanReview(plan, command, now);
   return survivor;
 }
 
@@ -742,7 +755,7 @@ export function planUnlinkPosting(
       now,
     );
   }
-  refreshDuplicatePlanReview(plan, command, now);
+  refreshPlanReview(plan, command, now);
   return { pending, posted };
 }
 
@@ -799,6 +812,6 @@ export function planRemoval(
     });
   }
   removeCandidateReferences(plan, removed, [row.id], command, now);
-  refreshDuplicatePlanReview(plan, command, now);
+  refreshPlanReview(plan, command, now);
   return removed;
 }

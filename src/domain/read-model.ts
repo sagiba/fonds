@@ -62,17 +62,13 @@ type MembershipFacts = Pick<
 
 /**
  * The membership rule as data, so storage compiles the same predicate into
- * SQL. Live billed-line associations also exclude their purchase from billing,
- * even when its own plan metadata is still unknown.
+ * SQL. A plan purchase is one with live billed lines or a multi-payment count,
+ * so lines exclude their purchase even when its plan metadata is unknown.
  */
 export type PerspectiveRule =
   | { kind: "every_row" }
   | { kind: "without_purchase" }
-  | {
-      kind: "without_plan_purchase";
-      minimumPayments: number;
-      excludeWithLiveLines: boolean;
-    };
+  | { kind: "without_plan_purchase"; minimumPayments: number };
 
 export function perspectiveRule(perspective: Perspective): PerspectiveRule {
   switch (perspective) {
@@ -82,7 +78,6 @@ export function perspectiveRule(perspective: Perspective): PerspectiveRule {
       return {
         kind: "without_plan_purchase",
         minimumPayments: PLAN_MINIMUM_PAYMENTS,
-        excludeWithLiveLines: true,
       };
     case "all":
       return { kind: "every_row" };
@@ -102,7 +97,7 @@ export function inPerspective(
       return row.purchaseId === null;
     case "without_plan_purchase":
       return (
-        !(rule.excludeWithLiveLines && hasBilledLines) &&
+        !hasBilledLines &&
         (row.installmentCount === null ||
           row.installmentCount < rule.minimumPayments ||
           row.installmentNumber !== null)

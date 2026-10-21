@@ -419,10 +419,10 @@ purchase date and say nothing about billing dates.
 ## Perspectives
 
 `list_transactions` and `get_transaction_totals` take `perspective`. It selects
-rows without double-counting purchases. Live billed lines exclude their purchase,
-even with unknown counts. Other filters do not change that association.
-The rule is `perspectiveRule` in
-[read-model.ts](../src/domain/read-model.ts).
+which rows represent a plan, so that a purchase is counted once. A purchase with
+live billed lines is a plan purchase even when its count is unknown. Membership
+never depends on the other filters, which then apply within the perspective. The
+rule is `perspectiveRule` in [read-model.ts](../src/domain/read-model.ts).
 
 | `perspective`        | Members                                                                                                               | Totals                                                |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
@@ -431,9 +431,10 @@ The rule is `perspectiveRule` in
 | `all`                | Every row.                                                                                                            | Rejected with `invalid_input`: it would double-count. |
 
 Standalone rows appear in both `spending` and `billing` without double-counting,
-because they have no purchase. Refresh can fill unknown counts from consistent
-explicit billed-line evidence, without changing purchase money or inventing payments.
-Held lines stay unresolved; the purchase commitment is never substituted.
+because they have no purchase. A refresh or line removal fills an unknown count
+only from consistent explicit line counts, never from the number or sum of
+payments, and never changes purchase money. Held lines stay unresolved; the
+purchase commitment is never substituted.
 
 Worked example, one currency: a −300.00 purchase in three installments of −100.00,
 with two billed lines observed so far, plus a −50.00 single charge (outflows are

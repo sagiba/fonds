@@ -36,6 +36,13 @@ const dateColumns = {
   billing: "billingDate",
 } as const;
 
+/** A live billed line of the outer row, matching `isLiveBilledLine`. */
+const line = sql.identifier("billed_line");
+
+function lineColumn(column: AnyColumn) {
+  return sql`${line}.${sql.identifier(column.name)}`;
+}
+
 /** The domain's perspective membership rule, compiled to SQL. */
 function perspectiveFilter(
   table: TransactionColumns,
@@ -55,15 +62,13 @@ function perspectiveFilter(
           lt(table.installmentCount, rule.minimumPayments),
           isNotNull(table.installmentNumber),
         ),
-        rule.excludeWithLiveLines
-          ? sql`not exists (
-          select 1 from ${table.id.table} as billed_line
-          where billed_line.connection_id = ${table.connectionId}
-            and billed_line.purchase_id = ${table.id}
-            and billed_line.presence <> 'removed'
-            and billed_line.superseded_by_id is null
-        )`
-          : undefined,
+        sql`not exists (
+          select 1 from ${table.id.table} as ${line}
+          where ${lineColumn(table.connectionId)} = ${table.connectionId}
+            and ${lineColumn(table.purchaseId)} = ${table.id}
+            and ${lineColumn(table.presence)} <> 'removed'
+            and ${lineColumn(table.supersededById)} is null
+        )`,
       );
   }
 }
