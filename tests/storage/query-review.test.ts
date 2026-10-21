@@ -180,29 +180,6 @@ describe("public review state and scalar totals", () => {
     },
   );
 
-  it.each([
-    ["amountMinor", { amountMinor: -12346 }],
-    ["currency", { currency: "USD" }],
-    ["amountBasis", { amountBasis: "booked_entry" }],
-    ["kind", { kind: "refund" }],
-  ] as const)(
-    "stales an approval when only %s changes",
-    async (_field, change) => {
-      const row = await insert();
-      await annotate(row, "approved");
-      await db.orm
-        .update(transactions)
-        .set({ ...change, version: 2 })
-        .where(eq(transactions.id, row.id))
-        .run();
-      expect(await db.getTransaction(row.id)).toMatchObject({
-        reviewStatus: "stale",
-        reviewStale: true,
-        reviewReasons: ["review_stale"],
-      });
-    },
-  );
-
   it("keeps source problems visible alongside approval", async () => {
     const row = await insert("source-issue", {
       details: { ...emptyDetails(), issues: ["unknown_installment_count"] },

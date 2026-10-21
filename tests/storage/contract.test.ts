@@ -271,6 +271,38 @@ for (const backend of backends) {
       },
     );
 
+    it.each([
+      ["description", { description: "Corrected synthetic" }, false],
+      ["amountMinor", { amountMinor: -12346 }, true],
+      ["currency", { currency: "USD" }, true],
+      ["amountBasis", { amountBasis: "booked_entry" }, true],
+      ["kind", { kind: "refund" }, true],
+    ] as const)(
+      "after a source correction of only %s, approval stale is %s",
+      async (field, change, stale) => {
+        await capture([row("reviewed-native", { amountMinor: -12345 })]);
+        const reviewed = (await all())[0]!;
+        await db.editAnnotation({
+          transactionId: reviewed.id,
+          expectedVersion: 0,
+          expectedTransactionVersion: reviewed.version,
+          review: { status: "approved" },
+        });
+        await capture(
+          [row("reviewed-native", { amountMinor: -12345, ...change })],
+          synthetic,
+          `corrected-${field}`,
+          { capturedAt: "2040-08-02T00:00:00Z" },
+        );
+        const corrected = await db.getTransaction(reviewed.id);
+        expect(corrected!.version).toBeGreaterThan(reviewed.version);
+        expect(corrected).toMatchObject({
+          reviewStatus: stale ? "stale" : "approved",
+          reviewStale: stale,
+        });
+      },
+    );
+
     it("restores a removed row only from evidence captured after the removal decision", async () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       try {

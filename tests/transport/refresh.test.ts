@@ -52,7 +52,39 @@ function refresh(status: "running" | "completed" | "partial"): Refresh {
     failureCodes: [],
     failureReason: null,
     missed: null,
+    providerStopReason: "rate_limited",
+    hasAcceptedEvidence: true,
     windows: [],
+  };
+}
+
+/** The public summary of refresh(status), written out: internal fields never appear. */
+function wire(status: "running" | "completed") {
+  return {
+    id: "synthetic-refresh",
+    connectionId,
+    trigger: "manual",
+    status,
+    skipReason: null,
+    range: null,
+    scheduledAt: null,
+    createdAt: "2040-01-01T00:00:00.000Z",
+    startedAt: "2040-01-01T00:00:00.000Z",
+    finishedAt: status === "running" ? null : "2040-01-01T00:01:00.000Z",
+    requiresAttention: false,
+    counts: {
+      captures: 1,
+      observed: 2,
+      unchangedTransactions: 0,
+      unlisted: 0,
+      unchanged: 0,
+      failures: 0,
+      created: 2,
+      updated: 0,
+    },
+    failureCodes: [],
+    failureReason: null,
+    missed: null,
   };
 }
 
@@ -193,7 +225,7 @@ describe("optional owner refresh interfaces and request diagnostics", () => {
     const running = await request(path, "write", {});
     expect(running.status).toBe(202);
     expect(await running.json()).toEqual({
-      refresh: { ...presentRefresh(refresh("running")), windows: [] },
+      refresh: { ...wire("running"), windows: [] },
     });
     expect(start).toHaveBeenLastCalledWith(connectionId, undefined);
     start.mockResolvedValueOnce(started(refresh("completed")));
@@ -225,12 +257,12 @@ describe("optional owner refresh interfaces and request diagnostics", () => {
         {
           connectionId,
           reason: null,
-          refresh: presentRefresh(refresh("completed")),
+          refresh: wire("completed"),
         },
         {
           connectionId: "other",
           reason: "cooldown",
-          refresh: presentRefresh(refresh("completed")),
+          refresh: wire("completed"),
         },
       ],
     });

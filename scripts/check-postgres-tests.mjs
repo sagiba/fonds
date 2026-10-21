@@ -8,7 +8,7 @@ import { checkStorageCoverage } from "./storage-coverage.mjs";
 // Update these floors only when deliberately removing/reorganizing coverage.
 export const requiredGroups = [
   ["backends.test.ts", "storage contract: postgres", 13],
-  ["contract.test.ts", "shared storage behavior: postgres", 17],
+  ["contract.test.ts", "shared storage behavior: postgres", 22],
   ["statement-counts.test.ts", "statement budgets: postgres", 8],
   ["drivers.test.ts", "PostgreSQL transaction and schema guarantees", 7],
   ["migrations.test.ts", "numbered migrations: postgres", 5],

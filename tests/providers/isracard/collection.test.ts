@@ -1432,6 +1432,15 @@ describe("Isracard sessions across collections", () => {
           expect(JSON.parse(event.capture.responseText)).toMatchObject({
             billingMonth: "2040-05",
           });
+          // May is handed over before June is requested, so June's stop cannot lose it.
+          expect(
+            request.mock.calls.some(
+              ([endpoint, body]) =>
+                endpoint === ISRACARD_ENDPOINTS.transactions &&
+                (body as { billingMonth: string }).billingMonth ===
+                  "01/06/2040",
+            ),
+          ).toBe(false);
         }
       }
       expect(logins(request)).toBe(1);
