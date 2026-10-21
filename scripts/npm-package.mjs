@@ -43,7 +43,7 @@ const registry = "https://registry.npmjs.org";
  * license file, and libraries another package compiled into its own files.
  * A new version needs its text reviewed and added again.
  */
-const reviewedLicenses = {
+export const reviewedLicenses = {
   "drizzle-orm@0.45.4": {
     license: "Apache-2.0",
     source: "https://github.com/drizzle-team/drizzle-orm/blob/0.45.4/LICENSE",
@@ -103,7 +103,7 @@ const reviewedLicenses = {
  * license texts, as its source maps reveal; versions come from that release's
  * lockfile (for the MCP server, pnpm-lock.yaml at its 2.3.1 tag).
  */
-const embeddedLibraries = {
+export const embeddedLibraries = {
   "@modelcontextprotocol/server@2.3.1": [
     "ajv@8.18.0",
     "ajv-formats@3.0.1",
@@ -122,10 +122,14 @@ function packageNameIn(path) {
     : segments[0];
 }
 
-async function reviewedText(id) {
+async function reviewedText(id, directory) {
   const reviewed = reviewedLicenses[id];
+  // A record whose text file is missing is a gap like any other.
   const text = reviewed
-    ? (await readFile(resolve(root, "deploy/npm/licenses", id), "utf8")).trim()
+    ? await readFile(join(directory, id), "utf8").then(
+        (contents) => contents.trim(),
+        () => "",
+      )
     : "";
   return text && { license: reviewed.license, source: reviewed.source, text };
 }
@@ -156,13 +160,30 @@ async function embeddedIn(base, files, ownName) {
   return names;
 }
 
+/** A package manifest's repository as a browsable URL, when it names one. */
+export function repositoryOf(manifest) {
+  const value =
+    manifest.repository?.url ?? manifest.repository ?? manifest.homepage;
+  return typeof value === "string"
+    ? value
+        .replace(/^git\+/, "")
+        .replace(/^git:\/\//, "https://")
+        .replace(/\.git$/, "")
+    : undefined;
+}
+
 /**
- * The license and notice texts of every dependency esbuild copied into the
- * bundle, and of libraries those packages embed. Native modules stay
- * installed packages and carry their own. Paths in the metafile are relative
- * to `base`, the build's working directory.
+ * The license and notice sections of every dependency esbuild copied into the
+ * bundle and of the libraries those packages embed, with each problem that
+ * keeps them incomplete. Native modules stay installed packages and carry
+ * their own texts. Paths in the metafile are relative to `base`, the build's
+ * working directory.
  */
-export async function thirdPartyNotices(metafile, base = root) {
+export async function licenseAudit(
+  metafile,
+  base = root,
+  reviewed = resolve(root, "deploy/npm/licenses"),
+) {
   const packages = new Map();
   for (const output of Object.values(metafile.outputs)) {
     for (const [path, contribution] of Object.entries(output.inputs)) {
@@ -174,46 +195,77 @@ export async function thirdPartyNotices(metafile, base = root) {
     }
   }
   const sections = [];
+  const problems = [];
   for (const [directory, files] of [...packages].sort(([a], [b]) =>
     a.localeCompare(b),
   )) {
     const manifest = JSON.parse(
       await readFile(join(directory, "package.json"), "utf8"),
     );
-    if (!permittedLicenses.has(manifest.license)) {
-      throw new Error(
-        `${manifest.name}@${manifest.version}: license ${manifest.license} needs review before bundling`,
-      );
-    }
     const id = `${manifest.name}@${manifest.version}`;
+    const subject = {
+      id,
+      name: manifest.name,
+      version: manifest.version,
+      license: manifest.license,
+      repository: repositoryOf(manifest),
+    };
+    // Inspection continues past a refusal, so every gap shows at once.
+    if (!permittedLicenses.has(manifest.license)) {
+      problems.push({
+        kind: "refused",
+        ...subject,
+        message: `${id}: license ${manifest.license} needs review before bundling`,
+      });
+    }
     const licenses = [];
     const notices = [];
-    for (const file of (await readdir(directory)).sort()) {
-      const kind = licenseFile.test(file)
+    const entries = await readdir(directory, { withFileTypes: true });
+    // Code-unit order, as before, so the notices stay byte-identical.
+    for (const entry of entries.sort((a, b) =>
+      a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+    )) {
+      const kind = licenseFile.test(entry.name)
         ? licenses
-        : noticeFile.test(file)
+        : noticeFile.test(entry.name)
           ? notices
           : undefined;
-      const text = kind && (await readFile(join(directory, file), "utf8"));
-      if (text?.trim()) {
+      const path = join(directory, entry.name);
+      // A file, or a link to one, holds a text. A legal entry that is not a
+      // readable file is a gap, never skipped, but the audit continues.
+      const text =
+        kind &&
+        (await stat(path)
+          .then((info) => (info.isFile() ? readFile(path, "utf8") : null))
+          .catch(() => null));
+      if (text === null) {
+        problems.push({
+          kind: "unreadable",
+          ...subject,
+          message: `${id}: ${entry.name} cannot be read as a file`,
+        });
+      } else if (text?.trim()) {
         kind.push(text.trim());
       }
     }
     if (!licenses.length) {
-      const reviewed = await reviewedText(id);
-      if (reviewed) {
-        licenses.push(`Source: ${reviewed.source}`, reviewed.text);
+      const supplement = await reviewedText(id, reviewed);
+      if (supplement) {
+        licenses.push(`Source: ${supplement.source}`, supplement.text);
       }
     }
     // A notice never stands in for the license text itself.
-    if (!licenses.length) {
-      throw new Error(
-        `${id} ships no license text; review its upstream text and add it to deploy/npm/licenses`,
+    if (licenses.length) {
+      sections.push(
+        [`${id} (${manifest.license})`, ...licenses, ...notices].join("\n\n"),
       );
+    } else {
+      problems.push({
+        kind: "text",
+        ...subject,
+        message: `${id} ships no license text; review its upstream text and add it to deploy/npm/licenses`,
+      });
     }
-    sections.push(
-      [`${id} (${manifest.license})`, ...licenses, ...notices].join("\n\n"),
-    );
     const recorded = embeddedLibraries[id] ?? [];
     const unrecorded = [
       ...(await embeddedIn(base, files, manifest.name)),
@@ -221,25 +273,59 @@ export async function thirdPartyNotices(metafile, base = root) {
       (name) => !recorded.some((library) => library.startsWith(`${name}@`)),
     );
     if (unrecorded.length) {
-      throw new Error(
-        `${id} embeds ${unrecorded.join(", ")}; review their licenses and record them in embeddedLibraries`,
-      );
+      problems.push({
+        kind: "embedded",
+        ...subject,
+        libraries: unrecorded,
+        message: `${id} embeds ${unrecorded.join(", ")}; review their licenses and record them in embeddedLibraries`,
+      });
     }
     for (const library of recorded) {
-      const reviewed = await reviewedText(library);
-      if (!reviewed || !permittedLicenses.has(reviewed.license)) {
-        throw new Error(
-          `${library}, embedded in ${id}, has no reviewed license text`,
+      const supplement = await reviewedText(library, reviewed);
+      if (!supplement || !permittedLicenses.has(supplement.license)) {
+        const at = library.lastIndexOf("@");
+        const embedded = {
+          id: library,
+          name: library.slice(0, at),
+          version: library.slice(at + 1),
+          embeddedIn: id,
+          repository: subject.repository,
+        };
+        problems.push(
+          supplement
+            ? {
+                kind: "refused",
+                ...embedded,
+                license: supplement.license,
+                message: `${library}, embedded in ${id}: license ${supplement.license} needs review before bundling`,
+              }
+            : {
+                kind: "embedded-text",
+                ...embedded,
+                message: `${library}, embedded in ${id}, has no reviewed license text`,
+              },
         );
+        continue;
       }
       sections.push(
         [
-          `${library} (${reviewed.license}), embedded in ${id}`,
-          `Source: ${reviewed.source}`,
-          reviewed.text,
+          `${library} (${supplement.license}), embedded in ${id}`,
+          `Source: ${supplement.source}`,
+          supplement.text,
         ].join("\n\n"),
       );
     }
+  }
+  return { sections, problems };
+}
+
+/** The notices file; fails on the first problem that keeps it incomplete. */
+export async function thirdPartyNotices(metafile, base = root) {
+  const { sections, problems } = await licenseAudit(metafile, base);
+  if (problems.length) {
+    throw new Error(
+      `${problems[0].message} (npm run licenses:update lists every gap and fetches candidate texts)`,
+    );
   }
   return {
     count: sections.length,
@@ -396,6 +482,25 @@ async function assertRecipeMatchesRoot() {
 }
 
 /**
+ * Builds the package's two bundles into `stage`, SQLite at its root and
+ * PostgreSQL beside it (the launcher picks one per command), and returns
+ * their combined metafile.
+ */
+export async function bundledMetafile(stage) {
+  await buildTarget("sqlite", { output: stage });
+  await buildTarget("postgres", { output: join(stage, "postgres") });
+  const outputs = {};
+  for (const directory of [stage, join(stage, "postgres")]) {
+    Object.assign(
+      outputs,
+      JSON.parse(await readFile(join(directory, "metafile.json"), "utf8"))
+        .outputs,
+    );
+  }
+  return { outputs };
+}
+
+/**
  * Packs the SQLite target as the npm package from the `deploy/npm` recipe:
  * dependencies are bundled, so the package installs only native modules. The
  * recipe manifest stays private, so this is the only way to produce a
@@ -404,16 +509,8 @@ async function assertRecipeMatchesRoot() {
  */
 async function pack(stage) {
   await assertRecipeMatchesRoot();
-  await buildTarget("sqlite", { output: stage });
-  // The PostgreSQL build sits beside it; the launcher picks one per command.
+  const metafile = await bundledMetafile(stage);
   const postgres = join(stage, "postgres");
-  await buildTarget("postgres", { output: postgres });
-  const metafiles = [];
-  for (const directory of [stage, postgres]) {
-    metafiles.push(
-      JSON.parse(await readFile(join(directory, "metafile.json"), "utf8")),
-    );
-  }
   // The package root carries the manifest, lockfile and Fonds' own legal files.
   for (const file of [
     "package.json",
@@ -433,9 +530,7 @@ async function pack(stage) {
     join(stage, "package-lock.json"),
     join(stage, "npm-shrinkwrap.json"),
   );
-  const notices = await thirdPartyNotices({
-    outputs: Object.assign({}, ...metafiles.map(({ outputs }) => outputs)),
-  });
+  const notices = await thirdPartyNotices(metafile);
   await writeFile(join(stage, "THIRD_PARTY_NOTICES"), notices.text);
   await mkdir(destination, { recursive: true });
   const { stdout } = await run(

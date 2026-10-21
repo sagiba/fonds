@@ -37,6 +37,7 @@
     "check:targets": "node scripts/check-targets.mjs",
     "pack:npm": "node scripts/npm-package.mjs",
     "check:npm": "node scripts/npm-package.mjs --check",
+    "licenses:update": "node scripts/licenses-update.mjs",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "npm run lint -- --fix && npm run format",
     "benchmark:reconciliation": "tsx scripts/benchmark-reconciliation.ts",
