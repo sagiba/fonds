@@ -109,7 +109,16 @@ export async function insertTransactionFixture(
       const encoded = encode(row) as unknown as Record<string, unknown>;
       const entries = Object.entries(
         getTableColumns(table) as Record<string, Column>,
-      ).filter(([key]) => encoded[key] !== undefined);
+      ).filter(([key, column]) => {
+        if (encoded[key] !== undefined) {
+          return true;
+        }
+        // Only database-supplied values may be left to the database.
+        if (column.hasDefault || column.generated || column.generatedIdentity) {
+          return false;
+        }
+        throw new Error(`Fixture leaves ${name}.${column.name} unset`);
+      });
       const args = entries.map(([key, column]) =>
         encoded[key] === null ? null : column.mapToDriverValue(encoded[key]),
       );
