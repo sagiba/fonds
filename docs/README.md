@@ -49,3 +49,4 @@
 | [Authentication storage](internals/auth-storage.md) | Hosted identity and bridge table inventory and ownership |
 | [Storage tests](internals/storage-testing.md)       | Reproduce actual-driver verification                     |
 | [Experimental D1](internals/d1-storage.md)          | Maintained experimental adapter; not a deployed service  |
+| [Releasing](../RELEASING.md)                        | Cut, verify and recover a release                        |
