@@ -183,6 +183,18 @@ function digitalKind(row: SourceRow): TransactionInput["kind"] {
 }
 
 /** A source flag counts only when it is explicitly true. */
+/** Foreign rows state an all-zero merchant number, which names no merchant. */
+function merchantNumber(value: unknown): string | null {
+  const number = token(value);
+  return number !== null && /^0+$/.test(number) ? null : number;
+}
+
+/** A city slot holding only a phone number names no city; it stays raw. */
+function cityName(value: unknown): string | null {
+  const city = text(value);
+  return city !== null && /^(?=.*\d)[\d\s+().-]+$/.test(city) ? null : city;
+}
+
 function flagged(value: unknown): boolean {
   return value === true || (typeof value === "string" && /^true$/i.test(value));
 }
@@ -1382,13 +1394,15 @@ function extractGroup(
     },
     billingMonth: capture.billingMonth,
   };
-  details.merchant.city = digital ? text(row.cityDescription) : text(row.city);
+  details.merchant.city = cityName(digital ? row.cityDescription : row.city);
   const countryCode = digital ? text(row.countryCode) : null;
   details.merchant.countryCode =
     countryCode !== null && isCountryCode(countryCode) ? countryCode : null;
-  // Conservative payment context. `presentCard` does not establish
-  // card presence; the security and wallet flags stay raw evidence.
+  // Conservative payment context. `presentCard` true states a presented
+  // physical card, while false states nothing: in-store wallet payments are
+  // false. The security and wallet flags stay raw evidence.
   const codeType = digitalRow ? token(digitalRow.tranzacCodeType) : null;
+  let detailBillingDate: string | null = null;
   const wallets: TransactionInput["wallet"][] = [];
   let counterpartyName: TransactionInput["counterpartyName"] =
     kind === "transfer" ? undefined : null;
@@ -1399,6 +1413,8 @@ function extractGroup(
       const { detail } = binding;
       details.merchant.address = text(detail.address);
       details.merchant.phone = text(detail.phoneNumber);
+      // The bound voucher's own charge date, unlike a requested billing month.
+      detailBillingDate = sourceDate(detail.moedChiuvFull);
       wallets.push(walletFromName(detail.transactionType));
       wallets.push(walletFromName(detail.walletPayName));
       // A transfer's bound detail names its other party.
@@ -1426,12 +1442,16 @@ function extractGroup(
         : row.fullSupplierNameHeb,
   );
   const billingDates = [
-    ...new Set(
-      observations.flatMap((item) =>
+    ...new Set([
+      ...observations.flatMap((item) =>
         item.billingDate === null ? [] : [item.billingDate],
       ),
-    ),
+      ...(detailBillingDate === null ? [] : [detailBillingDate]),
+    ]),
   ];
+  if (billingDates.length > 1) {
+    issues.push("conflicting_billing_date");
+  }
   details.issues = [...new Set(issues)];
   return {
     sourceScope: isracardCardKey(capture.card),
@@ -1447,7 +1467,9 @@ function extractGroup(
     counterpartyName,
     kind,
     merchantName,
-    merchantProviderId: token(digital ? row.businessNumber : row.supplierId),
+    merchantProviderId: merchantNumber(
+      digital ? row.businessNumber : row.supplierId,
+    ),
     merchantCategoryCode: null,
     transactionDate: observation.purchaseDate,
     bookingDate: null,
@@ -1480,6 +1502,11 @@ function extractGroup(
       installmentNumber: plan.installmentNumber,
     }),
     // Omitted payment facts have no evidence; null is conflicting evidence.
+    cardPresent: observations.some(
+      (item) => item.generation === "digital" && flagged(item.row.presentCard),
+    )
+      ? true
+      : undefined,
     authorizationMethod:
       codeType === "U" || codeType === "V" ? "online" : undefined,
     wallet:
@@ -1618,7 +1645,9 @@ function extractPlanPurchase(
   issues.push("source_derived_amount_direction");
   const digitalRow = digitalRows[0];
   const legacyRow = legacyRows[0];
-  details.merchant.city = digitalRow ? text(digitalRow.cityDescription) : null;
+  details.merchant.city = digitalRow
+    ? cityName(digitalRow.cityDescription)
+    : null;
   const countryCode = digitalRow ? text(digitalRow.countryCode) : null;
   details.merchant.countryCode =
     countryCode !== null && isCountryCode(countryCode) ? countryCode : null;
@@ -1653,7 +1682,7 @@ function extractPlanPurchase(
     merchantName: text(
       digitalRow ? digitalRow.businessName : legacyRow?.fullSupplierNameHeb,
     ),
-    merchantProviderId: token(
+    merchantProviderId: merchantNumber(
       digitalRow ? digitalRow.businessNumber : legacyRow?.supplierId,
     ),
     merchantCategoryCode: null,

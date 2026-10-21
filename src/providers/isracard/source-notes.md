@@ -267,8 +267,8 @@ and every code had one label. That label is the evidence for a kind:
   transfers, whose `businessName` is the provider label `העברה ב BIT בנה"פ` or
   `העברה בBIT` ("transfer by BIT"); a detail's `sector` names them too.
 - **Rationale:** no row carries a refund marker, so a zero or negative row of an
-  outflow code is not classified as a refund. Legacy rows carry no such label
-  and stay unknown.
+  outflow code is not classified as a refund. Legacy rows have no code and stay
+  unknown, even with the Bit label.
 - **Checks:** [extraction] "maps DigitalV3 transactionCode %j…", "maps card fees
   at any sign…", "maps positive code 1 Bit transfers by their exact provider
   label…", "leaves unmapped, padded and malformed transaction codes unknown",
@@ -298,11 +298,13 @@ and every code had one label. That label is the evidence for a kind:
   tokenized card, card-on-file subscriptions included, not a mobile wallet. A
   detail's `transactionType` or `walletPayName` can name a wallet. Standing
   orders are legacy `isHoraatKeva` and DigitalV3 `isdirectDebit`. Collected data
-  carries no MCC.
+  carries no MCC. Foreign rows state merchant number `0`, and their city slot
+  can hold a phone number.
 - **Policy:** only `U` and `V`, wallet names from a bound detail, the
   standing-order flags and a transfer's bound `motavName` become typed facts; the
-  name carries no role beyond the transfer. `presentCard` and the security and
-  wallet flags stay raw. DigitalV3 `countryCode` is used only as a valid ISO
+  name carries no role beyond the transfer. `presentCard` true becomes
+  `cardPresent` true; false states nothing, and the other flags stay raw. An
+  all-zero merchant number or a phone-only city is not published. DigitalV3 `countryCode` is used only as a valid ISO
   3166-1 alpha-3 code. An absent optional detail preserves an unambiguously matched
   native transfer's prior counterparty name; a valid bound detail with an empty
   counterparty clears it.
@@ -322,8 +324,9 @@ and every code had one label. That label is the evidence for a kind:
   original amount (a plan's total) with a leading minus; `chargeSum` the amount
   billed for that voucher, with a trailing minus ("N.NN-") and possible spaces;
   `linking` the original-currency symbol; and `sumBeforeDiscount`, despite its
-  name, the discount, equal to DigitalV3 `discountAmount`. `isError` is an array
-  of strings with no established meaning.
+  name, the discount, equal to DigitalV3 `discountAmount`. `moedChiuvFull` is
+  the voucher's charge date, `clearingData` whether the card was presented and
+  `solek` the acquirer. `isError` has no established meaning.
 - **Policy:** a detail supplies facts only when exactly one detail's own voucher
   matches the transaction's; any other detail stays in the archive alone. Its
   money fields and payment table stay raw and never create a schedule or total.
@@ -347,8 +350,8 @@ and every code had one label. That label is the evidence for a kind:
   No route states a booking date.
 - **Policy:** a time joins its own row's purchase date only; a voucher-only
   detail match cannot establish that date, so detail time stays raw. A requested
-  billing month never supplies a billing date, and conflicting known dates yield
-  none.
+  billing month never supplies a billing date; a bound detail's `moedChiuvFull`
+  does. Conflicting known dates yield none and `conflicting_billing_date`.
 - **Checks:** [extraction] "leaves malformed or missing purchase time unknown…",
   "does not promote ambiguous, invalid-date or installment source times…",
   "extracts out-of-statement billing dates…".
