@@ -293,19 +293,29 @@ describe("asynchronous application storage contract", () => {
     const row = (await db.listTransactions())[0]!;
     const before = await db.getTransaction(row.id);
     const changes = await db.listEvents();
-    for (const data of [
-      { category: "c".repeat(4097) },
-      { tags: Array.from({ length: 101 }, () => "tag") },
-      { tags: ["t".repeat(4097)] },
+    for (const fields of [
+      { category: "c".repeat(101) },
+      { tags: Array.from({ length: 51 }, (_, index) => `tag-${index}`) },
+      { tags: ["t".repeat(101)] },
     ]) {
       const response = await request(`/v1/transactions/${row.id}/annotation`, {
-        expectedAnnotationVersion: 0,
-        data,
+        expectedVersion: 0,
+        ...fields,
       });
       expect(response.status).toBe(400);
       expect(await db.getTransaction(row.id)).toEqual(before);
       expect(await db.listEvents()).toEqual(changes);
     }
+    // The same envelope at the limits is accepted, so the rejections above are the bounds.
+    const accepted = await request(`/v1/transactions/${row.id}/annotation`, {
+      expectedVersion: 0,
+      category: "c".repeat(100),
+      tags: [
+        "t".repeat(100),
+        ...Array.from({ length: 49 }, (_, index) => `tag-${index}`),
+      ],
+    });
+    expect(accepted.status).toBe(200);
   });
 
   it("returns small committed annotation receipts even if later reads fail", async () => {

@@ -27,7 +27,7 @@ SQLite; the hosted service runs on any Node host with PostgreSQL.
   do not hand-copy implementation predicates into it.
 - Provider code owns extraction and collection rules. Independent synthetic
   tests own expected outcomes and counterexamples. Expected values must not
-  be derived from the production mapping being tested.
+  be derived from the production code being tested.
 - Source evidence, interpretation rationale and uncertainty belong beside
   the relevant code or in `src/providers/<provider>/source-notes.md`.
   Synthetic fixtures demonstrate behavior; they do not prove issuer semantics.

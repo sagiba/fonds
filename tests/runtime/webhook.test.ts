@@ -15,6 +15,7 @@ import {
 const network = vi.hoisted(() => ({
   requests: [] as { url: URL; options: RequestOptions; body: string }[],
   status: 200,
+  location: undefined as string | undefined,
   corruptChallenge: false,
   oversizedResponse: false,
 }));
@@ -32,6 +33,7 @@ vi.mock("node:https", () => ({
           queueMicrotask(() => {
             const incoming = Object.assign(new PassThrough(), {
               statusCode: network.status,
+              headers: { location: network.location },
             });
             response(incoming);
             const sent = JSON.parse(body) as { challenge?: string };
@@ -72,6 +74,7 @@ const input = {
 beforeEach(() => {
   network.requests.length = 0;
   network.status = 200;
+  network.location = undefined;
   network.corruptChallenge = false;
   network.oversizedResponse = false;
   vi.mocked(lookup).mockResolvedValue([
@@ -88,16 +91,45 @@ describe("public, pinned, signed webhook transport", () => {
     "169.254.169.254",
     "100.64.0.1",
     "0.0.0.0",
+    "0.1.2.3",
+    "198.18.0.1",
+    "198.19.255.254",
+    "224.0.0.1",
+    "239.255.255.255",
+    "240.0.0.1",
+    "255.255.255.254",
     "192.0.2.1",
     "::1",
     "fc00::1",
     "fe80::1",
+    "ff02::1",
     "::ffff:127.0.0.1",
     "64:ff9b::127.0.0.1",
     "2001:db8::1",
+    "2002:7f00:1::",
   ])("blocks non-public address %s", (address) => {
     expect(isPublicWebhookAddress(address)).toBe(false);
   });
+
+  it.each([
+    "https://[::1]/",
+    "https://[::ffff:127.0.0.1]/",
+    "https://[fe80::1]/",
+    "https://2130706433/",
+    "https://0x7f.1/",
+    "https://0177.0.0.1/",
+    "https://127.1/",
+  ])(
+    "refuses non-public URL literal %s before lookup or sending",
+    async (url) => {
+      vi.mocked(lookup).mockClear();
+      await expect(sendSignedWebhook({ ...input, url })).rejects.toMatchObject({
+        reason: "invalid_url",
+      });
+      expect(lookup).not.toHaveBeenCalled();
+      expect(network.requests).toHaveLength(0);
+    },
+  );
 
   it("pins the validated address and preserves hostname, exact body and rotation signatures", async () => {
     expect(isPublicWebhookAddress("8.8.8.8")).toBe(true);
@@ -191,6 +223,18 @@ describe("public, pinned, signed webhook transport", () => {
     const response = await sendSignedWebhook(input);
     expect(response.status).toBe(200);
     expect(response.body).toBeNull();
+  });
+
+  it("does not follow or acknowledge a delivery redirect to a private address", async () => {
+    network.status = 302;
+    network.location = "https://127.0.0.1/events";
+    const response = await sendSignedWebhook(input);
+    expect(response.status).toBe(302);
+    expect(response.ok).toBe(false);
+    expect(network.requests).toHaveLength(1);
+    expect(network.requests[0]!.url.href).toBe(
+      "https://receiver.example.invalid/events",
+    );
   });
 
   it("applies the shared callback URL length limit before sending", async () => {

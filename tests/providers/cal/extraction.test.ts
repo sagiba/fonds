@@ -581,6 +581,48 @@ describe("CAL extraction", () => {
     }
   });
 
+  it.each([
+    ["root", "hasMore", true],
+    ["root", "totalPages", 2],
+    ["root", "nextPage", 2],
+    ["result", "nextCursor", "synthetic-cursor"],
+    ["result", "nextPageToken", "synthetic-token"],
+    ["result", "continuationToken", "synthetic-token"],
+    ["result", "cursor", "synthetic-cursor"],
+    ["result", "pagination", { page: 1 }],
+  ] as const)(
+    "keeps rows but makes no completeness claim when %s carries %s",
+    (container, key, value) => {
+      const response = onePosted();
+      const target = container === "root" ? response : response.result;
+      (target as unknown as Record<string, unknown>)[key] = value;
+      const result = extract(response);
+      expect(result.transactions).toHaveLength(1);
+      expect(result.warnings).toContain("unsupported_pagination");
+      expect(result.partitions).toEqual([
+        expect.objectContaining({ success: false, comparable: false }),
+        expect.objectContaining({ success: false, comparable: false }),
+      ]);
+    },
+  );
+
+  it.each([
+    ["hasMore", false],
+    ["totalPages", 1],
+    ["nextPage", null],
+    ["nextCursor", ""],
+    ["cursor", false],
+  ] as const)("treats %s=%s as no continuation", (key, value) => {
+    const response = onePosted();
+    (response.result as Record<string, unknown>)[key] = value;
+    const result = extract(response);
+    expect(result.warnings).not.toContain("unsupported_pagination");
+    expect(result.partitions).toEqual([
+      expect.objectContaining({ success: true, comparable: true }),
+      expect.objectContaining({ success: true, comparable: true }),
+    ]);
+  });
+
   it("accepts future fields without retaining undeclared evidence", () => {
     const response = onePosted();
     response.result.transactions[0]!.futureField = {
