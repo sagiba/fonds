@@ -3,6 +3,7 @@
 !package.json
 !LICENSE
 !NOTICE
+!README.md
 !package-lock.json
 !tsconfig.json
 !tsconfig.build.json
