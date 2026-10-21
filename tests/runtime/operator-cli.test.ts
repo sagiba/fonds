@@ -47,6 +47,17 @@ vi.mock("../../src/providers/cal/collect.js", () => ({
         scope: { kind: "recent" },
       },
     };
+    // Invented usernames name the failures their synthetic refresh meets.
+    const { username } = options.credentials as { username: string };
+    for (const code of ["network_error", "rate_limited"] as const) {
+      if (username.includes(code.toUpperCase())) {
+        yield {
+          type: "failure",
+          failure: { accountKey: null, endpoint: "synthetic:cal", code },
+          fatal: false,
+        };
+      }
+    }
   },
 }));
 
@@ -376,6 +387,36 @@ describe("collect on SQLite", () => {
         stderr: "--archive-days must be an integer from 1 through 30.\n",
       });
     }
+  });
+
+  it("summarizes every refresh's failure codes as one sorted list", async () => {
+    for (const connection of ["first", "second", "third"]) {
+      await run("init", "--connection", connection, "--provider", "cal");
+    }
+    await connect("first", "INVENTED-NETWORK_ERROR");
+    await connect("second", "INVENTED-RATE_LIMITED-NETWORK_ERROR");
+    await connect("third", "INVENTED-HEALTHY");
+    const all = await run("refresh");
+    expect(all).toMatchObject({ status: EXIT_CODES.partial, stderr: "" });
+    expect(collectionSummarySchema.parse(JSON.parse(all.stdout))).toMatchObject(
+      {
+        status: "partial",
+        captures: 3,
+        failures: 3,
+        failureCodes: ["network_error", "rate_limited"],
+      },
+    );
+    const healthy = await run("refresh", "--connection", "third");
+    expect(healthy.status).toBe(EXIT_CODES.ok);
+    expect(
+      collectionSummarySchema.parse(JSON.parse(healthy.stdout)),
+    ).not.toHaveProperty("failureCodes");
+    expect(
+      collectionSummarySchema.safeParse({
+        ...JSON.parse(all.stdout),
+        failureCodes: ["expired"],
+      }).success,
+    ).toBe(false);
   });
 
   it("prints one summary shape for every stored connection and for one", async () => {

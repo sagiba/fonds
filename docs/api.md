@@ -139,21 +139,21 @@ windows, or `null` before any.
 
 A refresh records one connection's manual or scheduled provider update.
 
-| Field                                  | Meaning                                                                                                                                            |
-| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`, `connectionId`                   | The refresh and its connection.                                                                                                                    |
-| `trigger`                              | `manual` or `scheduled`.                                                                                                                           |
-| `status`                               | `pending`, `running`, then `completed`, `partial` (some requested work failed) or `failed`; `skipped` for a scheduled occurrence that did not run. |
-| `skipReason`                           | For `skipped`: `busy`, `cooldown`, `requires_attention` or `missed`; otherwise `null`.                                                             |
-| `range`                                | A backfill's inclusive `{from, to}`, or `null` for the recent window.                                                                              |
-| `scheduledAt`                          | A scheduled refresh's occurrence time, otherwise `null`.                                                                                           |
-| `createdAt`, `startedAt`, `finishedAt` | Acceptance, first execution and finish; the last two `null` until then.                                                                            |
-| `requiresAttention`                    | Refreshing needs operator attention.                                                                                                               |
-| `counts`                               | Cumulative observation and change counts, including retries.                                                                                       |
-| `failureCodes`                         | Reconciliation codes met, at most `"implausible_empty"`.                                                                                           |
-| `failureReason`                        | `expired` when it was still unfinished a day after `createdAt`; otherwise `null`.                                                                  |
-| `missed`                               | A `missed` skip's gap `{through, count}`, from `scheduledAt` through `through`; otherwise `null`.                                                  |
-| `windows`                              | `get_refresh` and starts only: a backfill's months, newest first, each `{from, to, status}`.                                                       |
+| Field                                  | Meaning                                                                                                                                                                     |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`, `connectionId`                   | The refresh and its connection.                                                                                                                                             |
+| `trigger`                              | `manual` or `scheduled`.                                                                                                                                                    |
+| `status`                               | `pending`, `running`, then `completed`, `partial` (some requested work failed) or `failed`; `skipped` for a scheduled occurrence that did not run.                          |
+| `skipReason`                           | For `skipped`: `busy`, `cooldown`, `requires_attention` or `missed`; otherwise `null`.                                                                                      |
+| `range`                                | A backfill's inclusive `{from, to}`, or `null` for the recent window.                                                                                                       |
+| `scheduledAt`                          | A scheduled refresh's occurrence time, otherwise `null`.                                                                                                                    |
+| `createdAt`, `startedAt`, `finishedAt` | Acceptance, first execution and finish; the last two `null` until then.                                                                                                     |
+| `requiresAttention`                    | Refreshing needs operator attention.                                                                                                                                        |
+| `counts`                               | Cumulative observation and change counts, including retries.                                                                                                                |
+| `failureCodes`                         | Sorted failure causes: `authentication_challenge`, `authentication_failed`, `budget_exhausted`, `implausible_empty`, `invalid_response`, `network_error` or `rate_limited`. |
+| `failureReason`                        | `expired` when it was still unfinished a day after `createdAt`; otherwise `null`.                                                                                           |
+| `missed`                               | A `missed` skip's gap `{through, count}`, from `scheduledAt` through `through`; otherwise `null`.                                                                           |
+| `windows`                              | `get_refresh` and starts only: a backfill's months, newest first, each `{from, to, status}`.                                                                                |
 
 `counts` distinguishes applied financial `captures` (including recovery), successful `unchanged` captures
 without content changes, and accepted `observed` transaction identities counted once

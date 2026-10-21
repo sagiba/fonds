@@ -1,11 +1,13 @@
 import { z } from "zod";
 
 import {
+  collectionFailureCodeSchema,
   isBilledLine,
   jsonObjectSchema,
   paymentContextConflicts,
   type ReconciliationFailureCode,
   reconciliationFailureCodeSchema,
+  type RefreshFailureCode,
   RESOURCE_ID_MAX_LENGTH,
   storedPaymentContext,
   type TransactionDetails,
@@ -112,14 +114,7 @@ const failureSchema = z
     endpoint: z.string().min(1),
     scope: scopeSchema.optional(),
     affectsCoverage: z.literal(false).optional(),
-    code: z.enum([
-      "network_error",
-      "authentication_failed",
-      "authentication_challenge",
-      "rate_limited",
-      "budget_exhausted",
-      "invalid_response",
-    ]),
+    code: collectionFailureCodeSchema,
   })
   .strict();
 
@@ -184,6 +179,29 @@ export function reconciliationFailure(warnings: readonly string[]) {
     warnings.includes(code),
   );
   return failureCode ? { failureCode } : {};
+}
+
+/**
+ * Why an applied run counts as a failure of its refresh. A capture its
+ * extraction rejected has no provider failure, so it is an invalid response.
+ */
+export function refreshFailureCodes(
+  result: Pick<SyncResult, "status" | "failureCode">,
+  failures: readonly CollectionFailure[],
+  extracted: readonly { result: Pick<ExtractionResult, "partitions"> }[],
+): RefreshFailureCode[] {
+  if (result.status === "completed") {
+    return [];
+  }
+  const rejected = extracted.some(({ result }) =>
+    result.partitions.some((partition) => !partition.success),
+  );
+  const codes = [
+    ...(result.failureCode ? [result.failureCode] : []),
+    ...failures.map((failure) => failure.code),
+    ...(rejected ? (["invalid_response"] as const) : []),
+  ];
+  return codes.length ? codes : ["invalid_response"];
 }
 
 const financialFields = [

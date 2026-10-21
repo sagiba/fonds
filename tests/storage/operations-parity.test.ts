@@ -7,12 +7,20 @@ import {
   type EventSubscription,
   type SignedWebhookInput,
 } from "../../src/application/events.js";
+import {
+  createApplication,
+  inProcessInvoker,
+} from "../../src/application/operations.js";
 import type { Refresh } from "../../src/application/refreshes.js";
 import type {
   CollectionEvent,
   ProviderCollector,
 } from "../../src/domain/source-adapter.js";
-import { createRefreshService } from "../../src/runtime/refresh-service.js";
+import {
+  createRefreshService,
+  ownerRefreshes,
+  UNIT_DEADLINE_MS,
+} from "../../src/runtime/refresh-service.js";
 import * as postgresSchema from "../../src/storage/postgres/schema.js";
 import {
   prepareRun,
@@ -555,6 +563,112 @@ describe.each(backends)("operations parity on %s", (backend) => {
           { from: "2040-02-01", status: "completed" },
           { from: "2040-01-15", status: "completed" },
         ],
+      });
+    });
+
+    it("publishes one sorted list of the failure codes every window committed, across a resume", async () => {
+      const detailFailure: CollectionEvent = {
+        type: "failure",
+        failure: {
+          accountKey: null,
+          endpoint: "synthetic-detail",
+          code: "network_error",
+        },
+        fatal: false,
+      };
+      const source = collector(async function* (options) {
+        const from = options.range!.from;
+        if (from === "2040-03-01") {
+          // Outlasts the first invocation's budget, so the refresh yields here.
+          await sleep(700);
+          yield capture("march");
+          yield detailFailure;
+        } else if (from === "2040-02-01") {
+          yield capture("february");
+          yield detailFailure;
+          const rejected = capture("rejected") as Extract<
+            CollectionEvent,
+            { type: "capture" }
+          >;
+          yield {
+            type: "capture",
+            capture: {
+              ...rejected.capture,
+              accountKey: "other",
+              httpStatus: 503,
+            },
+          };
+        } else {
+          yield capture("january");
+        }
+      });
+      const targets = async () => ({
+        targets: [
+          {
+            connectionId,
+            adapter: synthetic,
+            collector: async () => source,
+          },
+        ],
+        failures: 0,
+      });
+      const background: Promise<unknown>[] = [];
+      const bounded = createRefreshService({
+        store: db,
+        targets,
+        log: () => {},
+        retryDelaysMs: [],
+        budgetMs: UNIT_DEADLINE_MS + 500,
+        background: (work) => background.push(work),
+        continueLater: async () => {},
+      });
+      const started = await bounded.start(connectionId, {
+        trigger: "manual",
+        range: { from: "2040-01-15", to: "2040-03-10" },
+      });
+      await bounded.settled();
+      const id = started.refresh!.id;
+      expect(await (await peer()).getRefresh(id)).toMatchObject({
+        status: "running",
+        failureCodes: ["network_error"],
+        windows: [
+          { status: "partial" },
+          { status: "pending" },
+          { status: "pending" },
+        ],
+      });
+      const continued = createRefreshService({
+        store: db,
+        targets,
+        log: () => {},
+        retryDelaysMs: [],
+      });
+      await continued.resumeStalled();
+      await continued.settled();
+      const expected = ["invalid_response", "network_error"];
+      expect(await db.getRefresh(id)).toMatchObject({
+        status: "partial",
+        failureCodes: expected,
+        counts: { captures: 4, failures: 3 },
+        windows: [
+          { status: "partial" },
+          { status: "partial" },
+          { status: "completed" },
+        ],
+      });
+      const invoker = inProcessInvoker(
+        createApplication(db, { refreshes: ownerRefreshes(continued) }),
+      );
+      expect(
+        await invoker.invoke("get_refresh", { refreshId: id }),
+      ).toMatchObject({ refresh: { failureCodes: expected } });
+      expect(
+        await invoker.invoke("list_refreshes", { connectionId }),
+      ).toMatchObject({ data: [{ id, failureCodes: expected }] });
+      expect(
+        await invoker.invoke("get_connection", { connectionId }),
+      ).toMatchObject({
+        connection: { latestRefresh: { id, failureCodes: expected } },
       });
     });
 

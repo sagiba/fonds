@@ -251,6 +251,7 @@ describe("refresh service", () => {
     expect(result?.refresh).toMatchObject({
       status: "partial",
       requiresAttention: true,
+      failureCodes: ["authentication_failed"],
       windows: [
         { from: "2040-03-01", status: "completed" },
         { from: "2040-02-01", status: "failed" },
@@ -335,9 +336,12 @@ describe("refresh service", () => {
     );
     await restarted.resumeStalled();
     await restarted.settled();
+    // The interrupted attempt stays counted; the redone month leaves no failure.
     expect(await db.getRefresh(started.refresh!.id)).toMatchObject({
       status: "completed",
       windows: [{ status: "completed" }],
+      counts: { failures: 1 },
+      failureCodes: [],
     });
   });
 
