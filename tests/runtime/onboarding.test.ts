@@ -14,6 +14,10 @@ import { join, resolve } from "node:path";
 
 import { afterEach, beforeEach, expect, it } from "vitest";
 
+import { createCredentialVault } from "../../src/runtime/credential-vault.js";
+import { resolveInstallation } from "../../src/runtime/installation.js";
+import { openDatabase } from "../../src/storage/sqlite/database.js";
+
 const cli = resolve("src/cli.ts");
 let directory: string;
 let home: string;
@@ -76,6 +80,21 @@ const connections = () =>
     provider: string;
   }[];
 
+async function savedCredentials(id: string) {
+  const { credentialsKey } = await resolveInstallation(state, {
+    create: false,
+  });
+  const database = await openDatabase(join(home, "fonds.sqlite"));
+  try {
+    return await createCredentialVault(
+      database.credentials,
+      credentialsKey,
+    ).load({ id, provider: "cal" });
+  } finally {
+    await database.close();
+  }
+}
+
 it("requires storage initialization before connect or offline ingestion", () => {
   for (const args of [
     ["connect", "cal"],
@@ -100,7 +119,7 @@ it("requires storage initialization before connect or offline ingestion", () => 
   }
 });
 
-it("initializes only storage, then adds default and named logins without overwriting existing credentials", () => {
+it("initializes only storage, then adds default and named logins without overwriting existing credentials", async () => {
   expect(run(["init"]).status).toBe(0);
   const originalState = readFileSync(join(state, "fonds.env"), "utf8");
   expect(connections()).toEqual([]);
@@ -126,7 +145,9 @@ it("initializes only storage, then adds default and named logins without overwri
     { id: "cal-other", provider: "cal" },
     { id: "isracard", provider: "isracard" },
   ]);
-  const before = readFileSync(join(home, "fonds.sqlite"));
+  expect(await savedCredentials("cal")).toEqual(credentials);
+  const other = { ...credentials, username: "INVENTED-OTHER" };
+  expect(await savedCredentials("cal-other")).toEqual(other);
   for (const args of [
     ["connect", "cal"],
     ["connect", "isracard", "--name", "cal"],
@@ -137,13 +158,15 @@ it("initializes only storage, then adds default and named logins without overwri
     expect(result.stderr).toContain("already exists");
     expect(result.stderr).not.toContain("interactive terminal");
   }
-  expect(readFileSync(join(home, "fonds.sqlite"))).toEqual(before);
+  expect(await savedCredentials("cal")).toEqual(credentials);
+  expect(await savedCredentials("cal-other")).toEqual(other);
   expect(run(["init"]).status).toBe(0);
   expect(connections()).toHaveLength(3);
   expect(readFileSync(join(state, "fonds.env"), "utf8")).toBe(originalState);
   expect(
     run(["connect", "--connection", "cal-other"], credentials).status,
   ).toBe(0);
+  expect(await savedCredentials("cal-other")).toEqual(credentials);
 }, 30_000);
 
 it("leaves no new login after missing or invalid credentials and refuses mixed targeting flags", () => {

@@ -58,7 +58,13 @@ export async function addConnection(options: {
     throw error;
   }
   if (credentials) {
-    await options.openVault().save(connection, credentials);
+    try {
+      await options.openVault().save(connection, credentials);
+    } catch {
+      throw new ConnectError(
+        "The connection was added, but saving credentials could not be confirmed. Retry with connect --connection <id>.",
+      );
+    }
   }
   return {
     connectionId: connection.id,
