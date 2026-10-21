@@ -357,7 +357,8 @@ jobs:
           # Recheck just before staging: the channel may have moved meanwhile.
           current="$(npm_channel "$name" "$channel")"
           node scripts/release.mjs forward "$VERSION" "${current:--}"
-          npm stage publish package/fonds.tgz --tag "$channel" --access public --provenance
+          # Without ./ npm reads package/fonds.tgz as a GitHub repository.
+          npm stage publish ./package/fonds.tgz --tag "$channel" --access public --provenance
           {
             echo "Staged $name@$VERSION on \`$channel\`. Approve that stage on npmjs.com with your second factor."
             echo "Reject any older pending stage instead of approving it."
