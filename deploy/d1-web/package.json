@@ -1,6 +1,5 @@
 {
   "name": "fonds-d1-web",
-  "version": "0.1.0-rc.2",
   "private": true,
   "type": "module",
   "devDependencies": {

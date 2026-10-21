@@ -9,8 +9,9 @@ the human side of it. Only the maintainer tags and approves releases.
 Versions are `X.Y.Z`, or `X.Y.Z-rc.N` for a release candidate; nothing else
 publishes. While Fonds is `0.x`, the minor version marks features and breaking
 changes and the patch version compatible fixes. The root `package.json` holds the
-version; `node scripts/release-version.mjs X.Y.Z` sets it in every manifest,
-lockfile and `FONDS_VERSION`, and the workflow refuses a tag that differs.
+version until the next release; `node scripts/release-version.mjs X.Y.Z`
+sets it there, in its lockfile and `FONDS_VERSION`, and the workflow refuses a
+tag that differs.
 
 Each release publishes:
 

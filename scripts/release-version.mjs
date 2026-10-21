@@ -2,7 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { root, targets } from "./build-targets.mjs";
+import { root } from "./build-targets.mjs";
 
 /** `X.Y.Z` or a release candidate `X.Y.Z-rc.N`; the release workflow publishes no other form. */
 export const versionPattern =
@@ -10,18 +10,9 @@ export const versionPattern =
 const versionModule = "src/application/version.ts";
 const versionDeclaration = /export const FONDS_VERSION = "([^"]*)";/;
 
-/** Every manifest and lockfile that repeats the root package.json version. */
-const manifests = [
-  "package.json",
-  ...new Set(
-    Object.entries(targets).map(
-      ([name, target]) => `${target.recipe ?? `deploy/${name}`}/package.json`,
-    ),
-  ),
-];
-const lockfiles = manifests.map((path) =>
-  path.replace(/package\.json$/, "package-lock.json"),
-);
+// Deploy recipes carry no version; building a target stamps the root's into it.
+const manifests = ["package.json"];
+const lockfiles = ["package-lock.json"];
 
 async function readJson(path) {
   return JSON.parse(await readFile(resolve(root, path), "utf8"));
