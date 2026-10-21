@@ -252,6 +252,20 @@ for (const backend of backends) {
       });
     });
 
+    it.each([
+      ["+99 999 9999999", null],
+      ["Synthetic city", "Synthetic city"],
+    ])(
+      "restores a stored merchant city %j through a sparse read only when it names a place",
+      async (city, expected) => {
+        const details = emptyDetails();
+        details.merchant = { ...details.merchant, city };
+        await capture("enriched", [entry("entry", { details })]);
+        await capture("sparse", [entry("entry")]);
+        expect((await rows())[0]!.details.merchant.city ?? null).toBe(expected);
+      },
+    );
+
     it("retains known merchant/payment enrichment through sparse reads and accepts newer explicit values", async () => {
       const details = emptyDetails();
       details.merchant = {

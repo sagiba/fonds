@@ -28,7 +28,7 @@ export const isracardLegacyRowShape =
   paymentSum paymentSumOutbound paymentSumSign dealSum dealSumOutbound dealSumType
   currencyId currentPaymentCurrency kodMatbeaMekori
   fullSupplierNameHeb fullSupplierNameOutbound supplierId supplierName supplierNameOutbound city
-  moreInfo isHoraatKeva horaatKeva`);
+  moreInfo isHoraatKeva horaatKeva solek`);
 
 export const isracardDetailShape: EvidenceShape = {
   ...scalarFields(`voucherNumber voucherNumberRatz purchaseDateOutboundIsracard purchaseTime
@@ -36,7 +36,7 @@ export const isracardDetailShape: EvidenceShape = {
     transactionType walletPayName dealCode dealType numberOfPayments paymentNumber
     dealSum chargeSum chargeSumToDisplay dealSumOutbound dealSumOutboundInshekels
     currencyId currencyIdForCharge currencyIdOutbound linking
-    discount sumBeforeDiscount saleName secondSaleName moreInfo sector
+    discount sumBeforeDiscount saleName secondSaleName moreInfo sector clearingData solek
     moedChiuvFull valueDate conversionCurrency conversionDateZMD dateConversion dateConversionOutBound
     dollarConversion dollarTransferRate exchangeRateZMD
     commissionDiscountPercentage commissionDiscountSum commissionNetValue commissionNetValueCurrency

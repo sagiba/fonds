@@ -365,6 +365,81 @@ describe("CAL FX", () => {
     },
   );
 
+  it("parses a one-decimal representative rate", () => {
+    const row = templateRow("FX-ONE-STEP");
+    // 50 EUR × 3.9 + 1.50 − 0.50 = 196.00 billed.
+    Object.assign(row, {
+      amountForDisplay: 196,
+      amtBeforeConvAndIndex: 196,
+      comments: (row.comments as { key: string }[]).map((comment) =>
+        comment.key.includes("בשער יציג")
+          ? { ...comment, key: ILS_TEMPLATE("3.9") }
+          : comment,
+      ),
+    });
+    const result = extractOne(row);
+    expect(result.details.currencyExchange).toMatchObject([
+      { exchangeRate: "3.9" },
+    ]);
+    expect(result.fxFeeMinor).toBe(-100);
+  });
+
+  it("parses a USD conversion rate stated with three decimals", () => {
+    const row = templateRow("FX-TWO-STEP");
+    Object.assign(row, {
+      comments: (row.comments as { key: string }[]).map((comment) => ({
+        ...comment,
+        key: comment.key.replace("בשער 1.270000.", "בשער 1.270."),
+      })),
+    });
+    const result = extractOne(row);
+    expect(result.details.currencyExchange).toMatchObject([
+      { sourceCurrency: "GBP", exchangeRate: "1.270" },
+      { sourceCurrency: "USD" },
+    ]);
+    expect(result.fxFeeMinor).toBe(-178);
+  });
+
+  it("publishes no conversion when original-amount text names another currency", () => {
+    const row = templateRow("FX-ONE-STEP");
+    Object.assign(row, {
+      transTypeCommentDetails: ["\u200fסכום העסקה - \u200e$50\u200f"],
+    });
+    const result = extractOne(row);
+    expect(result).toMatchObject({
+      originalCurrency: null,
+      fxFeeMinor: null,
+    });
+    expect(result.details.currencyExchange).toBeUndefined();
+    expect(result.details.issues).toContain("conflicting_original_currency");
+  });
+
+  it("publishes no conversion on a zero-billed row whose original-amount text names another currency", () => {
+    const row = templateRow("FX-ONE-STEP");
+    Object.assign(row, {
+      amountForDisplay: 0,
+      amtBeforeConvAndIndex: 0,
+      transTypeCommentDetails: ["\u200fסכום העסקה - \u200e$50\u200f"],
+    });
+    const result = extractOne(row);
+    expect(result.details.currencyExchange).toBeUndefined();
+    expect(result.details.issues).toContain("conflicting_original_currency");
+  });
+
+  it("keeps FX explanations as text on a row whose plan size only its texts state", () => {
+    const row = templateRow("FX-ONE-STEP");
+    Object.assign(row, {
+      numOfPayments: null,
+      onGoingTransactionsComment: "עסקה ב - 4 תשלומים",
+    });
+    const result = extractOne(row);
+    expect(result.installmentCount).toBe(4);
+    expect(result.details.currencyExchange).toBeUndefined();
+    expect(result.details.additionalInformation).toEqual(
+      expect.arrayContaining([expect.stringContaining("בשער יציג")]),
+    );
+  });
+
   it("rounds half up before comparing", () => {
     // 3 EUR × 3.335 = 10.005 → 10.01, so 10.00 is still within one unit and 9.99 is not.
     for (const [billed, reconciles] of [

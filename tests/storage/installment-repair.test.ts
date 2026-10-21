@@ -267,6 +267,47 @@ describe.each(backends)("%s installment repair", (backend) => {
     });
   });
 
+  it("leaves a plan's count unknown when a capture's own plan facts conflict", async () => {
+    await capture(10, [purchase(5), line(1)]);
+    await capture(11, [
+      {
+        ...purchase(),
+        details: {
+          ...purchase().details,
+          issues: ["conflicting_installment_facts"],
+        },
+      },
+    ]);
+    const current = await parent();
+    expect(current.installmentCount).toBeNull();
+    expect(current.sourceIssues).toEqual(["conflicting_installment_facts"]);
+    await expectBilling(["line-1"], -2500);
+  });
+
+  it("still guards a plan when a capture with conflicting counts also restates its kind", async () => {
+    await capture(10, [purchase(4), line(1, 4)]);
+    await capture(11, [
+      {
+        ...purchase(),
+        kind: "refund",
+        amountMinor: 12500,
+        details: {
+          ...purchase().details,
+          issues: ["conflicting_installment_facts"],
+        },
+      },
+    ]);
+    const current = await parent();
+    expect(current).toMatchObject({
+      kind: "purchase",
+      amountMinor: -12500,
+      installmentCount: 4,
+    });
+    expect(current.sourceIssues).toContain(
+      "conflicting_installment_restatement",
+    );
+  });
+
   it("keeps a single-payment restatement stored before provenance until the source restates a plan", async () => {
     await capture(10, [purchase(5), line(1)]);
     const stored = await parent();
@@ -1039,24 +1080,50 @@ describe.each(backends)("%s installment repair", (backend) => {
     expect(await db.listEvents()).toEqual(events);
   });
 
-  it("holds accepted purchase money after an explicit single-payment contradiction until explicit plan resolution", async () => {
-    await capture(10, [purchase(5), line(1)]);
-    await capture(11, [{ ...purchase(1), amountMinor: -15000 }]);
-    expect((await parent()).amountMinor).toBe(-12500);
-    await capture(12, [{ ...purchase(), amountMinor: -17000 }]);
-    expect(await parent()).toMatchObject({
-      installmentCount: 5,
-      amountMinor: -12500,
-    });
-    expect((await parent()).sourceIssues).toContain(
-      "conflicting_installment_plan",
-    );
-    await capture(13, [{ ...purchase(5), amountMinor: -17000 }]);
-    expect((await parent()).amountMinor).toBe(-17000);
-    expect((await parent()).sourceIssues).not.toContain(
-      "conflicting_installment_plan",
-    );
-  });
+  it.each(["unknown_installment_count", "conflicting_installment_facts"])(
+    "holds accepted purchase money through %s after a single-payment contradiction until explicit plan resolution",
+    async (issue) => {
+      await capture(10, [purchase(5), line(1)]);
+      await capture(11, [{ ...purchase(1), amountMinor: -15000 }]);
+      expect((await parent()).amountMinor).toBe(-12500);
+      const unresolved = {
+        ...purchase(),
+        amountMinor: -17000,
+        details: { ...emptyDetails(), issues: [issue] },
+      };
+      await capture(12, [unresolved]);
+      expect(await parent()).toMatchObject({
+        installmentCount: 5,
+        amountMinor: -12500,
+      });
+      expect((await parent()).sourceIssues).toContain(
+        "conflicting_installment_plan",
+      );
+      expect((await parent()).sourceIssues).toContain(
+        "conflicting_installment_restatement",
+      );
+      await expectBilling(["line-1"], -2500);
+      const before = await parent();
+      const events = await db.listEvents();
+      for (const day of [13, 14]) {
+        await capture(day, [unresolved]);
+        expect(await parent()).toMatchObject({
+          id: before.id,
+          version: before.version,
+          installmentCount: 5,
+          amountMinor: -12500,
+          sourceIssues: before.sourceIssues,
+        });
+        expect(await db.listEvents()).toEqual(events);
+        await expectBilling(["line-1"], -2500);
+      }
+      await capture(15, [{ ...purchase(5), amountMinor: -17000 }]);
+      expect((await parent()).amountMinor).toBe(-17000);
+      expect((await parent()).sourceIssues).not.toContain(
+        "conflicting_installment_plan",
+      );
+    },
+  );
 });
 
 describe.each(backends)(

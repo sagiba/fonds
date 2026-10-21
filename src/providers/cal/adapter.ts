@@ -10,7 +10,7 @@ import { normalizeCalScope, validateCalScope } from "./scope.js";
 
 export const calAdapter: SourceAdapter = {
   provider: "cal",
-  parserVersion: "cal-v12",
+  parserVersion: "cal-v13",
   retainProviderEvidence: retainCalEvidence,
   mergeProviderEvidence: mergeCalEvidence,
   projectProviderState: projectCalState,

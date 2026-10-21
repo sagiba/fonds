@@ -88,6 +88,8 @@ describe("CAL original-currency roles", () => {
       ] as const) {
         const transaction = extract({
           trnCurrencyIsoCode: originalIso,
+          // The source restates the ISO numeric code, empty when it is null.
+          srcCurrencyCode: originalIso ?? "",
           transOriginalCurrencyCode: provider,
           trnCurrencySymbol: symbol,
           trnAmt: amount,

@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   collectionFailureCodeSchema,
   isBilledLine,
+  isCityName,
   jsonObjectSchema,
   paymentContextConflicts,
   type ReconciliationFailureCode,
@@ -386,13 +387,18 @@ function retainedEnrichment(
     return result;
   }
 
+  const merchant = retainFields(preferred.merchant, fallback.merchant, [
+    "address",
+    "phone",
+    "city",
+    "countryCode",
+  ]);
+  // A stored value that is no city name is not restored once a capture omits it.
   return {
-    merchant: retainFields(preferred.merchant, fallback.merchant, [
-      "address",
-      "phone",
-      "city",
-      "countryCode",
-    ]),
+    merchant:
+      merchant.city != null && !isCityName(merchant.city)
+        ? { ...merchant, city: preferred.merchant.city ?? null }
+        : merchant,
   };
 }
 
@@ -2026,7 +2032,18 @@ export function planRun(
         // a plan or the owner removes the lines. Repeating accepted non-plan
         // facts restates nothing new, though their lines can conflict with them.
         const priorRestatement = awaitsRestatement(previous);
+        // A capture whose own plan facts conflict leaves its count unknown on
+        // purpose: without an unresolved earlier restatement, that is neither
+        // a new restatement nor a count to keep when the purchase role agrees.
+        const conflictingPlan =
+          !priorRestatement &&
+          input.installmentCount === null &&
+          input.details.issues.includes("conflicting_installment_facts") &&
+          input.kind === previous.kind &&
+          input.amountBasis === previous.amountBasis &&
+          input.installmentNumber === previous.installmentNumber;
         const restated =
+          !conflictingPlan &&
           planParents.has(previous.id) &&
           purchaseKey === null &&
           inPerspective(input, "billing", false) &&
