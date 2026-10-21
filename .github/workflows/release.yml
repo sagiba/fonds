@@ -1,0 +1,512 @@
+name: Release
+
+# Publishes a version from its tag (RELEASING.md). Every check runs on the
+# tagged commit; the npm tarball is packed once and the image is built from
+# those same bytes on native runners. Publication waits for the protected
+# `release` environment, then npm's staged approval. The GitHub Release stays
+# a draft and rolling image tags stay put until the published package is
+# verified. Run it manually with a tag and the ID of that tag's approved run to
+# finish one whose wait for npm timed out, from the run's retained artifacts.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to finalize, such as v0.1.0
+        required: true
+      run-id:
+        description: ID of the Release run whose artifacts to finalize
+        required: true
+
+permissions:
+  contents: read
+
+# bash -eo pipefail: a failing command in a pipeline fails its step.
+defaults:
+  run:
+    shell: bash
+
+# One release at a time, approvals included; later ones wait in order and
+# nothing is cancelled.
+concurrency:
+  group: release
+  queue: max
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+  NPM_VERSION: 11.17.0
+
+jobs:
+  source:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      # The release helpers load the build scripts.
+      - run: npm ci --ignore-scripts
+      - name: Validate the tag, its version and its place on main
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          node scripts/release-version.mjs --check "$TAG"
+          # The remote tag must still name this commit, which main contains.
+          git fetch --quiet origin "+refs/tags/$TAG:refs/tags/$TAG" main
+          [ "$(git rev-parse "refs/tags/$TAG^{commit}")" = "$GITHUB_SHA" ]
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          # The annotated tag's message is the release's human summary.
+          [ "$(git cat-file -t "refs/tags/$TAG")" = tag ]
+          [ -n "$(git for-each-ref --format='%(contents)' "refs/tags/$TAG" | tr -d '[:space:]')" ]
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+  # The same checks as the Check workflow, never skipped.
+  check:
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+
+  postgres:
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18.6
+        env:
+          POSTGRES_PASSWORD: synthetic-test-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 1s
+          --health-timeout 5s
+          --health-retries 50
+    env:
+      FONDS_TEST_POSTGRES_URL: postgres://postgres:synthetic-test-only@127.0.0.1:5432/postgres
+      FONDS_TEST_REQUIRE_POSTGRES: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Run storage integration tests
+        run: >-
+          npm test -- tests/storage --no-file-parallelism
+          --reporter=default --reporter=json
+          --outputFile=/tmp/fonds-postgres-results.json
+      - name: Verify PostgreSQL coverage ran
+        run: node scripts/check-postgres-tests.mjs /tmp/fonds-postgres-results.json
+
+  # Packs the tarball once and tests it installed; every later job uses it.
+  package:
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:18.6
+        env:
+          POSTGRES_PASSWORD: synthetic-test-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 1s
+          --health-timeout 5s
+          --health-retries 50
+    env:
+      FONDS_TEST_POSTGRES_URL: postgres://postgres:synthetic-test-only@127.0.0.1:5432/postgres
+      FONDS_TEST_REQUIRE_POSTGRES: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Pack and test the installed package
+        env:
+          VERSION: ${{ needs.source.outputs.version }}
+        run: |
+          npm run --silent check:npm | tail -n 1 > /tmp/packed.json
+          node --input-type=module -e '
+            import { readFileSync, writeFileSync, copyFileSync, mkdirSync } from "node:fs";
+            const packed = JSON.parse(readFileSync("/tmp/packed.json", "utf8"));
+            if (packed.version !== process.env.VERSION || !packed.postgres) process.exit(1);
+            mkdirSync("package");
+            copyFileSync(packed.tarball, "package/fonds.tgz");
+            writeFileSync("package/npm.json", JSON.stringify({ name: packed.name, version: packed.version, integrity: packed.integrity }, null, 2) + "\n");'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: package
+          path: package/
+          if-no-files-found: error
+          retention-days: 90
+
+  # One image per architecture on its own runner, from the tested tarball,
+  # pushed by digest only and smoke-tested from the registry.
+  image:
+    needs: [source, check, postgres, package]
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The smoke test reads the version with Node.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: package
+          path: package/
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          # The Dockerfile installs this tarball instead of packing again.
+          build-contexts: package=./package
+          labels: |
+            org.opencontainers.image.version=${{ needs.source.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.licenses=Apache-2.0
+          provenance: mode=max
+          sbom: true
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+      - name: Smoke-test the pushed digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ needs.source.outputs.version }}
+        run: |
+          docker pull "$IMAGE@$DIGEST"
+          docker tag "$IMAGE@$DIGEST" fonds
+          [ "$(docker run --rm fonds --version)" = "$VERSION" ]
+          FONDS_SMOKE_SKIP_BUILD=1 ./scripts/docker-smoke.sh
+          mkdir digests
+          echo "$DIGEST" > "digests/${{ matrix.arch }}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digest-${{ matrix.arch }}
+          path: digests/
+          if-no-files-found: error
+          retention-days: 90
+
+  # Exact identities first: the version's image tag, a draft release with the
+  # assets, and the staged npm version. Nothing here moves a rolling pointer.
+  stage:
+    needs: [source, image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+    env:
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.source.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm install --global "npm@$NPM_VERSION"
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: package
+          path: package/
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: digest-*
+          path: digests/
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag the multi-architecture image with its exact version
+        run: |
+          source scripts/release-registry.sh
+          sources=()
+          for arch in amd64 arm64; do sources+=("$IMAGE@$(cat "digests/$arch")"); done
+          # Each pushed digest is an index of its image and attestations; the
+          # version's index must list exactly these platform images.
+          expected="$(image_platforms "${sources[@]}")"
+          [ "$(echo "$expected" | wc -w)" = 2 ]
+          # An existing exact tag must already be this release; never replace it.
+          if existing="$(image_platforms "$IMAGE:$VERSION")"; then
+            [ "$existing" = "$expected" ] ||
+              { echo "$IMAGE:$VERSION already names other images"; exit 1; }
+          else
+            [ "$?" = 3 ] || exit 1
+            docker buildx imagetools create --tag "$IMAGE:$VERSION" "${sources[@]}"
+          fi
+          [ "$(image_platforms "$IMAGE:$VERSION")" = "$expected" ]
+          image_digest "$IMAGE:$VERSION" > digests/index
+      - name: Prepare the release assets
+        run: |
+          source scripts/release-registry.sh
+          name="$(jq -r .name package/npm.json)"
+          # The npm channel: never backwards; a backport gets its own line.
+          # Command substitution, unlike <(…), fails the step if the lookup fails.
+          listed="$(npm_versions "$name")"
+          mapfile -t versions <<< "$listed"
+          stable="$(node scripts/release.mjs highest --stable "${versions[@]}")"
+          channel="$(node scripts/release.mjs dist-tag "$VERSION" "$stable")"
+          current="$(npm_channel "$name" "$channel")"
+          node scripts/release.mjs forward "$VERSION" "${current:--}"
+          mkdir release
+          cp package/fonds.tgz "release/fonds-finance-$VERSION.tgz"
+          node scripts/release.mjs compose "$IMAGE:$VERSION" > release/compose.yaml
+          jq -n \
+            --arg version "$VERSION" --arg tag "$TAG" --arg commit "$GITHUB_SHA" \
+            --arg image "$IMAGE" --arg index "$(cat digests/index)" \
+            --arg amd64 "$(cat digests/amd64)" --arg arm64 "$(cat digests/arm64)" \
+            --arg tarball "$(sha256sum package/fonds.tgz | cut -d' ' -f1)" \
+            --arg channel "$channel" --slurpfile npm package/npm.json \
+            '{version: $version, tag: $tag, commit: $commit,
+              npm: ($npm[0] + {sha256: $tarball, distTag: $channel}),
+              image: {name: $image, digest: $index, platforms: {amd64: $amd64, arm64: $arm64}}}' \
+            > release/release-manifest.json
+          (cd release && sha256sum -- * > SHA256SUMS)
+      - name: Create or refresh the draft release
+        run: |
+          # Set from the version, also on a draft that already exists.
+          prerelease=false
+          [[ "$VERSION" == *-rc.* ]] && prerelease=true
+          if state="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            [ "$state" = true ] || { echo "$TAG is already published"; exit 1; }
+            gh release edit "$TAG" --prerelease="$prerelease"
+            gh release upload "$TAG" release/* --clobber
+          else
+            git for-each-ref --format='%(contents)' "refs/tags/$TAG" > /tmp/summary.md
+            gh release create "$TAG" release/* --draft --verify-tag --prerelease="$prerelease" \
+              --title "Fonds $VERSION" --notes-file /tmp/summary.md --generate-notes
+          fi
+      - name: Stage the npm version
+        run: |
+          source scripts/release-registry.sh
+          name="$(jq -r .name package/npm.json)"
+          integrity="$(jq -r .integrity package/npm.json)"
+          if published="$(npm_integrity "$name" "$VERSION")"; then
+            # A rerun after approval: the registry must hold these exact bytes.
+            [ "$published" = "$integrity" ] ||
+              { echo "$name@$VERSION is published with other contents"; exit 1; }
+            exit 0
+          else
+            [ "$?" = 3 ] || exit 1
+          fi
+          channel="$(jq -r .npm.distTag release/release-manifest.json)"
+          # Recheck just before staging: the channel may have moved meanwhile.
+          current="$(npm_channel "$name" "$channel")"
+          node scripts/release.mjs forward "$VERSION" "${current:--}"
+          npm stage publish package/fonds.tgz --tag "$channel" --access public --provenance
+          {
+            echo "Staged $name@$VERSION on \`$channel\`. Approve that stage on npmjs.com with your second factor."
+            echo "Reject any older pending stage instead of approving it."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Waits for the owner's npm approval, verifies the published bytes, then
+  # moves rolling image tags and publishes the release. Run manually to resume
+  # an approved run whose wait timed out. Moving the tags and publishing are
+  # idempotent: if either fails, run finalize again.
+  finalize:
+    needs: [source, stage]
+    if: >-
+      always() && (github.event_name == 'workflow_dispatch' ||
+      needs.stage.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      packages: write
+      actions: read
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      RUN_ID: ${{ inputs.run-id || github.run_id }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      # Only this workflow's run for a release tag on main, whose every job
+      # succeeded and whose `release` environment was approved, can be
+      # finalized, and only then does the tag's own code run here.
+      - name: Verify the release run
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ && "$RUN_ID" =~ ^[0-9]+$ ]] ||
+            { echo "finalize needs a release tag and a numeric run ID"; exit 1; }
+          fail() { echo "Run $RUN_ID is not an approved Release run for $TAG: $1"; exit 1; }
+          commit="$(gh api "repos/$GH_REPO/commits/$TAG" --jq .sha)"
+          ancestry="$(gh api "repos/$GH_REPO/compare/$commit...main" --jq .status)"
+          [[ "$ancestry" == ahead || "$ancestry" == identical ]] || fail "$TAG is not on main"
+          workflow="$(gh api "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID" --jq .workflow_id)"
+          gh run view "$RUN_ID" --json workflowDatabaseId,event,headBranch,headSha,jobs > /tmp/run.json
+          jq -e --arg tag "$TAG" --arg commit "$commit" --argjson workflow "$workflow" '
+            .workflowDatabaseId == $workflow and .event == "push" and
+            .headBranch == $tag and .headSha == $commit
+          ' /tmp/run.json > /dev/null || fail "another workflow, event or commit"
+          # Every job except finalize, matrix images included, succeeded.
+          jq -e '
+            [.jobs[] | select(.name != "finalize")] as $jobs
+            | ($jobs | all(.conclusion == "success")) and
+              (["source", "check", "postgres", "package", "stage"]
+                | all(. as $name | $jobs | any(.name == $name))) and
+              (["image (amd64", "image (arm64"]
+                | all(. as $prefix | $jobs | any(.name | startswith($prefix))))
+          ' /tmp/run.json > /dev/null || fail "a required job did not succeed"
+          gh api "repos/$GH_REPO/actions/runs/$RUN_ID/approvals" --jq '
+            any(.[]; .state == "approved" and any(.environments[]; .name == "release"))
+          ' | grep -qx true || fail "the release environment was not approved"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: package
+          path: package/
+          run-id: ${{ env.RUN_ID }}
+          github-token: ${{ github.token }}
+      - name: Verify the draft against its manifest
+        run: |
+          gh release download "$TAG" --pattern release-manifest.json --dir /tmp/release
+          manifest=/tmp/release/release-manifest.json
+          [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true ] ||
+            { echo "$TAG is not a draft release"; exit 1; }
+          [ "$(jq -r .commit "$manifest")" = "$(git rev-parse "refs/tags/$TAG^{commit}")" ]
+          [ "$(jq -r .tag "$manifest")" = "$TAG" ]
+          [ "$(jq -r .npm.integrity "$manifest")" = "$(jq -r .integrity package/npm.json)" ]
+          [ "$(jq -r .npm.sha256 "$manifest")" = "$(sha256sum package/fonds.tgz | cut -d' ' -f1)" ]
+          cp "$manifest" release-manifest.json
+          echo "VERSION=$(jq -r .version "$manifest")" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Wait for the npm approval and verify the published package
+        run: |
+          source scripts/release-registry.sh
+          name="$(jq -r .npm.name release-manifest.json)"
+          integrity="$(jq -r .npm.integrity release-manifest.json)"
+          published=
+          for _ in $(seq 1 60); do
+            status=0
+            published="$(npm_integrity "$name" "$VERSION")" || status=$?
+            if [ "$status" = 0 ]; then
+              break
+            fi
+            # 3: not published yet; anything else is a failed lookup.
+            [ "$status" = 3 ] || exit 1
+            published=
+            sleep 30
+          done
+          [ -n "$published" ] || {
+            echo "$name@$VERSION is not published yet: approve its stage, then run Release manually for $TAG with run ID $RUN_ID."
+            exit 1
+          }
+          [ "$published" = "$integrity" ] ||
+            { echo "$name@$VERSION is published with other contents"; exit 1; }
+          mkdir -p /tmp/verify
+          (cd /tmp/verify && npm pack "$name@$VERSION" --silent > /dev/null)
+          cmp "/tmp/verify/$name-$VERSION.tgz" package/fonds.tgz
+          # The channel points to this version or a newer one; an older stage
+          # approved later would have moved it back.
+          channel="$(jq -r .npm.distTag release-manifest.json)"
+          current="$(npm_channel "$name" "$channel")"
+          [ -n "$current" ] && [ "$(node scripts/release.mjs compare "$current" "$VERSION")" -ge 0 ] || {
+            echo "$channel points to ${current:-nothing}, older than $VERSION; an older stage was approved."
+            exit 1
+          }
+      - name: Move rolling image tags
+        run: |
+          source scripts/release-registry.sh
+          image="$(jq -r .image.name release-manifest.json)"
+          digest="$(jq -r .image.digest release-manifest.json)"
+          [ "$(image_digest "$image:$VERSION")" = "$digest" ]
+          minor="$(echo "$VERSION" | cut -d. -f1-2)"
+          minor_version="$(image_version "$image:$minor")"
+          latest_version="$(image_version "$image:latest")"
+          tags="$(node scripts/release.mjs rolling-tags "$VERSION" "$minor_version" "$latest_version")"
+          for tag in $tags; do
+            docker buildx imagetools create --tag "$image:$tag" "$image@$digest"
+          done
+          echo "Rolling tags moved: ${tags:-none}" >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish the release
+        run: |
+          latest=false
+          prerelease=true
+          if [[ "$VERSION" != *-rc.* ]]; then
+            prerelease=false
+            listed="$(gh release list --exclude-drafts --exclude-pre-releases \
+              --limit 1000 --json tagName --jq '.[].tagName | ltrimstr("v")')"
+            mapfile -t published <<< "$listed"
+            newest="$(node scripts/release.mjs highest --stable "${published[@]}")"
+            if [ "$newest" = - ] || [ "$(node scripts/release.mjs compare "$VERSION" "$newest")" -ge 0 ]; then
+              latest=true
+            fi
+          fi
+          gh release edit "$TAG" --draft=false --prerelease="$prerelease" --latest="$latest"
