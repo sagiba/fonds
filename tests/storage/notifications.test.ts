@@ -1,32 +1,36 @@
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   deliverFromStore,
   DeliveryConflictError,
 } from "../../src/application/change-delivery.js";
+import type { InternalStore } from "../../src/application/financial-store.js";
 import type { LedgerEvent as ChangeRow } from "../../src/domain/records.js";
 import { calAdapter } from "../../src/providers/cal/adapter.js";
 import {
   type Database,
   openDatabase,
 } from "../../src/storage/sqlite/database.js";
-import { connections } from "../../src/storage/sqlite/schema.js";
-import { row, synthetic } from "../helpers/storage-harness.js";
+import {
+  backends,
+  type Harness,
+  open,
+  row,
+  synthetic,
+} from "../helpers/storage-harness.js";
 
-const connectionId = "synthetic-cal";
 const consumerId = "synthetic-notifications";
-const options = { connectionId, consumerId };
 const responseText = readFileSync(
   new URL("../providers/cal/fixtures/recent-01.json", import.meta.url),
   "utf8",
 );
 
-async function baseline(db: Database, id = connectionId) {
+async function baseline(db: InternalStore, id: string) {
   await db.ensureConnection({ id, provider: "cal" });
   await db.ingestRun(
     {
@@ -45,7 +49,7 @@ async function baseline(db: Database, id = connectionId) {
   );
 }
 
-async function annotate(db: Database, id = connectionId, version = 0) {
+async function annotate(db: InternalStore, id: string, version = 0) {
   await db.editAnnotation({
     transactionId: (await db.listTransactions({ connectionId: id }))[0]!.id,
     expectedVersion: version,
@@ -53,73 +57,247 @@ async function annotate(db: Database, id = connectionId, version = 0) {
   });
 }
 
-describe("durable change delivery", () => {
+for (const backend of backends) {
+  describe(`durable change delivery: ${backend}`, () => {
+    let db: Harness;
+    let connectionId: string;
+    let options: { connectionId: string; consumerId: string };
+    beforeEach(async () => {
+      db = await open(backend);
+      connectionId = `delivery-${randomUUID()}`;
+      options = { connectionId, consumerId };
+      await baseline(db, connectionId);
+    });
+    afterEach(() => db?.close());
+
+    it("delivers ordered, connection-scoped run and transaction changes in bounded pages", async () => {
+      await baseline(db, `${connectionId}-other`);
+      await annotate(db, connectionId);
+      await annotate(db, `${connectionId}-other`);
+      await annotate(db, connectionId, 1);
+      const expected = await db.listEvents({ connectionId });
+      expect(expected.map((change) => change.type)).toEqual([
+        ...Array<string>(
+          (await db.listTransactions({ connectionId })).length,
+        ).fill("transaction.imported"),
+        "sync.baseline",
+        "annotation.updated",
+        "annotation.updated",
+      ]);
+      const received: ChangeRow[] = [];
+      const first = await deliverFromStore(
+        db,
+        { ...options, limit: 2 },
+        async (message) => {
+          await db.updateConfig(connectionId, (config) => config);
+          expect(message.deliveryKey).toBe(
+            JSON.stringify([connectionId, message.event.id]),
+          );
+          received.push(message.event);
+        },
+      );
+      expect(first).toEqual({ delivered: 2, cursor: expected[1]!.id });
+      const second = await deliverFromStore(
+        db,
+        options,
+        async ({ event: change }) => {
+          received.push(change);
+        },
+      );
+      expect(second).toEqual({
+        delivered: expected.length - 2,
+        cursor: expected.at(-1)!.id,
+      });
+      expect(received).toEqual(expected);
+      expect(
+        await db.getDeliveryCursor(`${connectionId}-other`, consumerId),
+      ).toBe(0);
+    });
+
+    it("does not deliver an acknowledged change again", async () => {
+      const first = await deliverFromStore(db, options, async () => {});
+      const repeated = await deliverFromStore(db, options, async () => {
+        throw new Error("Already delivered");
+      });
+      expect(repeated).toEqual({ delivered: 0, cursor: first.cursor });
+    });
+
+    it("returns cursor zero for a new connection with no changes", async () => {
+      await db.ensureConnection({
+        id: `${connectionId}-empty`,
+        provider: "cal",
+      });
+      expect(
+        await deliverFromStore(
+          db,
+          { ...options, connectionId: `${connectionId}-empty` },
+          async () => {
+            throw new Error("No change expected");
+          },
+        ),
+      ).toEqual({ delivered: 0, cursor: 0 });
+    });
+
+    it("keeps independent consumers and preserves configuration updates during delivery", async () => {
+      const received: number[] = [];
+      await deliverFromStore(
+        db,
+        { ...options, limit: 1 },
+        async ({ event: change }) => {
+          const other = await deliverFromStore(
+            db,
+            { ...options, consumerId: "other-consumer", limit: 1 },
+            async ({ event: change }) => {
+              received.push(change.id);
+            },
+          );
+          expect(other.cursor).toBe(change.id);
+          await db.updateConfig(connectionId, (config) => ({
+            ...config,
+            syntheticSetting: "keep",
+          }));
+          received.push(change.id);
+        },
+      );
+      const config = (await db.getStoredConnection(connectionId))!.config;
+      expect(config).toMatchObject({
+        schemaVersion: 1,
+        syntheticSetting: "keep",
+        changeCursors: {
+          [consumerId]: received[0],
+          "other-consumer": received[0],
+        },
+      });
+      expect(received).toHaveLength(2);
+    });
+
+    it("rejects overlapping delivery for one consumer and releases its guard afterwards", async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const first = deliverFromStore(db, options, async () => gate);
+      try {
+        await expect(
+          deliverFromStore(db, options, async () => {}),
+        ).rejects.toThrow(DeliveryConflictError);
+      } finally {
+        release();
+      }
+      const result = await first;
+      expect(await deliverFromStore(db, options, async () => {})).toEqual({
+        delivered: 0,
+        cursor: result.cursor,
+      });
+    });
+
+    it("detects a changed cursor without overwriting it", async () => {
+      await expect(
+        deliverFromStore(db, options, async ({ event: change }) => {
+          await db.raw("UPDATE connections SET config_json = ? WHERE id = ?", [
+            JSON.stringify({
+              schemaVersion: 1,
+              changeCursors: { [consumerId]: change.id },
+            }),
+            connectionId,
+          ]);
+        }),
+      ).rejects.toThrow(DeliveryConflictError);
+      expect(await db.getDeliveryCursor(connectionId, consumerId)).toBe(
+        (await db.listEvents())[0]!.id,
+      );
+    });
+
+    it("rejects missing connections and invalid IDs, limits, or stored cursors", async () => {
+      await expect(db.getDeliveryCursor("missing", consumerId)).rejects.toThrow(
+        "Connection not found",
+      );
+      await expect(
+        deliverFromStore(
+          db,
+          { ...options, connectionId: "missing" },
+          async () => {},
+        ),
+      ).rejects.toThrow("Connection not found");
+      await expect(db.getDeliveryCursor(connectionId, "")).rejects.toThrow();
+      await expect(
+        deliverFromStore(db, { ...options, connectionId: "" }, async () => {}),
+      ).rejects.toThrow();
+      for (const limit of [0, -1, 1.5, 1001, Number.POSITIVE_INFINITY]) {
+        await expect(
+          deliverFromStore(db, { ...options, limit }, async () => {}),
+        ).rejects.toThrow();
+      }
+      await db.raw("UPDATE connections SET config_json = ? WHERE id = ?", [
+        JSON.stringify({
+          schemaVersion: 1,
+          changeCursors: { [consumerId]: -1 },
+        }),
+        connectionId,
+      ]);
+      await expect(
+        db.getDeliveryCursor(connectionId, consumerId),
+      ).rejects.toThrow();
+    });
+
+    it("keeps delivery callbacks outside the transaction that acknowledges their cursor", async () => {
+      const received: ChangeRow[] = [];
+      const result = await deliverFromStore(
+        db,
+        options,
+        async ({ event: change }) => {
+          await db.updateConfig(connectionId, (config) => ({
+            ...config,
+            syntheticDelivery: true,
+          }));
+          received.push(change);
+        },
+      );
+      expect(received.length).toBe(result.delivered);
+      expect(await db.getDeliveryCursor(connectionId, consumerId)).toBe(
+        result.cursor,
+      );
+      expect(
+        (await db.getStoredConnection(connectionId))?.config.syntheticDelivery,
+      ).toBe(true);
+    });
+
+    it.each(["constructor", "toString", "__proto__"])(
+      "supports the consumer ID %s without inherited cursor values",
+      async (id) => {
+        expect(await db.getDeliveryCursor(connectionId, id)).toBe(0);
+        const result = await deliverFromStore(
+          db,
+          { ...options, consumerId: id },
+          async () => {},
+        );
+        expect(await db.getDeliveryCursor(connectionId, id)).toBe(
+          result.cursor,
+        );
+      },
+    );
+  });
+}
+
+// These cases close/reopen or back up a SQLite file to verify durable checkpoints.
+describe("SQLite-only delivery file recovery", () => {
   let db: Database;
   let directory: string;
   let filename: string;
+  let connectionId: string;
+  let options: { connectionId: string; consumerId: string };
   beforeEach(async () => {
     directory = mkdtempSync(join(tmpdir(), "financial-delivery-test-"));
     filename = join(directory, "service.sqlite");
     db = await openDatabase(filename);
-    await baseline(db);
+    connectionId = `delivery-recovery-${randomUUID()}`;
+    options = { connectionId, consumerId };
+    await baseline(db, connectionId);
   });
   afterEach(async () => {
-    await db.close();
+    await db?.close();
     rmSync(directory, { recursive: true, force: true });
   });
-
-  it("delivers ordered, connection-scoped run and transaction changes in bounded pages", async () => {
-    await baseline(db, "other-cal");
-    await annotate(db);
-    await annotate(db, "other-cal");
-    await annotate(db, connectionId, 1);
-    const expected = await db.listEvents({ connectionId });
-    expect(expected.map((change) => change.type)).toEqual([
-      ...Array<string>(
-        (await db.listTransactions({ connectionId })).length,
-      ).fill("transaction.imported"),
-      "sync.baseline",
-      "annotation.updated",
-      "annotation.updated",
-    ]);
-    const received: ChangeRow[] = [];
-    const first = await deliverFromStore(
-      db,
-      { ...options, limit: 2 },
-      async (message) => {
-        await db.orm.transaction(async (tx) => {
-          await tx.run("SELECT 1");
-        });
-        expect(message.deliveryKey).toBe(
-          JSON.stringify([connectionId, message.event.id]),
-        );
-        received.push(message.event);
-      },
-    );
-    expect(first).toEqual({ delivered: 2, cursor: expected[1]!.id });
-    const second = await deliverFromStore(
-      db,
-      options,
-      async ({ event: change }) => {
-        received.push(change);
-      },
-    );
-    expect(second).toEqual({
-      delivered: expected.length - 2,
-      cursor: expected.at(-1)!.id,
-    });
-    expect(received).toEqual(expected);
-    expect(await db.getDeliveryCursor("other-cal", consumerId)).toBe(0);
-  });
-
-  it("does not deliver an acknowledged change again", async () => {
-    const first = await deliverFromStore(db, options, async () => {});
-    const repeated = await deliverFromStore(db, options, async () => {
-      throw new Error("Already delivered");
-    });
-    expect(repeated).toEqual({ delivered: 0, cursor: first.cursor });
-  });
-
   it("discovers baseline and history rows through paged imports across restart without a wake-up", async () => {
     const historicalRows = Array.from({ length: 7 }, (_, index) =>
       row(`historical-${index}`),
@@ -188,7 +366,7 @@ describe("durable change delivery", () => {
       expectedRows.map((current) => current.id).sort(),
     );
 
-    await baseline(db);
+    await baseline(db, connectionId);
     expect(await db.ingestRun(historyInput, historyAdapter)).toMatchObject({
       replayed: true,
     });
@@ -259,21 +437,8 @@ describe("durable change delivery", () => {
     expect(importedIds).toHaveLength(expectedRows.length);
   });
 
-  it("returns cursor zero for a new connection with no changes", async () => {
-    await db.ensureConnection({ id: "empty-cal", provider: "cal" });
-    expect(
-      await deliverFromStore(
-        db,
-        { ...options, connectionId: "empty-cal" },
-        async () => {
-          throw new Error("No change expected");
-        },
-      ),
-    ).toEqual({ delivered: 0, cursor: 0 });
-  });
-
   it("stops on callback failure and resumes from the last checkpoint after reopening", async () => {
-    await annotate(db);
+    await annotate(db, connectionId);
     await annotate(db, connectionId, 1);
     const expected = await db.listEvents({ connectionId });
     const attempted: number[] = [];
@@ -341,83 +506,6 @@ describe("durable change delivery", () => {
     expect(userNotifications).toHaveLength(1);
   });
 
-  it("keeps independent consumers and preserves configuration updates during delivery", async () => {
-    const received: number[] = [];
-    await deliverFromStore(
-      db,
-      { ...options, limit: 1 },
-      async ({ event: change }) => {
-        const other = await deliverFromStore(
-          db,
-          { ...options, consumerId: "other-consumer", limit: 1 },
-          async ({ event: change }) => {
-            received.push(change.id);
-          },
-        );
-        expect(other.cursor).toBe(change.id);
-        await db.client.execute({
-          sql: "UPDATE connections SET config_json = json_set(config_json, '$.syntheticSetting', 'keep') WHERE id = ?",
-          args: [connectionId],
-        });
-        received.push(change.id);
-      },
-    );
-    const config = (await db.orm
-      .select()
-      .from(connections)
-      .where(eq(connections.id, connectionId))
-      .get())!.config;
-    expect(config).toMatchObject({
-      schemaVersion: 1,
-      syntheticSetting: "keep",
-      changeCursors: {
-        [consumerId]: received[0],
-        "other-consumer": received[0],
-      },
-    });
-    expect(received).toHaveLength(2);
-  });
-
-  it("rejects overlapping delivery for one consumer and releases its guard afterwards", async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const first = deliverFromStore(db, options, async () => gate);
-    try {
-      await expect(
-        deliverFromStore(db, options, async () => {}),
-      ).rejects.toThrow(DeliveryConflictError);
-    } finally {
-      release();
-    }
-    const result = await first;
-    expect(await deliverFromStore(db, options, async () => {})).toEqual({
-      delivered: 0,
-      cursor: result.cursor,
-    });
-  });
-
-  it("detects a changed cursor without overwriting it", async () => {
-    await expect(
-      deliverFromStore(db, options, async ({ event: change }) => {
-        await db.orm
-          .update(connections)
-          .set({
-            config: {
-              schemaVersion: 1,
-              changeCursors: { [consumerId]: change.id },
-            },
-          })
-          .where(eq(connections.id, connectionId))
-          .run();
-      }),
-    ).rejects.toThrow(DeliveryConflictError);
-    expect(await db.getDeliveryCursor(connectionId, consumerId)).toBe(
-      (await db.listEvents())[0]!.id,
-    );
-  });
-
   it("backs up and restores delivery checkpoints with the changes they acknowledge", async () => {
     const result = await deliverFromStore(db, options, async () => {});
     const backupPath = join(directory, "backup.sqlite");
@@ -436,74 +524,4 @@ describe("durable change delivery", () => {
       await restored.close();
     }
   });
-
-  it("rejects missing connections and invalid IDs, limits, or stored cursors", async () => {
-    await expect(db.getDeliveryCursor("missing", consumerId)).rejects.toThrow(
-      "Connection not found",
-    );
-    await expect(
-      deliverFromStore(
-        db,
-        { ...options, connectionId: "missing" },
-        async () => {},
-      ),
-    ).rejects.toThrow("Connection not found");
-    await expect(db.getDeliveryCursor(connectionId, "")).rejects.toThrow();
-    await expect(
-      deliverFromStore(db, { ...options, connectionId: "" }, async () => {}),
-    ).rejects.toThrow();
-    for (const limit of [0, -1, 1.5, 1001, Number.POSITIVE_INFINITY]) {
-      await expect(
-        deliverFromStore(db, { ...options, limit }, async () => {}),
-      ).rejects.toThrow();
-    }
-    await db.client.execute({
-      sql: "UPDATE connections SET config_json = ? WHERE id = ?",
-      args: [
-        JSON.stringify({
-          schemaVersion: 1,
-          changeCursors: { [consumerId]: -1 },
-        }),
-        connectionId,
-      ],
-    });
-    await expect(
-      db.getDeliveryCursor(connectionId, consumerId),
-    ).rejects.toThrow();
-  });
-
-  it("keeps delivery callbacks outside the transaction that acknowledges their cursor", async () => {
-    const received: ChangeRow[] = [];
-    const result = await deliverFromStore(
-      db,
-      options,
-      async ({ event: change }) => {
-        await db.updateConfig(connectionId, (config) => ({
-          ...config,
-          syntheticDelivery: true,
-        }));
-        received.push(change);
-      },
-    );
-    expect(received.length).toBe(result.delivered);
-    expect(await db.getDeliveryCursor(connectionId, consumerId)).toBe(
-      result.cursor,
-    );
-    expect(
-      (await db.getStoredConnection(connectionId))?.config.syntheticDelivery,
-    ).toBe(true);
-  });
-
-  it.each(["constructor", "toString", "__proto__"])(
-    "supports the consumer ID %s without inherited cursor values",
-    async (id) => {
-      expect(await db.getDeliveryCursor(connectionId, id)).toBe(0);
-      const result = await deliverFromStore(
-        db,
-        { ...options, consumerId: id },
-        async () => {},
-      );
-      expect(await db.getDeliveryCursor(connectionId, id)).toBe(result.cursor);
-    },
-  );
 });

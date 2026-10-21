@@ -83,7 +83,7 @@ describe("PostgreSQL CI coverage gate", () => {
   it("rejects a disappearing case below the coverage floor", () => {
     const report = passingReport();
     report.testResults[0].assertionResults.pop();
-    expect(() => checkPostgresTests(report)).toThrow("got 33");
+    expect(() => checkPostgresTests(report)).toThrow("got 31");
   });
 
   it("rejects unrelated skipped cases", () => {
