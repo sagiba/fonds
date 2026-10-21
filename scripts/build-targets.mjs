@@ -160,9 +160,14 @@ export async function buildTarget(
   }
   const recipe = target.recipe ?? `deploy/${name}`;
   const bundleDependencies = target.bundle ?? false;
-  const manifest = JSON.parse(
-    await readFile(resolve(root, recipe, "package.json"), "utf8"),
-  );
+  const readJson = async (path) =>
+    JSON.parse(await readFile(resolve(root, path), "utf8"));
+  // Recipes carry no version of their own; every artifact takes the root's.
+  const { version } = await readJson("package.json");
+  const manifest = { ...(await readJson(`${recipe}/package.json`)), version };
+  const lock = await readJson(`${recipe}/package-lock.json`);
+  lock.version = version;
+  lock.packages[""].version = version;
   await mkdir(output, { recursive: true });
   const result = await build({
     absWorkingDir: sourceRoot,
@@ -207,9 +212,9 @@ export async function buildTarget(
     resolve(output, "package.json"),
     JSON.stringify(manifest, null, 2) + "\n",
   );
-  await cp(
-    resolve(root, recipe, "package-lock.json"),
+  await writeFile(
     resolve(output, "package-lock.json"),
+    JSON.stringify(lock, null, 2) + "\n",
   );
   // Apache-2.0 redistribution carries the license and notice with every artifact.
   for (const file of ["LICENSE", "NOTICE"]) {

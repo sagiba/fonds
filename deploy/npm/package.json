@@ -1,6 +1,5 @@
 {
   "name": "fonds-finance",
-  "version": "0.1.0-rc.2",
   "description": "Self-hosted ledger for your card transactions, connected to your AI assistant over MCP, a REST API and a CLI. Runs on SQLite or PostgreSQL.",
   "keywords": [
     "finance",
