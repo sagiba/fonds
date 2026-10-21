@@ -267,6 +267,23 @@ describe.each(backends)("%s installment repair", (backend) => {
     });
   });
 
+  it("leaves a plan's count unknown when a capture's own plan facts conflict", async () => {
+    await capture(10, [purchase(5), line(1)]);
+    await capture(11, [
+      {
+        ...purchase(),
+        details: {
+          ...purchase().details,
+          issues: ["conflicting_installment_facts"],
+        },
+      },
+    ]);
+    const current = await parent();
+    expect(current.installmentCount).toBeNull();
+    expect(current.sourceIssues).toEqual(["conflicting_installment_facts"]);
+    await expectBilling(["line-1"], -2500);
+  });
+
   it("keeps a single-payment restatement stored before provenance until the source restates a plan", async () => {
     await capture(10, [purchase(5), line(1)]);
     const stored = await parent();
