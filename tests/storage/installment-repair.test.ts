@@ -713,26 +713,80 @@ describe.each(backends)("%s installment repair", (backend) => {
     expect(await db.listEvents()).toEqual(events);
   });
 
-  it("keeps a linked purchase of unverified basis stable when FX is restated", async () => {
-    const input: TransactionInput[] = [
-      {
-        ...purchase(),
-        amountBasis: "unknown",
-        fxFeeMinor: -100,
-        fxFeeCurrency: "ILS",
-      },
-      line(1, null),
-    ];
-    await capture(10, input);
+  it("keeps a linked purchase restated with an unverified basis stable", async () => {
+    await capture(10, [purchase(), line(1, null)]);
+    const restated: TransactionInput = {
+      ...purchase(),
+      amountBasis: "unknown",
+      fxFeeMinor: -100,
+      fxFeeCurrency: "ILS",
+    };
+    await capture(11, [restated]);
     const before = await parent();
     expect(before).toMatchObject({ fxFeeMinor: null, fxFeeCurrency: null });
     const events = await db.listEvents();
-    expect(await capture(11, input)).toMatchObject({ created: 0, updated: 0 });
+    expect(await capture(12, [restated])).toMatchObject({
+      created: 0,
+      updated: 0,
+    });
     expect(await parent()).toMatchObject({
       id: before.id,
       version: before.version,
     });
     expect(await db.listEvents()).toEqual(events);
+  });
+
+  it("keeps FX on a single charge that a line names but cannot attach to", async () => {
+    await capture(10, [
+      {
+        ...row("plan"),
+        amountBasis: "booked_entry",
+        fxFeeMinor: -100,
+        fxFeeCurrency: "ILS",
+      },
+      line(1, null),
+    ]);
+    expect(await parent()).toMatchObject({
+      fxFeeMinor: -100,
+      fxFeeCurrency: "ILS",
+    });
+  });
+
+  it("clears a restatement conflict when the owner removes the purchase's last line", async () => {
+    await capture(10, [purchase(5), line(1)]);
+    await capture(11, [purchase(1)]);
+    expect((await parent()).sourceIssues).toContain(
+      "conflicting_installment_restatement",
+    );
+    const child = (await db.listTransactions({ perspective: "all" })).find(
+      (item) => item.sourceKey === "line-1",
+    )!;
+    await db.confirmRemoval({
+      transactionId: child.id,
+      expectedVersion: child.version,
+      reason: "Synthetic plan lines removed",
+    });
+    expect((await parent()).sourceIssues).toEqual([]);
+  });
+
+  it("refreshes only the purchases an owner operation touches", async () => {
+    await capture(10, [purchase(), line(1), row("unrelated")]);
+    const other = (await db.listTransactions({ perspective: "all" })).find(
+      (item) => item.sourceKey === "unrelated",
+    )!;
+    const stored = await parent();
+    // A purchase written before repair, which only its own refresh may change.
+    await insertTransactionFixture(
+      db,
+      [{ ...stored, installmentCount: null, billingDate: "2040-07-10" }],
+      "update",
+    );
+    await db.confirmRemoval({
+      transactionId: other.id,
+      expectedVersion: other.version,
+      reason: "Synthetic unrelated removal",
+    });
+    expect((await parent()).installmentCount).toBeNull();
   });
 
   it("normalizes linked-parent FX immediately even when ambiguous identity prevents count inference", async () => {

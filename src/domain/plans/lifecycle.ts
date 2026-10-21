@@ -224,9 +224,20 @@ function refreshPlanReview(
   command: { actor: string; reason: string },
   now: string,
 ): void {
+  // Only the purchases of rows this command wrote, before and after it.
+  const original = new Map(plan.snapshot.rows.map((row) => [row.id, row]));
+  const parents = new Set(
+    [...plan.transactionWrites.keys()].flatMap((id) => [
+      id,
+      ...[
+        original.get(id)?.purchaseId,
+        plan.transaction(id)?.purchaseId,
+      ].filter((purchaseId): purchaseId is string => purchaseId != null),
+    ]),
+  );
   const changed = new Map<string, Transaction>();
   for (const before of [
-    ...refreshInstallmentParents(plan),
+    ...refreshInstallmentParents(plan, parents),
     ...refreshDuplicatePlans(plan),
   ]) {
     if (!changed.has(before.id)) {

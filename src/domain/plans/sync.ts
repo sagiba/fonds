@@ -1542,7 +1542,6 @@ export function planRun(
   let baselineCreated = 0;
   const baselineDiscoveryAccounts = new Set<string>();
   const observedIds = new Set<string>();
-  const contradictedPlans = new Set<string>();
   const event = (
     type: EventType,
     id: string | null,
@@ -1630,20 +1629,23 @@ export function planRun(
     // Purchases with live billed lines: a capture that restates one as
     // anything but a plan contradicts its lines.
     const planParents = new Set(billedLinesByPurchase(current).keys());
-    // Source keys of stored and incoming purchases with billed lines.
-    const linkedPurchaseKeys = new Set([
-      ...[...planParents].flatMap((id) => {
+    // Source keys of stored purchases with billed lines, and of purchases
+    // that incoming lines name.
+    const storedParentKeys = new Set(
+      [...planParents].flatMap((id) => {
         const parent = plan.transaction(id)!;
         return [parent.sourceKey, ...parent.sourceAliases].map((key) =>
           JSON.stringify([parent.sourceScope, key]),
         );
       }),
-      ...result.transactions.flatMap((input) =>
+    );
+    const namedPurchaseKeys = new Set(
+      result.transactions.flatMap((input) =>
         input.purchaseKey
           ? [JSON.stringify([input.sourceScope, input.purchaseKey])]
           : [],
       ),
-    ]);
+    );
     // Normalize association-based facts before identity fingerprints as well as
     // after writes; otherwise a repeated ambiguous capture changes its own key.
     const prepared = result.transactions.map((input) => {
@@ -1659,11 +1661,15 @@ export function planRun(
         facts: withoutInstallmentFx(
           resolved,
           purchaseKey === null &&
-            [resolved.sourceKey, ...resolved.sourceAliases].some((key) =>
-              linkedPurchaseKeys.has(
-                JSON.stringify([resolved.sourceScope, key]),
-              ),
-            ),
+            [resolved.sourceKey, ...resolved.sourceAliases].some((key) => {
+              const scoped = JSON.stringify([resolved.sourceScope, key]);
+              // Only a purchase commitment can become a named line's purchase.
+              return (
+                storedParentKeys.has(scoped) ||
+                (resolved.amountBasis === "purchase_commitment" &&
+                  namedPurchaseKeys.has(scoped))
+              );
+            }),
         ),
         purchaseKey,
         counterpartyAbsent: input.counterpartyName === undefined,
@@ -2082,7 +2088,6 @@ export function planRun(
           planParents.has(previous.id),
         );
         if (restated && (!unknownPlan || priorRestatement)) {
-          contradictedPlans.add(id);
           accepted.details.issues = withIssue(
             withIssue(accepted.details.issues, INSTALLMENT_CONFLICT),
             RESTATEMENT_CONFLICT,
@@ -2223,7 +2228,7 @@ export function planRun(
     );
   }
   // Accepted rows of a failed partition still change lines, so every parent is reevaluated.
-  refreshInstallmentParents(plan, contradictedPlans);
+  refreshInstallmentParents(plan);
   refreshDuplicatePlans(plan);
   const afterRows = plan.orderedRows();
   const reviewRequiredIds: string[] = [];

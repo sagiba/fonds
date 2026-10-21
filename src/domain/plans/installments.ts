@@ -14,6 +14,11 @@ export const INSTALLMENT_CONFLICT = "conflicting_installment_plan";
 export const RESTATEMENT_CONFLICT = "conflicting_installment_restatement";
 export const LINE_CONFLICT = "conflicting_installment_lines";
 const UNKNOWN_COUNT = "unknown_installment_count";
+const PLAN_CONFLICTS = [
+  INSTALLMENT_CONFLICT,
+  RESTATEMENT_CONFLICT,
+  LINE_CONFLICT,
+];
 const UNREPAIRABLE_LINE_ISSUES = [
   "conflicting_installment_facts",
   "invalid_installment_ordinal",
@@ -114,9 +119,7 @@ function withLineEvidence(
       : parent.installmentCount;
   const issues = parent.details.issues.filter(
     (issue) =>
-      ![INSTALLMENT_CONFLICT, RESTATEMENT_CONFLICT, LINE_CONFLICT].includes(
-        issue,
-      ) &&
+      !PLAN_CONFLICTS.includes(issue) &&
       (count === null || issue !== UNKNOWN_COUNT),
   );
   if (evidence.conflicting) {
@@ -137,22 +140,37 @@ function withLineEvidence(
   };
 }
 
+/** The facts a refresh changes, for comparing a parent with its refreshed form. */
+function refreshedFacts(row: TransactionFacts) {
+  return canonicalJson([
+    row.installmentCount,
+    row.billingDate,
+    row.fxFeeMinor,
+    row.fxFeeCurrency,
+    row.details.currencyExchange ?? null,
+    row.details.issues,
+  ]);
+}
+
 /**
  * Billed lines can fill unknown plan metadata without replacing newer purchase
  * money. Their explicit counts, not the number or sum of observed payments,
  * establish the plan size. This also repairs ledgers written by older policies.
- * `contradicted` names purchases a capture restated as a non-plan. Returns
- * each row it changed, as it was before.
+ * Only `parents`, when given, are refreshed. Returns each row it changed, as it
+ * was before.
  */
 export function refreshInstallmentParents(
   plan: FinancialPlan,
-  contradicted: ReadonlySet<string> = new Set(),
+  parents?: ReadonlySet<string>,
 ): Transaction[] {
   const children = billedLinesByPurchase(plan.rows.values());
-  // The final removed line can resolve a derived conflict without another
-  // observation of the purchase; keep that purchase in the repair set.
+  // Removing the final line resolves a conflict without another observation
+  // of the purchase; keep that purchase in the repair set.
   for (const row of plan.rows.values()) {
-    if (row.details.issues.includes(LINE_CONFLICT) && !children.has(row.id)) {
+    if (
+      !children.has(row.id) &&
+      row.details.issues.some((issue) => PLAN_CONFLICTS.includes(issue))
+    ) {
       children.set(row.id, []);
     }
   }
@@ -161,39 +179,31 @@ export function refreshInstallmentParents(
     const parent = plan.transaction(id);
     if (
       !parent ||
+      (parents && !parents.has(id)) ||
       parent.presence === "removed" ||
       parent.supersededById ||
       parent.purchaseId !== null
     ) {
       continue;
     }
+    // Without lines, nothing remains for a restatement to contradict.
     const next = withoutInstallmentFx(
       withLineEvidence(
         parent,
         lines,
-        contradicted.has(id) || awaitsRestatement(parent),
+        lines.length > 0 && awaitsRestatement(parent),
       ),
       lines.length > 0,
     );
-    const value = {
-      installmentCount: next.installmentCount,
-      billingDate: next.billingDate,
-      fxFeeMinor: next.fxFeeMinor,
-      fxFeeCurrency: next.fxFeeCurrency,
-      details: next.details,
-    };
-    if (
-      canonicalJson(value) !==
-      canonicalJson({
-        installmentCount: parent.installmentCount,
-        billingDate: parent.billingDate,
-        fxFeeMinor: parent.fxFeeMinor,
-        fxFeeCurrency: parent.fxFeeCurrency,
-        details: parent.details,
-      })
-    ) {
+    if (refreshedFacts(next) !== refreshedFacts(parent)) {
       changed.push(parent);
-      plan.updateTransaction(id, value);
+      plan.updateTransaction(id, {
+        installmentCount: next.installmentCount,
+        billingDate: next.billingDate,
+        fxFeeMinor: next.fxFeeMinor,
+        fxFeeCurrency: next.fxFeeCurrency,
+        details: next.details,
+      });
     }
   }
   return changed;
