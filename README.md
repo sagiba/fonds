@@ -64,10 +64,10 @@ fonds demo
 ```
 
 `demo` creates a separate private ledger of synthetic CAL transactions and prints
-what to run next, including setup for ChatGPT desktop, Claude Code and Claude
-Desktop. Follow your client's snippet, restart the client,
-and check its MCP connection status. Ask "What are my totals by currency in
-fonds-demo?". The client starts Fonds over stdio; no HTTP server is needed.
+what to try next. Its last command, `fonds mcp-config`, lists one setup command
+per client: ChatGPT desktop, Claude Code, Claude Desktop and Codex. Run yours,
+follow its snippet, restart the client, and check its MCP connection status.
+Ask "What are my totals by currency in fonds-demo?". The client starts Fonds over stdio; no HTTP server is needed.
 The [local guide](docs/guides/local-setup.md) covers source installation,
 client setup and troubleshooting. ChatGPT desktop uses the same local Codex host's
 MCP configuration; ChatGPT web has a separate hosted path.
@@ -84,12 +84,12 @@ fonds refresh
 fonds mcp-config
 ```
 
-These use your private default ledger. Copy your client's setup from
-`mcp-config`. The [local guide](docs/guides/local-setup.md#add-provider-logins)
-covers adding more CAL or Isracard logins to that ledger; provider guides cover
+These use your private default ledger. Run the `mcp-config` command it lists
+for your client and copy that setup. The
+[local guide](docs/guides/local-setup.md#add-provider-logins) covers adding more CAL or Isracard logins to that ledger; provider guides cover
 credentials and collection windows. Back up the database and its
 [state directory](docs/database.md#state-directory-and-backup) together.
-`fonds --help` lists commands.
+`fonds` lists the main commands; `fonds help --all` lists every one.
 
 ## Your data stays yours
 

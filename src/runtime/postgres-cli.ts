@@ -26,6 +26,8 @@ export function postgresBackend(
     name: "postgres",
     title: "PostgreSQL target",
     invocation: "fonds",
+    // The package and image launcher; PostgreSQL has no source-only CLI path.
+    command: "fonds",
     description: `fonds serve runs the loopback HTTP/MCP API, --transport stdio serves MCP over stdio
 to a trusted local client, and --hosted runs the hosted service at FONDS_PUBLIC_ORIGIN.
 The database is FONDS_DATABASE_URL; without it, fonds uses SQLite. Secrets come only

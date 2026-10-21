@@ -111,10 +111,10 @@ const lacking = {
 };
 
 describe("one operator CLI for every backend", () => {
-  it("prints the same usage on every entry point, apart from its own paragraph", async () => {
+  it("prints the same full usage on every entry point, apart from its own paragraph", async () => {
     const usages = await Promise.all([
-      entryPoints.sqlite(["--help"]),
-      entryPoints.postgres(["--help"]),
+      entryPoints.sqlite(["help", "--all"]),
+      entryPoints.postgres(["--help", "--all"]),
     ]);
     const shared = (text: string) =>
       text.slice(text.indexOf("Operation commands run"));
@@ -125,6 +125,76 @@ describe("one operator CLI for every backend", () => {
       }
     }
     expect(shared(usages[1]!.stdout)).toBe(shared(usages[0]!.stdout));
+  });
+
+  it("starts with a short overview by task that names only available commands", async () => {
+    const [sqlite, postgres] = await Promise.all([
+      entryPoints.sqlite([]),
+      entryPoints.postgres(["-h"]),
+    ]);
+    for (const result of [sqlite, postgres]) {
+      expect(result).toMatchObject({ status: EXIT_CODES.ok, stderr: "" });
+      // One terminal screen.
+      expect(result.stdout.split("\n").length).toBeLessThanOrEqual(24);
+      expect(result.stdout).toContain("Run 'fonds help --all'");
+    }
+    const names = (text: string) =>
+      [...text.matchAll(/^ {2}([a-z-]+) {2,}\S/gm)].map((match) => match[1]);
+    expect(names(sqlite.stdout)).toEqual([
+      "demo",
+      "init",
+      "connect",
+      "refresh",
+      "list",
+      "totals",
+      "get",
+      "mcp-config",
+      "serve",
+    ]);
+    expect(names(postgres.stdout)).toEqual([
+      "init",
+      "connect",
+      "refresh",
+      "list",
+      "totals",
+      "get",
+      "login-link",
+      "serve",
+    ]);
+    expect((await entryPoints.sqlite(["help"])).stdout).toBe(sqlite.stdout);
+    expect((await entryPoints.sqlite(["--help"])).stdout).toBe(sqlite.stdout);
+    // The full reference names what this backend lacks.
+    expect((await entryPoints.postgres(["help", "--all"])).stdout).toContain(
+      "demo is not available on PostgreSQL",
+    );
+  });
+
+  it("routes help <command> to the command's help, with its options", async () => {
+    expect(await entryPoints.sqlite(["help", "list"])).toEqual(
+      await entryPoints.sqlite(["list", "-h"]),
+    );
+    expect(
+      await entryPoints.sqlite(["help", "ingest", "--db", "/unused.sqlite"]),
+    ).toEqual(await entryPoints.sqlite(["ingest", "--help"]));
+    expect(await entryPoints.sqlite(["help", "--bogus"])).toEqual({
+      status: EXIT_CODES.failed,
+      stdout: "",
+      stderr: "Use help, help --all or help <command>.\n",
+    });
+  });
+
+  it.each(commands)("gives %s a summary and a valid example", async (name) => {
+    const help = await entryPoints.sqlite([name, "--help"]);
+    expect(help.stdout.split("\n")[0]).toMatch(
+      new RegExp(`^fonds ${name} — \\S`),
+    );
+    const example = /^Example:\n {2}fonds (.+)$/m.exec(help.stdout)![1]!;
+    // Strict parsing runs before help, so a valid example prints help.
+    const args = [...example.matchAll(/'([^']*)'|(\S+)/g)].map(
+      (match) => match[1] ?? match[2]!,
+    );
+    expect(args[0]).toBe(name);
+    expect(await entryPoints.sqlite([...args, "--help"])).toEqual(help);
   });
 
   it("reports the package version on every entry point", async () => {

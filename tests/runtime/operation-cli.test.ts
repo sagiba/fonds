@@ -9,6 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { parseArgs } from "node:util";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -27,9 +28,12 @@ import {
 } from "../../src/runtime/checkout.js";
 import { startNodeService } from "../../src/runtime/node-service.js";
 import {
+  aliasNames,
   operationFields,
   operationForCommand,
+  operationHelp,
   operationInput,
+  operationOptions,
   runOperationCli,
 } from "../../src/runtime/operation-cli.js";
 import { openDatabase } from "../../src/storage/sqlite/database.js";
@@ -206,6 +210,41 @@ describe("operation commands", () => {
         }),
       ).toThrow(`--${flag}: Identifiers cannot be`);
     }
+  });
+
+  it.each(operationDefinitions.map((definition) => definition.name))(
+    "gives %s a summary and an example its operation accepts",
+    (name) => {
+      const definition = operationDefinitions.find(
+        (entry) => entry.name === name,
+      )!;
+      const command = name.replaceAll("_", "-");
+      const help = operationHelp(definition);
+      expect(help.split("\n")[0]).toMatch(new RegExp(`^${command} — \\S`));
+      const example = /^Example:\n {2}(.+)$/m.exec(help)![1]!;
+      const [typed, ...args] = [...example.matchAll(/'([^']*)'|(\S+)/g)].map(
+        (match) => match[1] ?? match[2]!,
+      );
+      expect(typed).toBe(command);
+      const { values } = parseArgs({
+        args,
+        strict: true,
+        options: operationOptions(definition),
+      });
+      expect(() =>
+        operationInput(definition, values as Record<string, string>),
+      ).not.toThrow();
+    },
+  );
+
+  it.each(aliasNames())("names the %s alias in both helps", (alias) => {
+    const definition = operationForCommand(alias)!;
+    expect(operationHelp(definition, {}, { name: alias })).toMatch(
+      new RegExp(
+        `^${alias} — .*\\nAlias of ${definition.name.replaceAll("_", "-")}\\.`,
+      ),
+    );
+    expect(operationHelp(definition)).toContain(`Alias: ${alias}.`);
   });
 
   it("matches the application in process and over REST for every read and mutation", async () => {
@@ -479,6 +518,29 @@ describe("operation commands", () => {
       expect(JSON.parse(remote.stdout).data).toEqual([
         expect.objectContaining({ id: "synthetic-cli", provider: "cal" }),
       ]);
+      // A terminal renders a remote result exactly as the embedded one.
+      const tty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+      Object.defineProperty(process.stdout, "isTTY", {
+        value: true,
+        configurable: true,
+      });
+      try {
+        const shown = await cli(
+          "list-connections",
+          "--remote",
+          running.url,
+          "--token-file",
+          tokenFile,
+        );
+        expect(shown.stdout).toMatch(/ID +Provider +Name +Last refresh/);
+        expect(shown).toEqual(await cli("list-connections", "--db", seed));
+      } finally {
+        if (tty) {
+          Object.defineProperty(process.stdout, "isTTY", tty);
+        } else {
+          delete (process.stdout as { isTTY?: boolean }).isTTY;
+        }
+      }
       // No token is sent without an explicit --token-file, not even the
       // environment's or the local state's to a loopback port.
       vi.stubEnv("FONDS_API_TOKEN", token);

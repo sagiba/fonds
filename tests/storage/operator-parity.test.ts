@@ -64,7 +64,8 @@ const scenario: string[][] = [
   ["consume", "--connection", "missing", "--consumer", "parity-consumer"],
   ["list-connections", "--remote", "http://127.0.0.1:1"],
   ["frobnicate"],
-  [],
+  // No command, only an option; bare `fonds` is the backend's own overview.
+  ["--bogus"],
 ];
 
 describe.skipIf(!postgresUrl)("one operator CLI behavior", () => {
@@ -123,7 +124,7 @@ describe.skipIf(!postgresUrl)("one operator CLI behavior", () => {
   it("gives every command the same exit code, output and message on both backends", async () => {
     for (const args of scenario) {
       const [onSqlite, onPostgres] = [await sqlite(args), await postgres(args)];
-      expect(onPostgres, args.join(" ") || "(no command)").toEqual(onSqlite);
+      expect(onPostgres, args.join(" ")).toEqual(onSqlite);
     }
   });
 });

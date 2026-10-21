@@ -23,6 +23,23 @@ import { CredentialInputError } from "../domain/credentials.js";
 import { refreshFailureCodeSchema } from "../domain/model.js";
 import { ProviderConfigurationError } from "../domain/source-adapter.js";
 import { NewerSchemaError } from "../storage/migrations.js";
+import { commandLine } from "./cli-invocation.js";
+import {
+  present,
+  type Presentation,
+  presentation,
+  wrap,
+} from "./cli-output.js";
+import {
+  backupView,
+  connectView,
+  disconnectView,
+  ingestView,
+  initView,
+  operationViews,
+  refreshView,
+  type View,
+} from "./cli-views.js";
 import { collectionControls } from "./collection-controls.js";
 import type {
   CollectionDiscovery,
@@ -41,10 +58,13 @@ import {
   CredentialVaultError,
 } from "./credential-vault.js";
 import { loadCredentials } from "./credentials.js";
-import { jsonOutput } from "./json-output.js";
+import { MCP_CLIENTS, MCP_SERVER_NAME, type McpClient } from "./mcp-setup.js";
 import {
+  aliasNames,
+  aliasSummary,
   CommandInputError,
   globalHelp,
+  JSON_HELP,
   operationForCommand,
   operationUsage,
   remoteInvoker,
@@ -92,6 +112,8 @@ export interface BackendSession {
 export interface OperatorSession extends BackendSession {
   /** Rechecks file safety after a command that handled credentials. */
   verify?(): void;
+  /** Where the ledger is, when printing it reveals no secret (a file path). */
+  location?: string;
 }
 
 /** What a backend supplies; the commands, flags, output and exit codes are shared. */
@@ -99,8 +121,10 @@ export interface OperatorBackend {
   readonly name: BackendName;
   /** The usage title, such as "local SQLite CLI". */
   readonly title: string;
-  /** How the operator invokes it, such as "node dist/cli.js". */
+  /** How help names the command, such as "fonds". */
   readonly invocation: string;
+  /** How this process is rerun, for runnable next steps in its output. */
+  readonly command: string;
   /** Where the database and state come from on this backend. */
   readonly description: string;
   /** Options every command accepts here, such as SQLite's --db. */
@@ -118,9 +142,17 @@ export interface OperatorBackend {
   /** The one-line reason for each command this backend lacks. */
   readonly unavailable: Readonly<Partial<Record<OptionalCommand, string>>>;
   loginLink?(): Promise<string>;
-  demo?(globals: Globals): Promise<string>;
-  mcpConfig?(globals: Globals): Promise<string>;
-  backup?(globals: Globals, out: string): Promise<object>;
+  demo?(globals: Globals, p: Presentation): Promise<string>;
+  /** Without a client, a chooser of `command` lines; `all` is every setup. */
+  mcpConfig?(
+    globals: Globals,
+    options: { client: McpClient | "all" | undefined; name: string },
+    command: (args: string[]) => string,
+  ): Promise<string>;
+  backup?(
+    globals: Globals,
+    out: string,
+  ): Promise<{ backupPath: string; stateDirectory?: string | undefined }>;
   /** The fixed message of a backend-specific error, safe to print. */
   describeError?(error: unknown): string | undefined;
 }
@@ -134,13 +166,26 @@ interface CommandContext {
   values: Values;
   globals: Globals;
   positionals: string[];
+  p: Presentation;
+  /** A runnable follow-up command on the same database. */
+  next(args: string[]): string;
 }
 
 interface OperatorCommand {
   name: string;
-  synopsis: string;
+  /** One line for the help overview. */
+  summary: string;
+  /** Usage lines after the command name. */
+  synopsis: readonly string[];
+  /** Arguments after the command name, valid as they stand. */
+  example: readonly string[];
   description: string;
   options: Readonly<Record<string, { type: "string" | "boolean" }>>;
+  /**
+   * A result has a terminal view and --json; a stream is always JSON lines,
+   * where --json changes nothing; text is the whole output.
+   */
+  stdout: "result" | "stream" | "text";
   run(context: CommandContext): Promise<number>;
 }
 
@@ -187,8 +232,13 @@ function optionalNonEmpty(values: Values, name: string) {
   return text(values, name) === undefined ? undefined : required(values, name);
 }
 
-function print(result: unknown) {
-  process.stdout.write(jsonOutput(result));
+/** The result's JSON, or in a terminal its view. */
+function emit<T>(
+  context: CommandContext,
+  result: T,
+  view: (value: T) => string,
+) {
+  process.stdout.write(present(context.p, result, view));
 }
 
 /** A delivery is acknowledged only after stdout accepts its complete envelope. */
@@ -219,12 +269,16 @@ async function withSession<T>(
 
 /** Usage column for synopses: wider than every command name. */
 const NAME_WIDTH = 12;
-const SYNOPSIS_CONTINUATION = " ".repeat(2 + NAME_WIDTH);
+
+/** Help text wraps for an 80-column terminal on every backend alike. */
+const HELP_WIDTH = 80;
 
 const SCHEDULE_NOTE =
   "Scheduled refresh runs only when the service sets FONDS_REFRESH_SCHEDULE=daily (or hourly, or hours such as 9,13,18).\n";
 
-function summaryStatus(statuses: readonly string[]) {
+function summaryStatus(
+  statuses: readonly string[],
+): "completed" | "failed" | "busy" | "partial" {
   if (statuses.every((status) => status === "completed")) {
     return "completed";
   }
@@ -294,41 +348,36 @@ function collectionExitCode(status: string) {
       : EXIT_CODES.failed;
 }
 
-const optionalCommand = (
-  name: OptionalCommand,
-  synopsis: string,
-  description: string,
-  run: (context: CommandContext) => Promise<number>,
-): OperatorCommand => ({
-  name,
-  synopsis,
-  description,
-  options: name === "backup" ? { out: { type: "string" } } : {},
-  run,
-});
-
 export const operatorCommands: readonly OperatorCommand[] = [
   {
     name: "init",
-    synopsis: "",
+    summary: "Set up your private ledger",
+    synopsis: [],
+    example: [],
     description:
       "Initialize the ledger and its private state without adding provider logins. Safe to repeat. Next, use connect <provider>.",
     options: {},
+    stdout: "result",
     async run(context) {
-      await withSession(
+      const location = await withSession(
         context,
         { create: true, credentials: false },
-        async () => {},
+        async (session) => session.location,
       );
-      print({ initialized: true });
+      emit(context, { initialized: true }, () =>
+        initView(context.p, location, context.next, supportedProviders),
+      );
       return EXIT_CODES.ok;
     },
   },
   {
     name: "connect",
-    synopsis:
-      `<${supportedProviders.join("|")}> [--name <id>] [--offline] [--credentials-fd <number>]\n` +
-      `${SYNOPSIS_CONTINUATION}--connection <existing id> [--credentials-fd <number>]`,
+    summary: `Add a ${supportedProviders.join(" or ")} login`,
+    synopsis: [
+      `<${supportedProviders.join("|")}> [--name <id>] [--offline] [--credentials-fd <number>]`,
+      "--connection <existing id> [--credentials-fd <number>]",
+    ],
+    example: [supportedProviders[0]!],
     description:
       "Add a provider login to an initialized ledger; --name defaults to the provider. Prompts privately and saves credentials encrypted without testing the login. Use --offline to register an import-only connection without credentials. Existing names are refused; --connection explicitly updates credentials for an existing login. Run init first.",
     options: {
@@ -337,6 +386,7 @@ export const operatorCommands: readonly OperatorCommand[] = [
       connection: { type: "string" },
       "credentials-fd": { type: "string" },
     },
+    stdout: "result",
     async run(context) {
       const provider = context.positionals[0];
       const existing = optionalNonEmpty(context.values, "connection");
@@ -396,16 +446,21 @@ export const operatorCommands: readonly OperatorCommand[] = [
       if (!offline) {
         process.stderr.write(SCHEDULE_NOTE);
       }
-      print(stored);
+      emit(context, stored, (result) =>
+        connectView(context.p, result, context.next),
+      );
       return EXIT_CODES.ok;
     },
   },
   {
     name: "disconnect",
-    synopsis: "--connection <id>",
+    summary: "Remove a connection's saved credentials",
+    synopsis: ["--connection <id>"],
+    example: ["--connection", supportedProviders[0]!],
     description:
       "Remove the connection's stored provider credentials, so refreshes that start later skip it; one already running finishes. Credentials from FONDS_CONNECTION_CREDENTIALS are unaffected. Its transactions, annotations and events are kept; repeating it changes nothing.",
     options: { connection: { type: "string" } },
+    stdout: "result",
     async run(context) {
       const connectionId = required(context.values, "connection");
       const removed = await withSession(
@@ -418,26 +473,21 @@ export const operatorCommands: readonly OperatorCommand[] = [
             credentials: session.credentials,
           }),
       );
-      print(removed);
+      emit(context, removed, (result) => disconnectView(context.p, result));
       return EXIT_CODES.ok;
     },
   },
   {
     name: "refresh",
-    synopsis:
-      "[--connection <id>] [--from YYYY-MM-DD --to YYYY-MM-DD] [--credentials-fd <number>]\n" +
-      `${SYNOPSIS_CONTINUATION}[--history-mode monthly|search] [--search-window-months 1|3|6|12] [--call-budget 1-100] [--max-details 0-20] [--diagnostics] [--archive-days 1-30]`,
-    description: [
-      "Refresh from the provider now, under the same lease as the server's.",
-      "Without --connection, every connection with stored credentials, in turn; the provider",
-      "options and --credentials-fd need --connection. Credentials come from --credentials-fd,",
-      "then the connection's stored credentials (see connect), then hidden terminal input.",
-      "Without dates it rereads the provider's recent window; requested windows do not prove",
-      "complete history. Prints counts only; each refresh (list-refreshes) records its own",
-      "result. Another refresh of a connection in progress makes it busy.",
-      "--diagnostics adds a bounded stage/count report without source values. --archive-days",
-      "retains redacted raw response bodies temporarily for trusted local investigation.",
-    ].join("\n            "),
+    summary: "Fetch transactions from your providers",
+    synopsis: [
+      "[--connection <id>] [--from YYYY-MM-DD --to YYYY-MM-DD] [--credentials-fd <number>]",
+      "[--history-mode monthly|search] [--search-window-months 1|3|6|12] [--call-budget 1-100]",
+      "[--max-details 0-20] [--diagnostics] [--archive-days 1-30]",
+    ],
+    example: ["--connection", supportedProviders[0]!],
+    description:
+      "Refresh from the provider now, under the same lease as the server's. Without --connection, every connection with stored credentials, in turn; the provider options and --credentials-fd need --connection. Credentials come from --credentials-fd, then the connection's stored credentials (see connect), then hidden terminal input. Without dates it rereads the provider's recent window; requested windows do not prove complete history. Prints counts only; each refresh (list-refreshes) records its own result. Another refresh of a connection in progress makes it busy. --diagnostics adds a bounded stage/count report without source values. --archive-days retains redacted raw response bodies temporarily for trusted local investigation.",
     options: {
       connection: { type: "string" },
       from: { type: "string" },
@@ -450,6 +500,7 @@ export const operatorCommands: readonly OperatorCommand[] = [
       diagnostics: { type: "boolean" },
       "archive-days": { type: "string" },
     },
+    stdout: "result",
     async run(context) {
       const { values } = context;
       const diagnostics = values.diagnostics
@@ -483,6 +534,7 @@ export const operatorCommands: readonly OperatorCommand[] = [
           "--credentials-fd and the provider options need --connection.",
         );
       }
+      let nothingToRefresh = false;
       const summary = await withSession(
         context,
         { create: false, credentials: true },
@@ -513,6 +565,7 @@ export const operatorCommands: readonly OperatorCommand[] = [
           // Discovered once: connections that could not be discovered fail the run.
           const discovery = await targets();
           if (!discovery.targets.length && !discovery.failures) {
+            nothingToRefresh = true;
             process.stderr.write(
               "No connections have saved credentials; run fonds connect <provider> first.\n",
             );
@@ -529,18 +582,33 @@ export const operatorCommands: readonly OperatorCommand[] = [
           return collectionSummary(results, discovery.failures);
         },
       );
-      print({
-        type: "refresh_summary",
-        ...summary,
-        ...(range && { requestedRange: range }),
-        ...(diagnostics && { diagnostics: diagnostics.report() }),
-      });
+      emit(
+        context,
+        {
+          type: "refresh_summary" as const,
+          ...summary,
+          ...(range && { requestedRange: range }),
+          ...(diagnostics && { diagnostics: diagnostics.report() }),
+        },
+        (result) =>
+          refreshView(context.p, result, context.next, {
+            connectionId,
+            nothingToRefresh,
+          }),
+      );
       return collectionExitCode(summary.status);
     },
   },
   {
     name: "consume",
-    synopsis: "--connection <id> --consumer <id> [--limit <count>]",
+    summary: "Deliver the change feed as JSON lines",
+    synopsis: ["--connection <id> --consumer <id> [--limit <count>]"],
+    example: [
+      "--connection",
+      supportedProviders[0]!,
+      "--consumer",
+      "my-script",
+    ],
     description:
       "Deliver JSON lines to local stdout and advance the durable consumer cursor. Ends with a delivery_summary line; this sink sends no external notifications.",
     options: {
@@ -548,6 +616,7 @@ export const operatorCommands: readonly OperatorCommand[] = [
       consumer: { type: "string" },
       limit: { type: "string" },
     },
+    stdout: "stream",
     async run(context) {
       const connectionId = required(context.values, "connection");
       const consumerId = required(context.values, "consumer");
@@ -587,9 +656,21 @@ export const operatorCommands: readonly OperatorCommand[] = [
   },
   {
     name: "ingest",
-    synopsis:
-      "--connection <id> --account <key> --run <id> --file <JSON file>\n" +
-      `${SYNOPSIS_CONTINUATION}[--captured-at <ISO timestamp>] [--endpoint <name>]`,
+    summary: "Apply one captured provider response offline",
+    synopsis: [
+      "--connection <id> --account <key> --run <id> --file <JSON file>",
+      "[--captured-at <ISO timestamp>] [--endpoint <name>]",
+    ],
+    example: [
+      "--connection",
+      "imported",
+      "--account",
+      "ACCOUNT_KEY",
+      "--run",
+      "import-1",
+      "--file",
+      "response.json",
+    ],
     description:
       "Archive and apply one captured provider response offline. Retry with the same run ID, source file, endpoint and capture time.",
     options: {
@@ -600,6 +681,7 @@ export const operatorCommands: readonly OperatorCommand[] = [
       "captured-at": { type: "string" },
       endpoint: { type: "string" },
     },
+    stdout: "result",
     async run(context) {
       const { values } = context;
       const connectionId = required(values, "connection");
@@ -655,46 +737,108 @@ export const operatorCommands: readonly OperatorCommand[] = [
           );
         },
       );
-      print(result);
+      emit(context, result, (value) => ingestView(context.p, value));
       return EXIT_CODES.ok;
     },
   },
-  optionalCommand(
-    "backup",
-    "--out <path outside this repository>",
-    "Write a coherent copy of the database as a new private file. Back up the state directory with it.",
-    async ({ backend, globals, values }) => {
-      print(await backend.backup!(globals, required(values, "out")));
+  {
+    name: "backup",
+    summary: "Copy the ledger to a new private file",
+    synopsis: ["--out <path outside this repository>"],
+    example: ["--out", "fonds-backup.sqlite"],
+    description:
+      "Write a coherent copy of the database as a new private file. Back up the state directory with it.",
+    options: { out: { type: "string" } },
+    stdout: "result",
+    async run(context) {
+      emit(
+        context,
+        await context.backend.backup!(
+          context.globals,
+          required(context.values, "out"),
+        ),
+        (result) => backupView(context.p, result),
+      );
       return EXIT_CODES.ok;
     },
-  ),
-  optionalCommand(
-    "login-link",
-    "",
-    "Print a one-time owner sign-in link (10 minutes, single use) for the hosted service; open it, then add a passkey on the account page.",
-    async ({ backend }) => {
+  },
+  {
+    name: "login-link",
+    summary: "Print a one-time owner sign-in link",
+    synopsis: [],
+    example: [],
+    description:
+      "Print a one-time owner sign-in link (10 minutes, single use) for the hosted service; open it, then add a passkey on the account page.",
+    options: {},
+    stdout: "text",
+    async run({ backend }) {
       process.stdout.write(`${await backend.loginLink!()}\n`);
       return EXIT_CODES.ok;
     },
-  ),
-  optionalCommand(
-    "mcp-config",
-    "",
-    "Print local SQLite MCP setup for ChatGPT desktop/Codex and Claude, using absolute runtime, database and state paths. Does not change client configuration. Initialize the ledger first; use --db for a demo or another ledger.",
-    async ({ backend, globals }) => {
-      process.stdout.write(await backend.mcpConfig!(globals));
+  },
+  {
+    name: "mcp-config",
+    summary: "Set up a local AI assistant",
+    synopsis: [
+      `[--client ${MCP_CLIENTS.join("|")}] [--name <server name>]`,
+      "--all [--name <server name>]",
+    ],
+    example: ["--client", "claude-code"],
+    description:
+      "Print local SQLite MCP setup with absolute runtime, database and state paths; it does not change client configuration. Without --client, lists the command for each client; --all prints every client's setup. --name sets the MCP server name, fonds by default. Initialize the ledger first; use --db for a demo or another ledger.",
+    options: {
+      client: { type: "string" },
+      all: { type: "boolean" },
+      name: { type: "string" },
+    },
+    stdout: "text",
+    async run(context) {
+      const client = text(context.values, "client");
+      const all = context.values.all === true;
+      const name = text(context.values, "name") ?? "fonds";
+      if (client !== undefined && all) {
+        throw new CommandInputError("Use --client or --all, not both.");
+      }
+      if (
+        client !== undefined &&
+        !(MCP_CLIENTS as readonly string[]).includes(client)
+      ) {
+        throw new CommandInputError(
+          `--client must be one of ${MCP_CLIENTS.join(", ")}.`,
+        );
+      }
+      if (!MCP_SERVER_NAME.test(name)) {
+        throw new CommandInputError(
+          "--name must start with a letter or digit and use only letters, digits, - and _ (at most 64).",
+        );
+      }
+      const named = name === "fonds" ? [] : ["--name", name];
+      process.stdout.write(
+        await context.backend.mcpConfig!(
+          context.globals,
+          { client: all ? "all" : (client as McpClient | undefined), name },
+          (args) => context.next(["mcp-config", ...args, ...named]),
+        ),
+      );
       return EXIT_CODES.ok;
     },
-  ),
-  optionalCommand(
-    "demo",
-    "",
-    "Create or refresh a separate ledger of synthetic CAL data and print what to run next. Repeating it changes nothing.",
-    async ({ backend, globals }) => {
-      process.stdout.write(await backend.demo!(globals));
+  },
+  {
+    name: "demo",
+    summary: "Try Fonds with invented transactions",
+    synopsis: [],
+    example: [],
+    description:
+      "Create or refresh a separate ledger of synthetic CAL data and print what to run next. Repeating it changes nothing.",
+    options: {},
+    stdout: "text",
+    async run(context) {
+      process.stdout.write(
+        await context.backend.demo!(context.globals, context.p),
+      );
       return EXIT_CODES.ok;
     },
-  ),
+  },
 ];
 
 /** One named connection, with explicit, stored or prompted credentials. */
@@ -746,24 +890,71 @@ const commandsByName = new Map(
 );
 
 function commandUsage(command: OperatorCommand) {
-  return `  ${command.name.padEnd(NAME_WIDTH)}${command.synopsis}`.trimEnd();
+  const [first = "", ...rest] = command.synopsis;
+  return [
+    `  ${command.name.padEnd(NAME_WIDTH)}${first}`.trimEnd(),
+    ...rest.map((line) => `${" ".repeat(2 + NAME_WIDTH)}${line}`),
+  ].join("\n");
 }
 
-/** Top-level usage: the same commands on every backend. */
+/** `serve` belongs to the server entry point; the overview still names it. */
+const SERVE_SUMMARY = "Run the HTTP or MCP server";
+
+/** The short overview's tasks; every command is in `help --all`. */
+const OVERVIEW = [
+  ["Getting started", ["demo", "init", "connect", "refresh"]],
+  ["Explore", ["list", "totals", "get"]],
+  ["Assistants", ["mcp-config", "login-link", "serve"]],
+] as const;
+
+/** One summary per overview name; the overview test checks each resolves. */
+export function overviewSummary(name: string): string | undefined {
+  return name === "serve"
+    ? SERVE_SUMMARY
+    : (commandsByName.get(name)?.summary ?? aliasSummary(name));
+}
+
+/** `fonds`, `fonds --help`: the first steps by task, without unavailable commands. */
+export function operatorOverview(backend: OperatorBackend): string {
+  const run = backend.invocation;
+  const groups = OVERVIEW.map(([title, names]) => {
+    const lines = names
+      .filter((name) => !backend.unavailable[name as OptionalCommand])
+      .map((name) => `  ${name.padEnd(NAME_WIDTH)}${overviewSummary(name)}`);
+    return [title, ...lines].join("\n");
+  });
+  return `Fonds — your card transactions, in a ledger your AI assistant can read
+
+Usage: ${run} <command> [options]
+
+${groups.join("\n\n")}
+
+Run '${run} help <command>' for its options and an example.
+Run '${run} help --all' for every command, remote use and exit codes.
+`;
+}
+
+/** `help --all`: every command and option, the same commands on every backend. */
 export function operatorUsage(backend: OperatorBackend): string {
+  const unavailable = Object.entries(backend.unavailable).map(
+    ([, reason]) => `  ${reason}`,
+  );
   return `Fonds — ${backend.title}
 Usage: ${backend.invocation} <command> [options]
        ${backend.invocation} <operation command> --remote <url> --token-file <private file> [options]
+       ${backend.invocation} help <command>
        ${backend.invocation} --version
 
 ${backend.description}
-
+${unavailable.length ? `\nNot available here:\n${unavailable.join("\n")}\n` : ""}
 Operation commands run the same operations as the HTTP API and MCP tools, with the same
 input fields as kebab-case flags and the same JSON output. Booleans take true or false,
 integers are decimal, and object or list fields take JSON. --remote calls a Fonds
 deployment's /v1 API (https, or http on this machine) with a bearer from --token-file,
 which --remote requires; it never comes from the environment or the local state.
-Aliases: list, get, totals, events, annotate, link, remove.
+In a terminal, list, get, totals, list-connections and operator results print as text;
+--json, or redirected output, prints the JSON result. consume always prints JSON lines.
+Aliases: ${aliasNames().join(", ")}.
 ${operationUsage()}
 
 Operator commands run on this backend's database only:
@@ -778,7 +969,29 @@ this backend.
 }
 
 function commandHelp(command: OperatorCommand, backend: OperatorBackend) {
-  return `${commandUsage(command).trimStart()}\n${command.description}\n${globalHelp(backend.globalOptions)}`;
+  const run = `${backend.invocation} ${command.name}`;
+  const [first, ...rest] = command.synopsis;
+  return [
+    `${run} — ${command.summary}`,
+    "",
+    "Usage:",
+    `  ${[run, first].filter(Boolean).join(" ")}`,
+    ...rest.map((line) => `${" ".repeat(3 + run.length)}${line}`),
+    "",
+    "Example:",
+    `  ${commandLine(run, command.example)}`,
+    "",
+    wrap(command.description, HELP_WIDTH),
+    "",
+    "Global options:",
+    ...globalHelp(backend.globalOptions).split("\n").filter(Boolean),
+    ...(command.stdout === "result" ? [JSON_HELP] : []),
+    ...(command.stdout === "stream"
+      ? ["  --json  Accepted; output is always JSON lines"]
+      : []),
+    "  -h, --help",
+    "",
+  ].join("\n");
 }
 
 /** The commands and their flags, as the parity test compares them. */
@@ -813,7 +1026,9 @@ function errorMessage(error: unknown, backend: OperatorBackend) {
 
 function parseValues(
   args: string[],
-  options: Readonly<Record<string, { type: "string" | "boolean" }>>,
+  options: Readonly<
+    Record<string, { type: "string" | "boolean"; short?: string }>
+  >,
   command: string,
 ): { values: Values; positionals: string[] } {
   try {
@@ -834,6 +1049,13 @@ function parseValues(
   }
 }
 
+/** `--name value` for each global option given, so a next step targets the same database. */
+function globalArgs(globals: Readonly<Record<string, unknown>>): string[] {
+  return Object.entries(globals).flatMap(([name, value]) =>
+    typeof value === "string" ? [`--${name}`, value] : [],
+  );
+}
+
 function globalsOf(backend: OperatorBackend, values: Values): Globals {
   return Object.fromEntries(
     Object.keys(backend.globalOptions).map((name) => {
@@ -850,11 +1072,35 @@ function globalsOf(backend: OperatorBackend, values: Values): Globals {
 function runOperation(
   backend: OperatorBackend,
   definition: OperationDefinition,
+  name: string,
   args: string[],
 ) {
   return runOperationCli({
     definition,
     args,
+    name,
+    invocation: backend.invocation,
+    wrap: (text) => wrap(text, HELP_WIDTH),
+    render(output, { input, json, globals }) {
+      const p = presentation(json);
+      const view = operationViews[definition.name] as View<unknown> | undefined;
+      // A remote result is unvalidated; one that fails its schema stays JSON.
+      const shown =
+        view && definition.outputSchema.safeParse(output).success
+          ? view
+          : undefined;
+      return present(
+        p,
+        output,
+        shown &&
+          ((value) =>
+            shown(value, p, {
+              input,
+              command: (args) =>
+                commandLine(backend.command, [...args, ...globalArgs(globals)]),
+            })),
+      );
+    },
     globalOptions: {
       ...backend.globalOptions,
       remote: { type: "string" },
@@ -902,28 +1148,40 @@ export async function runOperatorCli(
   argv: string[],
 ): Promise<number> {
   const [name, ...args] = argv;
-  if (name === "help" && args.length === 1) {
-    return runOperatorCli(backend, [args[0]!, "--help"]);
-  }
-  if (name === "--help" || name === "help") {
-    process.stdout.write(operatorUsage(backend));
+  if (name === undefined) {
+    process.stdout.write(operatorOverview(backend));
     return EXIT_CODES.ok;
+  }
+  if (name === "help" || name === "--help" || name === "-h") {
+    if (args.length === 0) {
+      process.stdout.write(operatorOverview(backend));
+      return EXIT_CODES.ok;
+    }
+    if (args.length === 1 && args[0] === "--all") {
+      process.stdout.write(operatorUsage(backend));
+      return EXIT_CODES.ok;
+    }
+    if (name === "help" && !args[0]!.startsWith("-")) {
+      return runOperatorCli(backend, [...args, "--help"]);
+    }
+    process.stderr.write("Use help, help --all or help <command>.\n");
+    return EXIT_CODES.failed;
   }
   if (name === "--version") {
     process.stdout.write(`${FONDS_VERSION}\n`);
     return EXIT_CODES.ok;
   }
-  const definition = name ? operationForCommand(name) : undefined;
+  const definition = operationForCommand(name);
   if (definition) {
-    return runOperation(backend, definition, args);
+    return runOperation(backend, definition, name, args);
   }
-  const command = name ? commandsByName.get(name) : undefined;
+  const command = commandsByName.get(name);
   try {
     if (!command) {
       throw new CommandInputError(
-        name && !name.startsWith("-")
-          ? "Unknown command. Use --help for usage."
-          : "Specify one command. Use --help for usage.",
+        name.startsWith("-")
+          ? "Specify one command. Use --help for usage."
+          : "Unknown command. Use --help for usage.",
       );
     }
     if (args.some((value) => /^--remote(=|$)/.test(value))) {
@@ -936,7 +1194,8 @@ export async function runOperatorCli(
       {
         ...command.options,
         ...backend.globalOptions,
-        help: { type: "boolean" },
+        ...(command.stdout !== "text" && { json: { type: "boolean" } }),
+        help: { type: "boolean", short: "h" },
       },
       command.name,
     );
@@ -949,11 +1208,15 @@ export async function runOperatorCli(
       process.stderr.write(`${reason}\n`);
       return EXIT_CODES.unavailable;
     }
+    const globals = globalsOf(backend, values);
     return await command.run({
       backend,
       values,
-      globals: globalsOf(backend, values),
+      globals,
       positionals,
+      p: presentation(values.json === true),
+      next: (next) =>
+        commandLine(backend.command, [...next, ...globalArgs(globals)]),
     });
   } catch (error) {
     process.stderr.write(`${errorMessage(error, backend)}\n`);

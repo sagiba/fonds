@@ -1,25 +1,20 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import {
-  basename,
-  delimiter,
-  dirname,
-  relative,
-  resolve,
-  sep,
-} from "node:path";
-import { fileURLToPath } from "node:url";
 
 import {
   createApplication,
   inProcessInvoker,
 } from "../application/operations.js";
 import type { Database } from "../storage/sqlite/database.js";
-import { localMcpSetup, shellWord } from "./mcp-setup.js";
+import { commandLine } from "./cli-invocation.js";
+import { headline, joined, type Presentation, safe } from "./cli-output.js";
 import { CommandInputError } from "./operation-cli.js";
 import { runtimeProvider } from "./providers.js";
 
 export const DEMO_CONNECTION = "demo";
+
+/** The demo ledger's MCP server name, apart from a real ledger's `fonds`. */
+export const DEMO_SERVER_NAME = "fonds-demo";
 
 /** Synthetic CAL captures replayed in order; fixed run IDs make reruns quiet. */
 const DEMO_CAPTURES = [
@@ -85,37 +80,12 @@ interface TransactionPage {
   nextCursor?: string | null;
 }
 
-interface Totals {
-  totals: { currency: string; amount: string; amountBasis: string }[];
-}
-
-/**
- * The installed `fonds` command when this process runs through it, as an
- * absolute path: an MCP host may start it without the shell's PATH.
- */
-export function installedLauncher(
-  entry: string | undefined = process.argv[1],
-): string | undefined {
-  return entry && /^fonds(?:\.mjs)?$/.test(basename(entry))
-    ? resolve(entry)
-    : undefined;
-}
-
-/** The command a person types to run a sibling entry point from here. */
-function entryCommand(path: string): string {
-  const shown = relative(process.cwd(), path);
-  return shellWord(
-    shown.startsWith("..") || shown.startsWith(sep) ? path : shown,
-  );
-}
-
-/** A short, human summary of the demo ledger and what to run next. */
+/** A short summary of the demo ledger and what to run next; no client setup. */
 export async function demoSummary(
   database: Database,
   databasePath: string,
-  moduleUrl: string,
-  stateDirectory: string,
-  launcher: string | undefined = installedLauncher(),
+  command: string,
+  p: Presentation,
 ): Promise<string> {
   const invoker = inProcessInvoker(createApplication(database));
   let count = 0;
@@ -129,43 +99,20 @@ export async function demoSummary(
     count += page.data.length;
     cursor = page.nextCursor ?? undefined;
   } while (cursor);
-  const { totals } = (await invoker.invoke("get_transaction_totals", {
-    connectionId: DEMO_CONNECTION,
-  })) as Totals;
-  const source = moduleUrl.endsWith(".ts");
-  const cli = fileURLToPath(moduleUrl);
-  const db = shellWord(databasePath);
-  const onPath =
-    launcher !== undefined &&
-    basename(launcher) === "fonds" &&
-    (process.env.PATH ?? "").split(delimiter).includes(dirname(launcher));
-  const run = launcher
-    ? onPath
-      ? "fonds"
-      : shellWord(launcher)
-    : source
-      ? `npx tsx ${entryCommand(cli)}`
-      : `node ${entryCommand(cli)}`;
+  const db = ["--db", databasePath];
+  const run = (args: string[]) => `  ${safe(commandLine(command, args))}`;
   return [
-    "Demo ledger ready: synthetic CAL data, not real transactions.",
-    `  Database:      ${databasePath}`,
-    `  Transactions:  ${count} on connection "${DEMO_CONNECTION}"`,
-    `  Totals:        ${
-      totals
-        .map(
-          (total) => `${total.currency} ${total.amount} (${total.amountBasis})`,
-        )
-        .join(", ") || "none"
-    }`,
+    headline(p, "ok", "Demo ready: synthetic CAL data, no real accounts"),
+    `  ${joined(p, [`${count} transactions`, `ledger ${safe(databasePath)}`])}`,
     "",
-    "Look around:",
-    `  ${run} list --db ${db} --limit 5`,
-    `  ${run} totals --db ${db}`,
+    "Try:",
+    run(["list", ...db, "--limit", "5"]),
+    run(["totals", ...db]),
     "",
-    localMcpSetup(databasePath, stateDirectory, moduleUrl, "fonds-demo"),
+    "Connect an assistant:",
+    run(["mcp-config", ...db, "--name", DEMO_SERVER_NAME]),
     "",
-    "Running demo again changes nothing. Your own data goes in a separate",
-    'ledger; see "Use your own data" in the README.',
+    `Running demo again changes nothing. For your own data, start with ${safe(commandLine(command, ["init"]))}.`,
     "",
   ].join("\n");
 }

@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { outsideDirectory, protectedDirectory } from "./runtime/checkout.js";
+import { cliCommand } from "./runtime/cli-invocation.js";
 import {
   DEFAULT_DATABASE,
   defaultDatabasePath,
@@ -18,7 +19,7 @@ import {
   openLocalLedger,
   openSqliteSession,
 } from "./runtime/local-ledger.js";
-import { localMcpSetup } from "./runtime/mcp-setup.js";
+import { localMcpSetup, mcpClientChooser } from "./runtime/mcp-setup.js";
 import { CommandInputError } from "./runtime/operation-cli.js";
 import {
   type OperatorBackend,
@@ -132,6 +133,7 @@ export function sqliteBackend(
     name: "sqlite",
     title: "local SQLite CLI",
     invocation: "fonds",
+    command: cliCommand(import.meta.url),
     description: `Run fonds from the npm package or Docker image; from source, use node dist/cli.js.
 fonds serve starts HTTP/MCP (node dist/server.js from source); use serve --help for its flags.
 Every SQLite command takes
@@ -160,13 +162,14 @@ postgresql:// FONDS_DATABASE_URL makes fonds use PostgreSQL instead.`,
         )),
         // Journal files a collection created must be as private as the ledger.
         verify: () => validatePrivateDatabase(path),
+        ...(path !== ":memory:" && { location: path }),
       };
     },
     unavailable: {
       "login-link":
         "login-link is not available on SQLite: owner sign-in belongs to the hosted service on PostgreSQL.",
     },
-    async demo(globals) {
+    async demo(globals, p) {
       const path = databasePath(globals.db, DEMO_DATABASE);
       const current = await installation(true);
       const database = await openLocalLedger(path, current);
@@ -175,21 +178,26 @@ postgresql:// FONDS_DATABASE_URL makes fonds use PostgreSQL instead.`,
         return await demoSummary(
           database,
           path,
-          import.meta.url,
-          stateDirectory(),
+          cliCommand(import.meta.url),
+          p,
         );
       } finally {
         await database.close();
       }
     },
-    async mcpConfig(globals) {
+    async mcpConfig(globals, { client, name }, command) {
       const path = databasePath(globals.db);
       requireExistingDatabase(path);
       validatePrivateDatabase(path);
       const current = await installation(false);
       const database = await openLocalLedger(path, current);
       await database.close();
-      return localMcpSetup(path, stateDirectory(), import.meta.url);
+      return client
+        ? localMcpSetup(path, stateDirectory(), import.meta.url, {
+            client,
+            name,
+          })
+        : mcpClientChooser(path, command);
     },
     async backup(globals, out) {
       const path = databasePath(globals.db);
@@ -217,8 +225,10 @@ export async function main(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<number> {
   const asksForHelp =
-    ["--help", "help", "--version"].includes(argv[0] ?? "") ||
-    argv.includes("--help");
+    argv.length === 0 ||
+    ["--help", "-h", "help", "--version"].includes(argv[0]!) ||
+    argv.includes("--help") ||
+    argv.includes("-h");
   if (selectedBackend(env) === "postgres" && !asksForHelp) {
     process.stderr.write(
       "FONDS_DATABASE_URL selects PostgreSQL, which the fonds command runs; unset it to use SQLite.\n",

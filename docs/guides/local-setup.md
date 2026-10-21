@@ -42,19 +42,22 @@ as `0700`; use `--db` for another database outside the checkout.
 
 ## Connect an MCP client locally
 
-`fonds demo` prints setup for its sample ledger. For an initialized real ledger:
+`fonds demo` prints the `mcp-config` command for its sample ledger. For an
+initialized real ledger:
 
 ```sh
 fonds mcp-config
+fonds mcp-config --client claude-code
 ```
 
-Add `--db /absolute/private/path.sqlite` for a different ledger. This prints
+The first lists a command per client; `--all` prints every setup. Add
+`--db /absolute/private/path.sqlite` for a different ledger. This prints
 snippets; it does not install a client or modify its settings. The generated
 configuration pins Node, the server, database and state directory to absolute
 paths, so GUI apps need not inherit your shell's `PATH`, `FONDS_HOME` or
 `FONDS_STATE_DIR`. No credentials or tokens appear in it.
-For multiple ledgers in one client, give each a different server name: change
-`fonds` in the printed add command or JSON key. Connection IDs inside a ledger
+For multiple ledgers in one client, give each a different server name with
+`--name`; the demo's command uses `fonds-demo`. Connection IDs inside a ledger
 do not need separate MCP registrations.
 
 - **ChatGPT desktop:** in Settings → MCP servers → Add server, choose STDIO.
@@ -147,7 +150,8 @@ The [API reference](../api.md) owns routes, filters, cursors and the
 
 The CLI runs the [operations](../api.md#operations) as kebab-case commands and
 flags. `list`, `get`, `totals`, `events`, `annotate`, `link` and `remove` are
-short aliases; `<command> --help` prints one operation's description and flags.
+short aliases; `fonds help <command>` shows flags and an example, and
+`fonds help --all` lists everything.
 `--connection` also works as an alias for operation commands’ `--connection-id`.
 Set `DEMO_DB` to the path `demo` printed, or drop `--db` to use your default
 ledger:
@@ -159,8 +163,10 @@ fonds annotate --db "$DEMO_DB" \
   --transaction-id TRANSACTION_ID --expected-version 0 --notes "Synthetic note" --tags '["demo"]'
 ```
 
-Output is indented JSON in a terminal and one compact JSON line, the API's wire
-format, when piped or redirected. Booleans take `true` or `false`, integers are decimal, list
+In a terminal, `list`, `get`, `totals`, `list-connections` and operator commands
+print readable text, not a stable format, or JSON with `--json`. Piped or
+redirected output is always the API's compact wire format; `consume` always
+prints JSON lines. Booleans take `true` or `false`, integers are decimal, list
 and object fields take JSON, and an empty value clears a nullable text field.
 Input is validated before the database opens.
 
