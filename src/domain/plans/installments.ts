@@ -1,6 +1,6 @@
 import { isBilledLine, type TransactionFacts } from "../model.js";
 import { canonicalJson } from "../observations.js";
-import { sortedEvidence } from "../provider-evidence.js";
+import { identityBase, sortedEvidence } from "../provider-evidence.js";
 import { billedLinesByPurchase, inPerspective } from "../read-model.js";
 import type { Transaction } from "../records.js";
 import { FinancialPlan } from "./state.js";
@@ -55,6 +55,29 @@ export function awaitsRestatement(row: Pick<Transaction, "details">): boolean {
   );
 }
 
+/**
+ * Purchases a capture matches by native source key: native rows whose identity
+ * group holds no other identity strength. Any other purchase is matched on its
+ * financial facts, so it keeps the facts its capture states rather than ones
+ * derived from its lines.
+ */
+export function keyMatchedPurchases(
+  rows: Iterable<Transaction>,
+  provider: string,
+): Set<string> {
+  const groups = Map.groupBy(
+    [...rows].filter((row) => !row.supersededById),
+    (row) => JSON.stringify([row.sourceScope, identityBase(row, provider)]),
+  );
+  return new Set(
+    [...groups.values()].flatMap((group) =>
+      group.every((row) => row.identityStrength === "native")
+        ? group.map((row) => row.id)
+        : [],
+    ),
+  );
+}
+
 /** The repairable plan size the lines state, and whether they contradict the purchase. */
 function lineEvidence(parent: Transaction, lines: Transaction[]) {
   let stated: number | null = null;
@@ -97,6 +120,7 @@ function withLineEvidence(
   parent: Transaction,
   lines: Transaction[],
   restated: boolean,
+  keyMatched: boolean,
 ): Transaction {
   // Only a plan purchase's lines can contradict it; other parents keep just
   // their restatement conflicts.
@@ -106,11 +130,9 @@ function withLineEvidence(
     parent.identityStrength !== "ambiguous"
       ? lineEvidence(parent, lines)
       : { count: null, conflicting: false };
-  // Weak identities match on their financial facts, so only a native identity
-  // can take a count its capture did not state.
   const count =
     parent.installmentCount === null &&
-    parent.identityStrength === "native" &&
+    keyMatched &&
     evidence.count !== null &&
     !evidence.conflicting &&
     !restated &&
@@ -164,6 +186,10 @@ export function refreshInstallmentParents(
   parents?: ReadonlySet<string>,
 ): Transaction[] {
   const children = billedLinesByPurchase(plan.rows.values());
+  const keyMatched = keyMatchedPurchases(
+    plan.rows.values(),
+    plan.snapshot.connection.provider,
+  );
   // Removing the final line resolves a line conflict without another
   // observation of the purchase; keep that purchase in the repair set.
   for (const row of plan.rows.values()) {
@@ -187,8 +213,13 @@ export function refreshInstallmentParents(
       continue;
     }
     const next = withoutInstallmentFx(
-      withLineEvidence(parent, lines, awaitsRestatement(parent)),
-      lines.length > 0,
+      withLineEvidence(
+        parent,
+        lines,
+        awaitsRestatement(parent),
+        keyMatched.has(id),
+      ),
+      lines.length > 0 && keyMatched.has(id),
     );
     if (refreshedFacts(next) !== refreshedFacts(parent)) {
       changed.push(parent);

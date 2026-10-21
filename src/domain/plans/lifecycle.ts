@@ -223,7 +223,6 @@ function refreshPlanReview(
   plan: FinancialPlan,
   command: { actor: string; reason: string },
   now: string,
-  installments = true,
 ): void {
   // Only the purchases of rows this command wrote, before and after it.
   const original = new Map(plan.snapshot.rows.map((row) => [row.id, row]));
@@ -238,7 +237,7 @@ function refreshPlanReview(
   );
   const changed = new Map<string, Transaction>();
   for (const before of [
-    ...(installments ? refreshInstallmentParents(plan, parents) : []),
+    ...refreshInstallmentParents(plan, parents),
     ...refreshDuplicatePlans(plan),
   ]) {
     if (!changed.has(before.id)) {
@@ -609,8 +608,7 @@ export function planPosting(
     command,
     now,
   );
-  // A sync refreshes installment parents once its capture is fully applied.
-  refreshPlanReview(plan, command, now, automatic === undefined);
+  refreshPlanReview(plan, command, now);
   return survivor;
 }
 

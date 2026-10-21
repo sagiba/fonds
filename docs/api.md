@@ -430,9 +430,10 @@ depends on the other filters, which then apply within the perspective. The rule 
 | `all`                | Every row.                                                                                                            | Rejected with `invalid_input`: it would double-count. |
 
 Standalone rows appear in both `spending` and `billing` without double-counting,
-because they have no purchase. A refresh or line removal can fill an unknown
-count from the lines' explicit counts; purchase money is unchanged. Held lines
-stay unresolved; the purchase commitment is never substituted.
+because they have no purchase. A refresh or line removal can fill a natively
+identified purchase's unknown count from its lines' explicit counts; money is
+unchanged. Held lines stay unresolved; the purchase commitment is never
+substituted.
 
 Worked example, one currency: a −300.00 purchase in three installments of −100.00,
 with two billed lines observed so far, plus a −50.00 single charge (outflows are

@@ -4,6 +4,11 @@ import { emptyDetails, type TransactionInput } from "../../src/domain/model.js";
 import { inPerspective } from "../../src/domain/read-model.js";
 import type { SourceAdapter } from "../../src/domain/source-adapter.js";
 import {
+  authorization,
+  postingAdapter,
+  postingHarness,
+} from "../helpers/posting.js";
+import {
   backends,
   type Harness,
   insertTransactionFixture,
@@ -807,29 +812,61 @@ describe.each(backends)("%s installment repair", (backend) => {
     ).toMatchObject({ version: 1, fxFeeMinor: -100, fxFeeCurrency: "ILS" });
   });
 
-  it("matches a weak linked purchase stored with FX before normalization", async () => {
+  it("keeps a weak linked purchase's captured FX and identity stable", async () => {
     const input: TransactionInput[] = [
       {
         ...purchase(),
         identityStrength: "weak",
+        sourceAliases: ["plan-alias"],
         fxFeeMinor: -100,
         fxFeeCurrency: "ILS",
       },
-      line(1, null),
+      // Another purchase's alias collides with the weak purchase's key.
+      { ...row("other"), sourceAliases: ["plan"] },
+      { ...line(1, 5), purchaseKey: "plan-alias" },
     ];
     await capture(10, input);
-    const stored = await parent();
-    await insertTransactionFixture(
-      db,
-      [{ ...stored, fxFeeMinor: -100, fxFeeCurrency: "ILS" }],
-      "update",
-    );
-    expect(await capture(11, input)).toMatchObject({ created: 0 });
-    expect(await parent()).toMatchObject({
-      id: stored.id,
-      fxFeeMinor: null,
-      fxFeeCurrency: null,
+    const before = await parent();
+    expect(before).toMatchObject({
+      installmentCount: null,
+      fxFeeMinor: -100,
+      fxFeeCurrency: "ILS",
     });
+    const events = await db.listEvents();
+    expect(await capture(11, input)).toMatchObject({ created: 0, updated: 0 });
+    expect(await parent()).toMatchObject({
+      id: before.id,
+      version: before.version,
+    });
+    expect(await db.listEvents()).toEqual(events);
+  });
+
+  it("does not fill the count of a native purchase grouped with a weak identity", async () => {
+    const identity = { cal: { identity: { baseKey: "shared" } } };
+    const input: TransactionInput[] = [
+      { ...purchase(), details: { ...purchase().details, provider: identity } },
+      {
+        ...row("weak"),
+        identityStrength: "weak",
+        amountMinor: -900,
+        details: { ...purchase().details, issues: [], provider: identity },
+      },
+      line(1),
+    ];
+    await capture(10, input);
+    const before = await parent();
+    expect(before.installmentCount).toBeNull();
+    const ids = (await db.listTransactions({ perspective: "all" }))
+      .map((item) => item.id)
+      .sort();
+    const events = await db.listEvents();
+    expect(await capture(11, input)).toMatchObject({ created: 0, updated: 0 });
+    expect(
+      (await db.listTransactions({ perspective: "all" }))
+        .map((item) => item.id)
+        .sort(),
+    ).toEqual(ids);
+    expect(await db.listEvents()).toEqual(events);
   });
 
   it("keeps ambiguous purchases that differ only by FX matched to their own identities", async () => {
@@ -906,7 +943,7 @@ describe.each(backends)("%s installment repair", (backend) => {
     expect((await parent()).installmentCount).toBeNull();
   });
 
-  it("normalizes linked-parent FX immediately even when ambiguous identity prevents count inference", async () => {
+  it("keeps an ambiguous linked purchase's captured FX and stays stable", async () => {
     const input: TransactionInput[] = [
       {
         ...purchase(),
@@ -921,8 +958,8 @@ describe.each(backends)("%s installment repair", (backend) => {
     expect(before).toMatchObject({
       identityStrength: "ambiguous",
       installmentCount: null,
-      fxFeeMinor: null,
-      fxFeeCurrency: null,
+      fxFeeMinor: -100,
+      fxFeeCurrency: "ILS",
     });
     const child = (await db.listTransactions({ perspective: "all" })).find(
       (item) => item.sourceKey === "line-1",
@@ -933,9 +970,6 @@ describe.each(backends)("%s installment repair", (backend) => {
     expect(await parent()).toMatchObject({
       id: before.id,
       version: before.version,
-      installmentCount: null,
-      fxFeeMinor: null,
-      fxFeeCurrency: null,
     });
     expect(await db.listEvents()).toEqual(events);
   });
@@ -1043,3 +1077,115 @@ describe.each(backends)("%s installment repair", (backend) => {
     );
   });
 });
+
+describe.each(backends)(
+  "%s installment refresh with a same-capture posting",
+  (backend) => {
+    let db: Harness;
+    let harness: ReturnType<typeof postingHarness>;
+    beforeEach(async () => {
+      db = await open(backend);
+      harness = postingHarness(db);
+      await db.ensureConnection({ id: harness.connectionId, provider: "cal" });
+    });
+    afterEach(() => db.close());
+
+    // Partitions follow the captured account, so one run can cover two.
+    const accounts: SourceAdapter = {
+      ...postingAdapter,
+      extract(text, context) {
+        const result = postingAdapter.extract(text, context);
+        for (const partition of result.partitions) {
+          partition.accountKey = context.accountKey;
+        }
+        return result;
+      },
+    };
+
+    type Responses = Record<string, TransactionInput[]>;
+
+    /** One run with a response per account, in insertion order. */
+    const run = (day: number, responses: Responses) =>
+      db.ingestRun(
+        {
+          connectionId: harness.connectionId,
+          runId: `combined-${day}`,
+          responses: Object.entries(responses).map(([accountKey, rows]) => ({
+            accountKey,
+            endpoint: "synthetic:cal/recent",
+            capturedAt: `2040-07-${String(day).padStart(2, "0")}T12:00:00Z`,
+            responseText: JSON.stringify(
+              rows.map((input) => ({ ...input, sourceScope: accountKey })),
+            ),
+          })),
+        },
+        accounts,
+      );
+    const pending = authorization("pending", {
+      merchantName: "Shop B Testburg NLD",
+    });
+    const posted = row("posted", { merchantName: "Shop B" });
+    const plan = [purchase(5), line(1, 6)];
+    it.each<[string, Responses, Responses]>([
+      [
+        "posting first",
+        { account: [pending, ...plan] },
+        { account: [posted, line(1, 5), purchase(5)] },
+      ],
+      [
+        "line first",
+        { account: [pending, ...plan] },
+        { account: [line(1, 5), posted, purchase(5)] },
+      ],
+      [
+        "purchase first",
+        { account: [pending, ...plan] },
+        { account: [purchase(5), line(1, 5), posted] },
+      ],
+      [
+        "posting in a later account",
+        { account: plan, card: [pending] },
+        // The purchase is absent, so only the refresh resolves its conflict.
+        { account: [line(1, 5)], card: [posted] },
+      ],
+    ])(
+      "resolves a line conflict once with the %s, and replays unchanged",
+      async (_order, first, responses) => {
+        await run(2, first);
+        const flagged = await harness.byKey("plan");
+        expect(flagged.reviewRequired).toBe(true);
+        const before = (await db.listEvents()).length;
+        await run(3, responses);
+        expect(
+          (await harness.byKey("posted")).details.postingLink,
+        ).toBeDefined();
+        expect(await harness.byKey("plan")).toMatchObject({
+          installmentCount: 5,
+          sourceIssues: [],
+          reviewRequired: false,
+        });
+        expect(
+          (await db.listEvents())
+            .slice(before)
+            .filter(
+              (event) =>
+                event.transactionId === flagged.id &&
+                event.type.startsWith("transaction.review_"),
+            )
+            .map((event) => [event.type, event.actor]),
+        ).toEqual([["transaction.review_resolved", "sync"]]);
+        const events = await db.listEvents();
+        const versions = (await db.listTransactions({ perspective: "all" }))
+          .map((item) => [item.id, item.version])
+          .sort();
+        await run(4, responses);
+        expect(await db.listEvents()).toEqual(events);
+        expect(
+          (await db.listTransactions({ perspective: "all" }))
+            .map((item) => [item.id, item.version])
+            .sort(),
+        ).toEqual(versions);
+      },
+    );
+  },
+);

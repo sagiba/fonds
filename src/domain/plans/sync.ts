@@ -22,6 +22,8 @@ import {
 import {
   currentSourceRowIndices,
   currentSourceRows,
+  declaredIdentityBase,
+  identityBase,
   sortedEvidence,
 } from "../provider-evidence.js";
 import {
@@ -52,6 +54,7 @@ import {
   awaitsRestatement,
   DUPLICATE_ORDINAL,
   INSTALLMENT_CONFLICT,
+  keyMatchedPurchases,
   refreshInstallmentParents,
   RESTATEMENT_CONFLICT,
   withoutInstallmentFx,
@@ -254,31 +257,10 @@ function financialState(row: TransactionFacts) {
   };
 }
 
-function declaredIdentityBase(
-  row: TransactionFacts,
-  provider: string,
-): string | undefined {
-  const identity = row.details.provider[provider]?.identity;
-  if (
-    identity &&
-    typeof identity === "object" &&
-    !Array.isArray(identity) &&
-    typeof identity.baseKey === "string"
-  ) {
-    return identity.baseKey;
-  }
-  return undefined;
-}
-
-function identityBase(row: TransactionFacts, provider: string): string {
-  return declaredIdentityBase(row, provider) ?? row.sourceKey;
-}
-
 function identityFingerprint(
   row: TransactionFacts,
   includeSource: boolean,
   adapter: SourceAdapter,
-  withoutFx = false,
 ): string {
   const namespace = row.details.provider[adapter.provider] ?? {};
   const source = includeSource
@@ -289,17 +271,17 @@ function identityFingerprint(
           : { identity: namespace.identity }),
       })
     : undefined;
-  const financial = financialState(
-    withoutFx ? withoutInstallmentFx(row, true) : row,
-  );
-  return canonicalJson({ financial, source });
+  return canonicalJson({ financial: financialState(row), source });
 }
 
-function groupSignature<Row extends TransactionFacts>(
-  rows: Row[],
-  fingerprint: (row: Row) => string,
+function groupSignature(
+  rows: TransactionFacts[],
+  includeSource: boolean,
+  adapter: SourceAdapter,
 ): string {
-  return JSON.stringify(rows.map(fingerprint).sort());
+  return JSON.stringify(
+    rows.map((row) => identityFingerprint(row, includeSource, adapter)).sort(),
+  );
 }
 
 /**
@@ -721,7 +703,6 @@ function indexAccountRows(
   adapter: SourceAdapter,
   capturedAt: string,
   history: ReturnType<typeof indexRunHistory>,
-  linkedPurchases: ReadonlySet<string>,
 ) {
   const provider = adapter.provider;
   const baseKey = (row: TransactionFacts) => identityBase(row, provider);
@@ -774,30 +755,12 @@ function indexAccountRows(
         [...oldGroup, ...newGroup].some(
           (row) => row.identityStrength === "ambiguous",
         );
-      // A linked purchase loses its FX only once matched, so it compares
-      // without FX, and so does an input whose source key only it owns.
-      const storedFingerprint = (row: Transaction) =>
-        identityFingerprint(
-          row,
-          includeSource,
-          adapter,
-          linkedPurchases.has(row.id),
-        );
-      const fingerprint = (row: TransactionFacts) => {
-        const bucket = sourceMatches.get(row.sourceKey);
-        const owners = [...(bucket?.active ?? []), ...(bucket?.inactive ?? [])];
-        return identityFingerprint(
-          row,
-          includeSource,
-          adapter,
-          owners.length > 0 &&
-            owners.every((owner) => linkedPurchases.has(owner.id)),
-        );
-      };
       const fingerprints = new Map(
-        [...Map.groupBy(uncertain ? oldGroup : [], storedFingerprint)].map(
-          ([key, rows]) => [key, { rows, next: 0 }],
-        ),
+        [
+          ...Map.groupBy(uncertain ? oldGroup : [], (row) =>
+            identityFingerprint(row, includeSource, adapter),
+          ),
+        ].map(([key, rows]) => [key, { rows, next: 0 }]),
       );
       return [
         base,
@@ -806,7 +769,6 @@ function indexAccountRows(
           newGroup,
           knownGroup,
           includeSource,
-          fingerprint,
           fingerprints,
           oldUncertain,
           nativeSourceKeys: new Set(
@@ -824,8 +786,8 @@ function indexAccountRows(
             uncertain &&
             oldGroup.length > 0 &&
             (oldGroup.length !== newGroup.length ||
-              groupSignature(oldGroup, storedFingerprint) !==
-                groupSignature(newGroup, fingerprint)),
+              groupSignature(oldGroup, includeSource, adapter) !==
+                groupSignature(newGroup, includeSource, adapter)),
           hasNewerCurrent: knownGroup.some(
             (row) => !history.historical(row) && row.lastSeenAt > capturedAt,
           ),
@@ -1650,8 +1612,8 @@ export function planRun(
     // Purchases with live billed lines: a capture that restates one as
     // anything but a plan contradicts its lines.
     const planParents = new Set(billedLinesByPurchase(current).keys());
-    // Plan facts drop FX before identity fingerprints as well as after writes;
-    // otherwise a repeated ambiguous capture changes its own key.
+    const keyMatched = keyMatchedPurchases(current, adapter.provider);
+    // Each input keeps the purchase key it names, if it is a billed line.
     const prepared = result.transactions.map((input) => {
       const resolved = resolveTransaction(plan, input, now, newId);
       const purchaseKey = input.purchaseKey ?? null;
@@ -1676,7 +1638,6 @@ export function planRun(
       adapter,
       response.capturedAt,
       history,
-      planParents,
     );
     const comparableAbsence = (previous: Transaction) => {
       // Billed lines are non-comparable: search windows are by purchase date,
@@ -1794,11 +1755,11 @@ export function planRun(
         oldGroup,
         newGroup,
         knownGroup,
+        includeSource,
         hasNewerCurrent,
         oldUncertain,
         nativeSourceKeys,
         changedFacts,
-        fingerprint,
         fingerprints,
       } = index.groups.get(base)!;
       // Check evidence precedence before even changing identity/review flags.
@@ -1851,7 +1812,9 @@ export function planRun(
       const changedUncertainSet = uncertain && changedFacts;
       const matches = index.matches(input.sourceKey);
       // Within an unchanged uncertain set, match facts, never an array ordinal.
-      const sameFacts = fingerprints.get(fingerprint(input));
+      const sameFacts = fingerprints.get(
+        identityFingerprint(input, includeSource, adapter),
+      );
       // A cursor consumes occurrences without shifting a large duplicate bucket.
       if (sameFacts) {
         while (
@@ -2078,7 +2041,9 @@ export function planRun(
             : restated
               ? withFinancialState(input, previous)
               : input,
-          planParents.has(previous.id),
+          planParents.has(previous.id) &&
+            keyMatched.has(previous.id) &&
+            input.identityStrength === "native",
         );
         if (restated && (!unknownPlan || priorRestatement)) {
           accepted.details.issues = withIssue(
