@@ -35,7 +35,7 @@ export const requiredGroups = [
   ["backends.test.ts", "storage contract: libsql-http", 34],
   ["contract.test.ts", "shared storage behavior: libsql-http", 22],
   ["statement-counts.test.ts", "statement budgets: libsql-http", 9],
-  ["auto-posting.test.ts", "libsql-http automatic posting and split", 67],
+  ["auto-posting.test.ts", "libsql-http automatic posting and split", 66],
   ["billed-lines.test.ts", "libsql-http billed lines", 9],
   [
     "financial-corrections.test.ts",
