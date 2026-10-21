@@ -15,6 +15,14 @@ excludes unknown fields and nested noise. Interpretation state and capture conte
 are separate; exact responses require optional raw archives. Overlapping payments
 keep distinct components; a fresh component replaces its earlier evidence.
 
+Source-origin/nature and card-type codes, wallet classifications, merchant category
+labels, named financial-status flags and pending amount/authorization slots remain
+evidence even where their normalized meaning is unresolved. Null, false and zero
+are source assertions, not evidence of refresh noise. `walletTokenInd` classifies
+the payment credential; token identity digits stay excluded. Source sequence and
+redundant comment-presence metadata remain excluded. `isMargaritaInd` has no
+established transaction role and remains unretained, not classified as proven noise.
+
 ## cal.envelope: response shapes
 
 - **Observed:** recent responses carry `result.transactions`,

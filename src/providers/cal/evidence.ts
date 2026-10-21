@@ -17,17 +17,19 @@ const paymentHistory = scalarFields("date num amount currency");
 export const calRowShape: EvidenceShape = {
   ...scalarFields(`cardUniqueID cardUniqueId transactionID trnIntId
     trnPurchaseDate debCrdDate merchantName merchantId internationalBranchID
-    internationalBranchDesc merchantAddress merchantPhoneNo
+    internationalBranchDesc branchCodeDesc superBranchDesc merchantAddress merchantPhoneNo
     amountForDisplay amtBeforeConvAndIndex trnAmt debCrdCurrencyCode
     debCrdCurrencySymbol debCrdCurrencyDesc currencyForDisplay trnCurrencyIsoCode
     transOriginalCurrencyCode trnCurrencySymbol transOriginalSumCurrency srcCurrencyCode crmIccCurrencyDesc
     transactionTypeCode trnTypeCode trnType refundInd numOfPayments numberOfPayments curPaymentNum
     transCardPresentInd walletTranInd tokenInd isAbroadApproval isAbroadTransaction
-    trnExacWay walletProviderCode walletProviderDesc posEntryMod
+    trnExacWay walletProviderCode walletProviderDesc walletTokenInd foreignCurrencyWalletType posEntryMod
     forcedDebRate cashAccountAmt cashAccountCurrency cashAccountTrnAmt
     cashAccountCardAmt cashAccountCardCurr discountAmount discountReason roundingAmount roundingReason
     onGoingTransactionsComment paymentsMadeComment chargeExternalToCardComment
-    transIndication transSafeIndication earlyPaymentInd isImmediate isInterestTransaction`),
+    transIndication transSafeIndication transSource transMahut crdExtIdNumTypeCode
+    earlyPaymentInd isImmediate isImmediateHHKInd isInterestTransaction isCashBackTransaction isSpreadPaymenstAbroadInd
+    firstPaymentAmount tpaApprovalAmount transactionsOrigin j5Indicator`),
   comments: [comment, "set"],
   linkedComments: [linkedComment, "set"],
   immediateComments: [immediateComment, "set"],
