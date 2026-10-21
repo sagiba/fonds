@@ -14,15 +14,22 @@ export const targets = {
     driver: "@libsql/client/sqlite3",
     // Compiled code npm installs per platform; never bundled.
     native: ["@libsql/client"],
-    // The `fonds` launcher and the synthetic captures src/runtime/demo.ts
-    // replays, so the npm package and image can run `fonds demo`.
+    // Ships in the npm package and image (deploy/npm), dependencies bundled.
+    recipe: "deploy/npm",
+    bundle: true,
+    // The synthetic captures src/runtime/demo.ts replays, so the package and
+    // image can run `fonds demo`.
     files: {
-      "fonds.mjs": "deploy/sqlite/fonds.mjs",
       "demo/recent-01.json": "tests/providers/cal/fixtures/recent-01.json",
       "demo/recent-02.json": "tests/providers/cal/fixtures/recent-02.json",
     },
   },
-  postgres: { entry: "src/targets/postgres.ts", driver: "pg" },
+  postgres: {
+    entry: "src/targets/postgres.ts",
+    driver: "pg",
+    recipe: "deploy/npm",
+    bundle: true,
+  },
   turso: { entry: "src/targets/turso.ts", driver: "@libsql/client" },
   "turso-web": {
     entry: "src/targets/turso-web.ts",
@@ -139,23 +146,20 @@ export function assertGraph(name, metafile) {
 }
 
 /**
- * Builds one target. `recipe` selects the manifest and lockfile shipped with
- * it; `bundleDependencies` folds every dependency except the target's native
- * modules into the output, for a recipe that depends on those alone.
+ * Builds one target from its recipe's manifest and lockfile (`deploy/<name>`
+ * unless the target names one). A bundled target folds every dependency except
+ * its native modules into the output, for a recipe that depends on those alone.
  */
 export async function buildTarget(
   name,
-  {
-    sourceRoot = root,
-    output = resolve(root, "dist/targets", name),
-    recipe = `deploy/${name}`,
-    bundleDependencies = false,
-  } = {},
+  { sourceRoot = root, output = resolve(root, "dist/targets", name) } = {},
 ) {
   const target = targets[name];
   if (!target) {
     throw new Error(`Unknown target: ${name}`);
   }
+  const recipe = target.recipe ?? `deploy/${name}`;
+  const bundleDependencies = target.bundle ?? false;
   const manifest = JSON.parse(
     await readFile(resolve(root, recipe, "package.json"), "utf8"),
   );

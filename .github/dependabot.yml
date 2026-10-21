@@ -6,9 +6,7 @@ updates:
   - package-ecosystem: npm
     directories:
       - /
-      - /deploy/sqlite
       - /deploy/npm
-      - /deploy/postgres
       - /deploy/turso
       - /deploy/turso-web
       - /deploy/d1-web

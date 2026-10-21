@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { parseEnv, promisify } from "node:util";
 
 import { buildTarget, root, targets } from "./build-targets.mjs";
+import { verifyHttp } from "./target-smoke.mjs";
 
 const run = promisify(execFile);
 const destination = resolve(root, "dist/npm");
@@ -249,6 +250,65 @@ export async function thirdPartyNotices(metafile, base = root) {
   };
 }
 
+/** Compiled modules may come only from the native driver's own packages. */
+const nativePackage = /\/node_modules\/(?:@libsql\/[^/]+|libsql)\//;
+
+/**
+ * The installed package's dependencies: only packages the recipe's lockfile
+ * lists, never another database driver, and compiled code only from libSQL.
+ */
+async function checkInstalledTree(installed) {
+  const recipe = new Set(
+    Object.keys(
+      JSON.parse(
+        await readFile(resolve(root, "deploy/npm/package-lock.json"), "utf8"),
+      ).packages,
+    )
+      .filter(Boolean)
+      .map(packageNameIn),
+  );
+  const { stdout } = await run("npm", ["ls", "--all", "--json"], {
+    cwd: installed,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const names = new Set();
+  const visit = (node) => {
+    for (const [name, dependency] of Object.entries(node.dependencies ?? {})) {
+      if (dependency.version) {
+        names.add(name);
+      }
+      visit(dependency);
+    }
+  };
+  visit(JSON.parse(stdout));
+  for (const name of names) {
+    assert(
+      !/^(?:better-sqlite3|pg|pg-.*)$/.test(name),
+      `unrelated driver ${name} installed`,
+    );
+    assert(
+      recipe.has(name),
+      `${name} installed but not in the recipe lockfile`,
+    );
+  }
+  const native = [];
+  const find = async (directory) => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const child = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await find(child);
+      } else if (entry.name.endsWith(".node")) {
+        native.push(child);
+      }
+    }
+  };
+  await find(join(installed, "node_modules"));
+  for (const path of native) {
+    assert(nativePackage.test(path), `unexpected native module ${path}`);
+  }
+  return [...names].sort();
+}
+
 async function directorySize(path) {
   let total = 0;
   for (const entry of await readdir(path, { withFileTypes: true })) {
@@ -344,18 +404,10 @@ async function assertRecipeMatchesRoot() {
  */
 async function pack(stage) {
   await assertRecipeMatchesRoot();
-  await buildTarget("sqlite", {
-    output: stage,
-    recipe: "deploy/npm",
-    bundleDependencies: true,
-  });
+  await buildTarget("sqlite", { output: stage });
   // The PostgreSQL build sits beside it; the launcher picks one per command.
   const postgres = join(stage, "postgres");
-  await buildTarget("postgres", {
-    output: postgres,
-    recipe: "deploy/npm",
-    bundleDependencies: true,
-  });
+  await buildTarget("postgres", { output: postgres });
   const metafiles = [];
   for (const directory of [stage, postgres]) {
     metafiles.push(
@@ -401,6 +453,7 @@ async function pack(stage) {
     "cli.js",
     "server.js",
     "postgres/server.js",
+    "fonds.mjs",
     ...Object.keys(targets.sqlite.files),
   ].sort();
   const chunk = /^(?:postgres\/)?chunks\//;
@@ -503,6 +556,9 @@ function startHttp(command, args, env, listening = sqliteListening) {
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
+  const exited = new Promise((resolveExit) =>
+    child.once("exit", (code, signal) => resolveExit({ code, signal })),
+  );
   const url = new Promise((resolveUrl, reject) => {
     const timeout = setTimeout(
       () => reject(new Error(`HTTP server did not start: ${output}`)),
@@ -523,7 +579,32 @@ function startHttp(command, args, env, listening = sqliteListening) {
       reject(new Error(`HTTP server exited (${code}): ${output}`));
     });
   });
-  return { child, url };
+  return { child, url, exited, output: () => output };
+}
+
+/**
+ * SIGTERM must end a server cleanly within ten seconds, and it must never
+ * have printed its bearer token.
+ */
+async function stopGracefully(server, label, token) {
+  if (token) {
+    assert(!server.output().includes(token), `${label} logged its token`);
+  }
+  server.child.kill("SIGTERM");
+  let timeout;
+  const result = await Promise.race([
+    server.exited,
+    new Promise((resolveTimeout) => {
+      timeout = setTimeout(() => resolveTimeout("timeout"), 10_000);
+    }),
+  ]).finally(() => clearTimeout(timeout));
+  if (result === "timeout") {
+    server.child.kill("SIGKILL");
+  }
+  assert(
+    result !== "timeout" && result.code === 0 && result.signal === null,
+    `${label} did not shut down cleanly: ${JSON.stringify(result)}`,
+  );
 }
 
 /** A command's exit status and output, without rejecting on failure. */
@@ -639,23 +720,10 @@ async function checkPostgres(fonds, packed, scratch, serverUrl) {
       const { FONDS_API_TOKEN: token } = parseEnv(
         await readFile(join(state, "fonds.env"), "utf8"),
       );
-      const health = await fetch(`${url}/health`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      assert(
-        health.status === 200,
-        `PostgreSQL /health returned ${health.status}`,
-      );
-      assert(
-        (await health.json()).storage === "postgres",
-        "PostgreSQL storage",
-      );
-      assert(
-        (await fetch(`${url}/health`)).status === 401,
-        "PostgreSQL /health without a token",
-      );
+      await verifyHttp(url, "postgres", token);
+      await stopGracefully(loopback, "PostgreSQL loopback HTTP", token);
     } finally {
-      loopback.child.kill("SIGTERM");
+      loopback.child.kill("SIGKILL");
     }
 
     const port = await freePort();
@@ -684,8 +752,9 @@ async function checkPostgres(fonds, packed, scratch, serverUrl) {
         (await fetch(`${origin}/mcp`, { method: "POST" })).status === 401,
         "hosted /mcp without a grant",
       );
+      await stopGracefully(hosted, "hosted service");
     } finally {
-      hosted.child.kill("SIGTERM");
+      hosted.child.kill("SIGKILL");
     }
     const ambiguous = await outcome(fonds, ["serve"], {
       cwd: scratch,
@@ -721,9 +790,9 @@ async function checkInstalled(packed, scratch) {
     { cwd: scratch },
   );
   const fonds = join(prefix, "bin", "fonds");
-  const installedBytes = await directorySize(
-    join(prefix, "lib", "node_modules", packed.name),
-  );
+  const installedPath = join(prefix, "lib", "node_modules", packed.name);
+  const installedBytes = await directorySize(installedPath);
+  const installedPackages = await checkInstalledTree(installedPath);
   const env = isolatedEnv(home);
   const fondsOutput = async (...args) =>
     (await run(fonds, args, { cwd: scratch, env })).stdout;
@@ -784,13 +853,10 @@ async function checkInstalled(packed, scratch) {
     const { FONDS_API_TOKEN: token } = parseEnv(
       await readFile(join(home, "fonds.env"), "utf8"),
     );
-    const health = await fetch(`${url}/health`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    assert(health.status === 200, `HTTP /health returned ${health.status}`);
-    assert((await health.json()).storage === "sqlite", "HTTP storage");
+    await verifyHttp(url, "sqlite", token);
+    await stopGracefully(server, "SQLite loopback HTTP", token);
   } finally {
-    server.child.kill("SIGTERM");
+    server.child.kill("SIGKILL");
   }
   const sqliteHosted = await outcome(fonds, ["serve", "--hosted"], {
     cwd: scratch,
@@ -814,6 +880,7 @@ async function checkInstalled(packed, scratch) {
   return {
     installed: true,
     installedBytes,
+    installedPackages,
     demo: true,
     stdioMcp: true,
     http: true,

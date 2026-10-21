@@ -9,6 +9,5 @@
 !scripts/
 !src/
 !deploy/npm/
-!deploy/sqlite/
 !tests/providers/cal/fixtures/recent-01.json
 !tests/providers/cal/fixtures/recent-02.json

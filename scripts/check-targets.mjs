@@ -68,13 +68,7 @@ function checkInstalled(name, tree) {
 
   visit(tree);
   for (const dependency of installedPackages) {
-    const unrelated =
-      name === "sqlite"
-        ? /^(better-sqlite3|pg|pg-.*)$/
-        : name === "postgres"
-          ? /^(better-sqlite3|@libsql\/.*|libsql)$/
-          : /^(better-sqlite3|pg|pg-.*)$/;
-    if (unrelated.test(dependency)) {
+    if (/^(better-sqlite3|pg|pg-.*)$/.test(dependency)) {
       throw new Error(`${name}: unrelated installed dependency ${dependency}`);
     }
   }
@@ -92,13 +86,15 @@ const localTestHosts = [
   "[::1]",
   "host.docker.internal",
 ];
-if (verifyRuntime) {
-  for (const key of ["FONDS_TEST_POSTGRES_URL", "FONDS_TEST_LIBSQL_HTTP_URL"]) {
-    const value = process.env[key];
-    if (value && !localTestHosts.includes(new URL(value).hostname)) {
-      throw new Error(`${key} must identify a disposable local test server`);
-    }
-  }
+const libsqlUrl = process.env.FONDS_TEST_LIBSQL_HTTP_URL;
+if (
+  verifyRuntime &&
+  libsqlUrl &&
+  !localTestHosts.includes(new URL(libsqlUrl).hostname)
+) {
+  throw new Error(
+    "FONDS_TEST_LIBSQL_HTTP_URL must identify a disposable local test server",
+  );
 }
 const temporaryDirectory = await mkdtemp(
   join(tmpdir(), "fonds-target-isolation-"),
@@ -106,10 +102,16 @@ const temporaryDirectory = await mkdtemp(
 try {
   for (const name of requestedTargets.length
     ? requestedTargets
-    : defaultTargets) {
+    : defaultTargets.filter((name) => !targets[name].bundle)) {
     const target = targets[name];
     if (!target) {
       throw new Error(`Unknown target: ${name}`);
+    }
+    // These have no isolated recipe; npm run check:npm installs and runs them.
+    if (target.bundle) {
+      throw new Error(
+        `${name} ships in the npm package; run npm run check:npm`,
+      );
     }
     const isolatedDirectory = join(temporaryDirectory, name);
     await mkdir(isolatedDirectory);
@@ -163,13 +165,7 @@ try {
     });
     await runCommand(
       "npm",
-      [
-        "ci",
-        "--omit=dev",
-        ...(name === "sqlite" ? [] : ["--omit=optional"]),
-        "--no-audit",
-        "--no-fund",
-      ],
+      ["ci", "--omit=dev", "--omit=optional", "--no-audit", "--no-fund"],
       artifactDirectory,
     );
     const installed = checkInstalled(
@@ -177,13 +173,7 @@ try {
       JSON.parse(
         await runCommand(
           "npm",
-          [
-            "ls",
-            "--all",
-            "--omit=dev",
-            ...(name === "sqlite" ? [] : ["--omit=optional"]),
-            "--json",
-          ],
+          ["ls", "--all", "--omit=dev", "--omit=optional", "--json"],
           artifactDirectory,
         ),
       ),
@@ -191,7 +181,7 @@ try {
     const binaries = await findNativeModules(
       join(artifactDirectory, "node_modules"),
     );
-    if (name !== "sqlite" && binaries.length) {
+    if (binaries.length) {
       throw new Error(`${name}: unexpected native modules installed`);
     }
     let runtimeVerified = false;
@@ -207,9 +197,6 @@ try {
         artifactDirectory,
       );
     } else if (verifyRuntime) {
-      if (name === "postgres" && !process.env.FONDS_TEST_POSTGRES_URL) {
-        throw new Error("--runtime requires FONDS_TEST_POSTGRES_URL");
-      }
       if (name === "turso" && !process.env.FONDS_TEST_LIBSQL_HTTP_URL) {
         throw new Error("--runtime requires FONDS_TEST_LIBSQL_HTTP_URL");
       }

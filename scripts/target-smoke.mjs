@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, symlink } from "node:fs/promises";
 import { createServer } from "node:https";
 import { join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { parseEnv } from "node:util";
+import { fileURLToPath } from "node:url";
 
 const token = "synthetic-isolated-smoke-token-000000000000";
 
-async function verifyHttp(url, backend, bearer = token) {
+/** A launcher's authenticated HTTP API and MCP endpoint, and its unauthenticated refusal. */
+export async function verifyHttp(url, backend, bearer = token) {
   assert.equal((await fetch(`${url}/health`)).status, 401);
   const headers = { Authorization: `Bearer ${bearer}` };
   const health = await (await fetch(`${url}/health`, { headers })).json();
@@ -181,71 +181,23 @@ async function localTlsProxy(runtime, upstream) {
   };
 }
 
+/**
+ * A Node launcher against a disposable libSQL server behind a local TLS proxy,
+ * started directly and through a linked directory. SQLite and PostgreSQL ship
+ * in the npm package instead, which npm run check:npm installs and runs.
+ */
 export async function smokeTarget(target, runtime) {
   await mkdir(runtime, { recursive: true, mode: 0o700 });
-  const api = await import(pathToFileURL(join(process.cwd(), "server.js")));
-  if (target === "sqlite") {
-    const path = join(runtime, "synthetic.sqlite");
-    await writeFile(path, "", { mode: 0o600 });
-    // The server generates its token into this private state directory.
-    const running = await api.startServer(["--db", path, "--port", "0"], {
-      env: { FONDS_STATE_DIR: runtime },
-    });
-    try {
-      await verifyHttp(
-        running.url,
-        target,
-        parseEnv(await readFile(join(runtime, "fonds.env"), "utf8"))
-          .FONDS_API_TOKEN,
-      );
-    } finally {
-      await running.close();
-    }
-    return { http: true, mcp: true, childProcess: false };
-  }
-  let adminPool;
-  let databaseName;
-  let tlsProxy;
+  const tlsProxy = await localTlsProxy(
+    runtime,
+    process.env.FONDS_TEST_LIBSQL_HTTP_URL,
+  );
   try {
-    let environment;
-    if (target === "postgres") {
-      const { Pool } = await import("pg");
-      adminPool = new Pool({
-        connectionString: process.env.FONDS_TEST_POSTGRES_URL,
-      });
-      databaseName = `fonds_isolation_${crypto.randomUUID().replaceAll("-", "")}`;
-      await adminPool.query(`CREATE DATABASE "${databaseName}"`);
-      const connection = new URL(process.env.FONDS_TEST_POSTGRES_URL);
-      connection.pathname = `/${databaseName}`;
-      // The launcher's secrets, the smoke token included, come from its state.
-      const stateDir = join(runtime, "postgres-state");
-      await mkdir(stateDir, { mode: 0o700 });
-      await writeFile(
-        join(stateDir, "fonds.env"),
-        [
-          "FONDS_AUTH_SECRET=synthetic-smoke-auth-secret-000000000000",
-          "FONDS_OWNER_ID=synthetic-smoke-owner",
-          `FONDS_CREDENTIALS_KEY=${"A".repeat(43)}`,
-          `FONDS_API_TOKEN=${token}`,
-          "",
-        ].join("\n"),
-        { mode: 0o600 },
-      );
-      environment = {
-        FONDS_DATABASE_URL: connection.toString(),
-        FONDS_STATE_DIR: stateDir,
-      };
-    } else {
-      tlsProxy = await localTlsProxy(
-        runtime,
-        process.env.FONDS_TEST_LIBSQL_HTTP_URL,
-      );
-      environment = {
-        FONDS_DATABASE_URL: tlsProxy.url,
-        FONDS_DATABASE_AUTH_TOKEN: "",
-        NODE_EXTRA_CA_CERTS: tlsProxy.certPath,
-      };
-    }
+    const environment = {
+      FONDS_DATABASE_URL: tlsProxy.url,
+      FONDS_DATABASE_AUTH_TOKEN: "",
+      NODE_EXTRA_CA_CERTS: tlsProxy.certPath,
+    };
     await launchProcess(join(process.cwd(), "server.js"), environment, target);
     const linkedDirectory = join(runtime, "linked-artifact");
     await symlink(process.cwd(), linkedDirectory, "dir");
@@ -262,16 +214,7 @@ export async function smokeTarget(target, runtime) {
       gracefulShutdown: true,
     };
   } finally {
-    await tlsProxy?.close();
-    if (adminPool) {
-      try {
-        if (databaseName) {
-          await adminPool.query(`DROP DATABASE IF EXISTS "${databaseName}"`);
-        }
-      } finally {
-        await adminPool.end();
-      }
-    }
+    await tlsProxy.close();
   }
 }
 

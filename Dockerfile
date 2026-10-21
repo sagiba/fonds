@@ -15,7 +15,6 @@ COPY tsconfig.json tsconfig.build.json ./
 COPY scripts ./scripts
 COPY src ./src
 COPY deploy/npm ./deploy/npm
-COPY deploy/sqlite ./deploy/sqlite
 COPY tests/providers/cal/fixtures/recent-01.json tests/providers/cal/fixtures/recent-02.json ./tests/providers/cal/fixtures/
 RUN node scripts/npm-package.mjs && mkdir /package \
   && cp dist/npm/fonds-finance-*.tgz /package/fonds.tgz
