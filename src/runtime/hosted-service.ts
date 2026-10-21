@@ -8,7 +8,10 @@ import { createApplication } from "../application/operations.js";
 import { parseCredentials } from "../domain/credentials.js";
 import { createPostgresCredentialStore } from "../storage/postgres/credentials.js";
 import { createPostgresEventStore } from "../storage/postgres/events.js";
-import { openPostgresDatabase } from "../storage/postgres/store.js";
+import {
+  FINANCIAL_SESSION_OPTIONS,
+  openPostgresDatabase,
+} from "../storage/postgres/store.js";
 import { hostedOrigin } from "../transport/auth.js";
 import { createHttpService } from "../transport/http.js";
 import {
@@ -354,7 +357,7 @@ export function createHostedService(
   };
   const financialPool = new Pool({
     ...poolConfig,
-    options: "-c search_path=financial",
+    options: FINANCIAL_SESSION_OPTIONS,
   });
   const authPool = new Pool({
     ...poolConfig,

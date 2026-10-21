@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 
 import { Pool } from "pg";
 
+import { FINANCIAL_SESSION_OPTIONS } from "../../src/storage/postgres/store.js";
+
 /**
  * Drops a disposable test database once every session to it has closed.
  * DROP … WITH (FORCE) could kill a pool connection that is mid-shutdown and has
@@ -35,7 +37,7 @@ export async function disposableDatabase(url: string, prefix = "fonds_test") {
     name,
     url: target.href,
     /** Pool options that select the financial schema, as every entry point does. */
-    options: "-c search_path=financial",
+    options: FINANCIAL_SESSION_OPTIONS,
     drop: async () => {
       try {
         await dropWhenIdle(admin, name);

@@ -121,6 +121,18 @@ summed exactly in application code with no stored total column
   the shared identity rules, in a UTF8 database with explicit null ordering.
   Integers are `BIGINT` with safe JavaScript integer bounds; SQLite tables are
   `STRICT`.
+- Transaction calendar dates are PostgreSQL `date`, checked to years 0001–9999,
+  and `YYYY-MM-DD` text on SQLite. In that range PostgreSQL's ISO output is the
+  stored text, so dates round-trip exactly and sort, filter and page as SQLite
+  text does. PostgreSQL has no year zero, so the domain rejects it everywhere.
+  Financial pools set `DateStyle` to ISO; initialization refuses another style,
+  and a read under one fails rather than reinterpret a date.
+- IDs stay text: the API matches any ID string exactly, and not every ID is a
+  UUID. A `uuid` column would error on other strings and equate UUID spellings
+  that SQLite keeps distinct.
+- Financial timestamps stay text: the application compares them as ISO strings,
+  while `timestamptz` returns another text form and microsecond precision.
+  Changing them needs one canonical form and precision on every backend first.
 - JSON documents are text, not JSONB, so exact source strings survive: actual NUL
   and a literal backslash-u0000 stay distinct. JSON documents and annotations may
   hold NUL, but canonical scalar text rejects it on every adapter: extraction
@@ -133,7 +145,8 @@ summed exactly in application code with no stored total column
 - PostgreSQL sequences give captures and transactions deterministic order where
   SQLite uses rowid.
 - Application code supplies IDs, versions, timestamps and empty documents. SQL
-  checks shapes; currency precision and canonical dates are domain validation.
+  checks shapes; currency precision and SQLite's canonical dates are domain
+  validation.
   Direct SQL writes are not a supported import path.
 - D1 has no interactive transaction: `connections.revision` guards one atomic
   batch, and a stale batch fails ([D1 note](internals/d1-storage.md)).

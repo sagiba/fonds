@@ -1,3 +1,4 @@
+-- Connections, billing accounts and cards
 CREATE TABLE connections (
   id TEXT COLLATE "C" PRIMARY KEY NOT NULL,
   provider TEXT COLLATE "C" NOT NULL,
@@ -5,6 +6,7 @@ CREATE TABLE connections (
   config_json TEXT COLLATE "C" NOT NULL,
   created_at TEXT COLLATE "C" NOT NULL
 );
+
 CREATE TABLE accounts (
   id TEXT COLLATE "C" PRIMARY KEY NOT NULL,
   connection_id TEXT COLLATE "C" NOT NULL REFERENCES connections(id),
@@ -15,9 +17,11 @@ CREATE TABLE accounts (
   display_name TEXT COLLATE "C" CHECK (display_name IS NULL OR length(display_name) BETWEEN 1 AND 128),
   created_at TEXT COLLATE "C" NOT NULL,
   last_seen_at TEXT COLLATE "C",
+
   UNIQUE (connection_id, id),
   UNIQUE (connection_id, provider_key)
 );
+
 CREATE TABLE cards (
   id TEXT COLLATE "C" PRIMARY KEY NOT NULL,
   connection_id TEXT COLLATE "C" NOT NULL REFERENCES connections(id),
@@ -28,10 +32,13 @@ CREATE TABLE cards (
   attributes_json TEXT COLLATE "C",
   created_at TEXT COLLATE "C" NOT NULL,
   last_seen_at TEXT COLLATE "C",
+
   UNIQUE (connection_id, id),
   UNIQUE (connection_id, provider_key),
   FOREIGN KEY (connection_id, billing_account_id) REFERENCES accounts(connection_id, id)
 );
+
+-- Refreshes
 CREATE TABLE refreshes (
   id TEXT COLLATE "C" PRIMARY KEY NOT NULL,
   connection_id TEXT COLLATE "C" NOT NULL REFERENCES connections(id),
@@ -60,6 +67,7 @@ CREATE TABLE refreshes (
   unlisted BIGINT NOT NULL CHECK (unlisted BETWEEN 0 AND 9007199254740991),
   provider_stop_reason TEXT COLLATE "C" CHECK (provider_stop_reason IN ('authentication_failed','authentication_challenge','rate_limited','budget_exhausted')),
   has_accepted_evidence BOOLEAN NOT NULL,
+
   CHECK ((skip_reason IS NULL) = (status <> 'skipped')),
   CHECK (status <> 'skipped' OR trigger = 'scheduled'),
   CHECK ((range_from IS NULL) = (range_to IS NULL)),
@@ -74,15 +82,19 @@ CREATE TABLE refreshes (
 CREATE UNIQUE INDEX refreshes_active ON refreshes(connection_id) WHERE status IN ('pending','running');
 CREATE UNIQUE INDEX refreshes_occurrence ON refreshes(connection_id, occurrence) WHERE occurrence IS NOT NULL;
 CREATE INDEX refreshes_connection ON refreshes(connection_id, created_at, id);
+
 CREATE TABLE refresh_windows (
   refresh_id TEXT COLLATE "C" NOT NULL REFERENCES refreshes(id) ON DELETE CASCADE,
   range_from TEXT COLLATE "C" NOT NULL,
   range_to TEXT COLLATE "C" NOT NULL,
   status TEXT COLLATE "C" NOT NULL CHECK (status IN ('pending','running','completed','partial','failed')),
   has_accepted_evidence BOOLEAN NOT NULL,
+
   PRIMARY KEY (refresh_id, range_from),
   CHECK (range_from <= range_to)
 );
+
+-- Runs and transactions
 CREATE TABLE sync_runs (
   id TEXT COLLATE "C" PRIMARY KEY NOT NULL,
   connection_id TEXT COLLATE "C" NOT NULL REFERENCES connections(id),
@@ -100,6 +112,7 @@ CREATE TABLE sync_runs (
   evidence_digest TEXT COLLATE "C" NOT NULL
 );
 CREATE INDEX sync_runs_refresh ON sync_runs(refresh_id);
+
 CREATE TABLE transactions (
   id TEXT COLLATE "C" PRIMARY KEY NOT NULL,
   ingestion_order BIGSERIAL NOT NULL UNIQUE CHECK (ingestion_order BETWEEN 1 AND 9007199254740991),
@@ -111,34 +124,41 @@ CREATE TABLE transactions (
   identity_strength TEXT COLLATE "C" NOT NULL CHECK (identity_strength IN ('native','weak','ambiguous')),
   status TEXT COLLATE "C" NOT NULL CHECK (status IN ('pending','posted')),
   presence TEXT COLLATE "C" NOT NULL CHECK (presence IN ('seen','not_returned','removed')),
+
   description TEXT COLLATE "C",
   counterparty_name TEXT COLLATE "C",
   kind TEXT COLLATE "C" NOT NULL CHECK (kind IN ('purchase','refund','income','transfer','fee','interest','cash_withdrawal','unknown')),
   merchant_name TEXT COLLATE "C",
   merchant_provider_id TEXT COLLATE "C",
   merchant_category_code TEXT COLLATE "C" CHECK (merchant_category_code IS NULL OR merchant_category_code ~ '^[0-9]{4}$'),
-  transaction_date TEXT COLLATE "C",
-  booking_date TEXT COLLATE "C",
-  billing_date TEXT COLLATE "C",
+
+  transaction_date DATE CHECK (transaction_date BETWEEN '0001-01-01' AND '9999-12-31'),
+  booking_date DATE CHECK (booking_date BETWEEN '0001-01-01' AND '9999-12-31'),
+  billing_date DATE CHECK (billing_date BETWEEN '0001-01-01' AND '9999-12-31'),
+
   amount_minor BIGINT CHECK (amount_minor BETWEEN -9007199254740991 AND 9007199254740991),
   currency TEXT COLLATE "C" CHECK (currency IS NULL OR currency ~ '^[A-Z]{3}$'),
   amount_basis TEXT COLLATE "C" NOT NULL CHECK (amount_basis IN ('booked_entry','authorization','purchase_commitment','unknown')),
   original_amount_minor BIGINT CHECK (original_amount_minor BETWEEN -9007199254740991 AND 9007199254740991),
   original_currency TEXT COLLATE "C" CHECK (original_currency IS NULL OR original_currency ~ '^[A-Z]{3}$'),
   installment_count BIGINT CHECK (installment_count BETWEEN 0 AND 9007199254740991),
+
   card_present BOOLEAN,
   authorization_method TEXT COLLATE "C" CHECK (authorization_method IN ('chip','contactless','keyed_in','online','swipe')),
   wallet TEXT COLLATE "C" CHECK (wallet IN ('apple_pay','google_pay','samsung_pay')),
   three_d_secure_used BOOLEAN,
   recurring BOOLEAN,
+
   purchase_id TEXT COLLATE "C",
   installment_number BIGINT CHECK (installment_number BETWEEN 1 AND 9007199254740991),
   provider_transaction_code TEXT COLLATE "C",
   fx_fee_minor BIGINT CHECK (fx_fee_minor BETWEEN -9007199254740991 AND 9007199254740991),
   fx_fee_currency TEXT COLLATE "C" CHECK (fx_fee_currency IS NULL OR fx_fee_currency ~ '^[A-Z]{3}$'),
+
   first_seen_at TEXT COLLATE "C" NOT NULL,
   version BIGINT NOT NULL CHECK (version BETWEEN 1 AND 9007199254740991),
   superseded_by_id TEXT COLLATE "C" REFERENCES transactions(id),
+
   transaction_date_time TEXT COLLATE "C",
   merchant_address_line TEXT COLLATE "C",
   merchant_phone TEXT COLLATE "C",
@@ -148,6 +168,7 @@ CREATE TABLE transactions (
   currency_exchange_json TEXT COLLATE "C",
   source_issues_json TEXT COLLATE "C" NOT NULL,
   provider_json TEXT COLLATE "C" NOT NULL,
+
   UNIQUE (connection_id, id),
   FOREIGN KEY (connection_id, card_id) REFERENCES cards(connection_id, id),
   FOREIGN KEY (connection_id, purchase_id) REFERENCES transactions(connection_id, id) ON DELETE RESTRICT,
@@ -161,12 +182,14 @@ CREATE INDEX transactions_purchase ON transactions(connection_id, purchase_id);
 CREATE INDEX transactions_date ON transactions(transaction_date);
 CREATE INDEX transactions_merchant_name ON transactions(merchant_name);
 CREATE INDEX transactions_status ON transactions(status);
+
 CREATE TABLE transaction_observations (
   transaction_id TEXT COLLATE "C" PRIMARY KEY NOT NULL REFERENCES transactions(id),
   last_seen_at TEXT COLLATE "C" NOT NULL,
   last_seen_run_id TEXT COLLATE "C" NOT NULL REFERENCES sync_runs(id),
   source_refs_json TEXT COLLATE "C" NOT NULL
 );
+
 CREATE TABLE transaction_reconciliation (
   transaction_id TEXT COLLATE "C" PRIMARY KEY NOT NULL REFERENCES transactions(id),
   payment_context_conflicts_json TEXT COLLATE "C",
@@ -178,17 +201,22 @@ CREATE TABLE transaction_reconciliation (
   provider_billing_month_json TEXT COLLATE "C",
   provider_currency_mapping_json TEXT COLLATE "C"
 );
+
 CREATE TABLE transaction_posting_links (
   transaction_id TEXT COLLATE "C" PRIMARY KEY NOT NULL REFERENCES transactions(id),
   posting_link_json TEXT COLLATE "C"
 );
+
+-- Retained evidence, annotations and the event feed
 CREATE TABLE sync_run_bodies (
   run_id TEXT COLLATE "C" PRIMARY KEY NOT NULL REFERENCES sync_runs(id),
   snapshot_json TEXT COLLATE "C" NOT NULL,
   retention TEXT COLLATE "C" NOT NULL CHECK (retention IN ('staged','debug')),
   expires_at TEXT COLLATE "C",
+
   CHECK ((retention = 'debug' AND expires_at IS NOT NULL) OR retention = 'staged')
 );
+
 CREATE TABLE deferred_evidence (
   id TEXT COLLATE "C" PRIMARY KEY NOT NULL,
   connection_id TEXT COLLATE "C" NOT NULL REFERENCES connections(id),
@@ -199,12 +227,14 @@ CREATE TABLE deferred_evidence (
   first_seen_run_id TEXT COLLATE "C" NOT NULL REFERENCES sync_runs(id),
   last_seen_run_id TEXT COLLATE "C" NOT NULL REFERENCES sync_runs(id)
 );
+
 CREATE TABLE annotations (
   transaction_id TEXT COLLATE "C" PRIMARY KEY NOT NULL REFERENCES transactions(id),
   version BIGINT NOT NULL CHECK (version BETWEEN 1 AND 9007199254740991),
   data_json TEXT COLLATE "C" NOT NULL,
   updated_at TEXT COLLATE "C" NOT NULL
 );
+
 CREATE TABLE events (
   id BIGSERIAL PRIMARY KEY CHECK (id BETWEEN 1 AND 9007199254740991),
   connection_id TEXT COLLATE "C" NOT NULL REFERENCES connections(id),
@@ -217,6 +247,8 @@ CREATE TABLE events (
   after_json TEXT COLLATE "C"
 );
 CREATE INDEX events_connection ON events(connection_id, id);
+
+-- Scheduling, settings and collection leases
 CREATE TABLE scheduled_collections (
   occurrence TEXT COLLATE "C" PRIMARY KEY NOT NULL,
   scheduled_at TEXT COLLATE "C" NOT NULL,
@@ -224,20 +256,27 @@ CREATE TABLE scheduled_collections (
   lease_until TEXT COLLATE "C" NOT NULL
 );
 CREATE INDEX scheduled_collections_scheduled_at ON scheduled_collections(scheduled_at);
+
 CREATE TABLE settings (
   name TEXT COLLATE "C" PRIMARY KEY NOT NULL,
   value TEXT COLLATE "C" NOT NULL
 );
+
 CREATE TABLE collection_leases (
   connection_id TEXT COLLATE "C" PRIMARY KEY NOT NULL,
   holder TEXT COLLATE "C" NOT NULL CHECK (length(holder) BETWEEN 1 AND 64),
   expires_at BIGINT NOT NULL CHECK (expires_at BETWEEN 0 AND 9007199254740991)
 );
+
+-- Migration version
 CREATE TABLE schema_migrations (
   version INTEGER PRIMARY KEY CHECK (version > 0),
   applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Operational state outside the financial schema
 CREATE SCHEMA operations;
+
 CREATE TABLE operations.provider_credentials (
   connection_id text PRIMARY KEY,
   provider text NOT NULL,
@@ -248,6 +287,7 @@ CREATE TABLE operations.provider_credentials (
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL
 );
+
 CREATE TABLE operations.event_subscriptions (
   id text PRIMARY KEY,
   generation bigint NOT NULL CHECK (generation > 0),
@@ -258,6 +298,7 @@ CREATE TABLE operations.event_subscriptions (
 );
 CREATE INDEX event_subscriptions_due
   ON operations.event_subscriptions (next_attempt_at) WHERE status='active';
+
 CREATE TABLE operations.installation (
   id boolean PRIMARY KEY DEFAULT true CHECK (id),
   owner_id text NOT NULL,

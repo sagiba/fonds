@@ -1,3 +1,4 @@
+-- Connections, billing accounts and cards
 CREATE TABLE connections (
   id TEXT PRIMARY KEY NOT NULL,
   provider TEXT NOT NULL,
@@ -5,6 +6,7 @@ CREATE TABLE connections (
   config_json TEXT NOT NULL CHECK (json_valid(config_json)),
   created_at TEXT NOT NULL
 ) STRICT;
+
 CREATE TABLE accounts (
   id TEXT PRIMARY KEY NOT NULL,
   connection_id TEXT NOT NULL REFERENCES connections(id),
@@ -15,9 +17,11 @@ CREATE TABLE accounts (
   display_name TEXT CHECK (display_name IS NULL OR length(display_name) BETWEEN 1 AND 128),
   created_at TEXT NOT NULL,
   last_seen_at TEXT,
+
   UNIQUE (connection_id, id),
   UNIQUE (connection_id, provider_key)
 ) STRICT;
+
 CREATE TABLE cards (
   id TEXT PRIMARY KEY NOT NULL,
   connection_id TEXT NOT NULL REFERENCES connections(id),
@@ -28,10 +32,13 @@ CREATE TABLE cards (
   attributes_json TEXT CHECK (attributes_json IS NULL OR json_valid(attributes_json)),
   created_at TEXT NOT NULL,
   last_seen_at TEXT,
+
   UNIQUE (connection_id, id),
   UNIQUE (connection_id, provider_key),
   FOREIGN KEY (connection_id, billing_account_id) REFERENCES accounts(connection_id, id)
 ) STRICT;
+
+-- Refreshes
 CREATE TABLE refreshes (
   id TEXT PRIMARY KEY NOT NULL,
   connection_id TEXT NOT NULL REFERENCES connections(id),
@@ -60,6 +67,7 @@ CREATE TABLE refreshes (
   unlisted INTEGER NOT NULL CHECK (unlisted BETWEEN 0 AND 9007199254740991),
   provider_stop_reason TEXT CHECK (provider_stop_reason IN ('authentication_failed','authentication_challenge','rate_limited','budget_exhausted')),
   has_accepted_evidence INTEGER NOT NULL CHECK (has_accepted_evidence IN (0,1)),
+
   CHECK ((skip_reason IS NULL) = (status <> 'skipped')),
   CHECK (status <> 'skipped' OR trigger = 'scheduled'),
   CHECK ((range_from IS NULL) = (range_to IS NULL)),
@@ -74,15 +82,19 @@ CREATE TABLE refreshes (
 CREATE UNIQUE INDEX refreshes_active ON refreshes(connection_id) WHERE status IN ('pending','running');
 CREATE UNIQUE INDEX refreshes_occurrence ON refreshes(connection_id, occurrence) WHERE occurrence IS NOT NULL;
 CREATE INDEX refreshes_connection ON refreshes(connection_id, created_at, id);
+
 CREATE TABLE refresh_windows (
   refresh_id TEXT NOT NULL REFERENCES refreshes(id) ON DELETE CASCADE,
   range_from TEXT NOT NULL,
   range_to TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('pending','running','completed','partial','failed')),
   has_accepted_evidence INTEGER NOT NULL CHECK (has_accepted_evidence IN (0,1)),
+
   PRIMARY KEY (refresh_id, range_from),
   CHECK (range_from <= range_to)
 ) STRICT;
+
+-- Runs and transactions
 CREATE TABLE sync_runs (
   id TEXT PRIMARY KEY NOT NULL,
   connection_id TEXT NOT NULL REFERENCES connections(id),
@@ -99,6 +111,7 @@ CREATE TABLE sync_runs (
   metadata_json TEXT NOT NULL CHECK (json_valid(metadata_json))
 ) STRICT;
 CREATE INDEX sync_runs_refresh ON sync_runs(refresh_id);
+
 CREATE TABLE transactions (
   id TEXT PRIMARY KEY NOT NULL,
   connection_id TEXT NOT NULL REFERENCES connections(id),
@@ -109,34 +122,41 @@ CREATE TABLE transactions (
   identity_strength TEXT NOT NULL CHECK (identity_strength IN ('native','weak','ambiguous')),
   status TEXT NOT NULL CHECK (status IN ('pending','posted')),
   presence TEXT NOT NULL CHECK (presence IN ('seen','not_returned','removed')),
+
   description TEXT,
   counterparty_name TEXT,
   kind TEXT NOT NULL CHECK (kind IN ('purchase','refund','income','transfer','fee','interest','cash_withdrawal','unknown')),
   merchant_name TEXT,
   merchant_provider_id TEXT,
   merchant_category_code TEXT CHECK (merchant_category_code IS NULL OR merchant_category_code GLOB '[0-9][0-9][0-9][0-9]'),
+
   transaction_date TEXT,
   booking_date TEXT,
   billing_date TEXT,
+
   amount_minor INTEGER CHECK (amount_minor BETWEEN -9007199254740991 AND 9007199254740991),
   currency TEXT CHECK (currency IS NULL OR currency GLOB '[A-Z][A-Z][A-Z]'),
   amount_basis TEXT NOT NULL CHECK (amount_basis IN ('booked_entry','authorization','purchase_commitment','unknown')),
   original_amount_minor INTEGER CHECK (original_amount_minor BETWEEN -9007199254740991 AND 9007199254740991),
   original_currency TEXT CHECK (original_currency IS NULL OR original_currency GLOB '[A-Z][A-Z][A-Z]'),
   installment_count INTEGER CHECK (installment_count BETWEEN 0 AND 9007199254740991),
+
   card_present INTEGER CHECK (card_present IN (0,1)),
   authorization_method TEXT CHECK (authorization_method IN ('chip','contactless','keyed_in','online','swipe')),
   wallet TEXT CHECK (wallet IN ('apple_pay','google_pay','samsung_pay')),
   three_d_secure_used INTEGER CHECK (three_d_secure_used IN (0,1)),
   recurring INTEGER CHECK (recurring IN (0,1)),
+
   purchase_id TEXT,
   installment_number INTEGER CHECK (installment_number BETWEEN 1 AND 9007199254740991),
   provider_transaction_code TEXT,
   fx_fee_minor INTEGER CHECK (fx_fee_minor BETWEEN -9007199254740991 AND 9007199254740991),
   fx_fee_currency TEXT CHECK (fx_fee_currency IS NULL OR fx_fee_currency GLOB '[A-Z][A-Z][A-Z]'),
+
   first_seen_at TEXT NOT NULL,
   version INTEGER NOT NULL CHECK (version BETWEEN 1 AND 9007199254740991),
   superseded_by_id TEXT REFERENCES transactions(id),
+
   transaction_date_time TEXT,
   merchant_address_line TEXT,
   merchant_phone TEXT,
@@ -146,6 +166,7 @@ CREATE TABLE transactions (
   currency_exchange_json TEXT CHECK (currency_exchange_json IS NULL OR json_valid(currency_exchange_json)),
   source_issues_json TEXT NOT NULL CHECK (json_valid(source_issues_json)),
   provider_json TEXT NOT NULL CHECK (json_valid(provider_json)),
+
   UNIQUE (connection_id, id),
   FOREIGN KEY (connection_id, card_id) REFERENCES cards(connection_id, id),
   FOREIGN KEY (connection_id, purchase_id) REFERENCES transactions(connection_id, id) ON DELETE RESTRICT,
@@ -159,12 +180,14 @@ CREATE INDEX transactions_purchase ON transactions(connection_id, purchase_id);
 CREATE INDEX transactions_date ON transactions(transaction_date);
 CREATE INDEX transactions_merchant_name ON transactions(merchant_name);
 CREATE INDEX transactions_status ON transactions(status);
+
 CREATE TABLE transaction_observations (
   transaction_id TEXT PRIMARY KEY NOT NULL REFERENCES transactions(id),
   last_seen_at TEXT NOT NULL,
   last_seen_run_id TEXT NOT NULL REFERENCES sync_runs(id),
   source_refs_json TEXT NOT NULL CHECK (json_valid(source_refs_json))
 ) STRICT;
+
 CREATE TABLE transaction_reconciliation (
   transaction_id TEXT PRIMARY KEY NOT NULL REFERENCES transactions(id),
   payment_context_conflicts_json TEXT CHECK (payment_context_conflicts_json IS NULL OR json_valid(payment_context_conflicts_json)),
@@ -176,17 +199,22 @@ CREATE TABLE transaction_reconciliation (
   provider_billing_month_json TEXT CHECK (provider_billing_month_json IS NULL OR json_valid(provider_billing_month_json)),
   provider_currency_mapping_json TEXT CHECK (provider_currency_mapping_json IS NULL OR json_valid(provider_currency_mapping_json))
 ) STRICT;
+
 CREATE TABLE transaction_posting_links (
   transaction_id TEXT PRIMARY KEY NOT NULL REFERENCES transactions(id),
   posting_link_json TEXT CHECK (posting_link_json IS NULL OR json_valid(posting_link_json))
 ) STRICT;
+
+-- Retained evidence, annotations and the event feed
 CREATE TABLE sync_run_bodies (
   run_id TEXT PRIMARY KEY NOT NULL REFERENCES sync_runs(id),
   snapshot_json TEXT NOT NULL CHECK (json_valid(snapshot_json)),
   retention TEXT NOT NULL CHECK (retention IN ('staged','debug')),
   expires_at TEXT,
+
   CHECK ((retention = 'debug' AND expires_at IS NOT NULL) OR retention = 'staged')
 ) STRICT;
+
 CREATE TABLE deferred_evidence (
   id TEXT PRIMARY KEY NOT NULL,
   connection_id TEXT NOT NULL REFERENCES connections(id),
@@ -197,12 +225,14 @@ CREATE TABLE deferred_evidence (
   first_seen_run_id TEXT NOT NULL REFERENCES sync_runs(id),
   last_seen_run_id TEXT NOT NULL REFERENCES sync_runs(id)
 ) STRICT;
+
 CREATE TABLE annotations (
   transaction_id TEXT PRIMARY KEY NOT NULL REFERENCES transactions(id),
   version INTEGER NOT NULL CHECK (version BETWEEN 1 AND 9007199254740991),
   data_json TEXT NOT NULL CHECK (json_valid(data_json)),
   updated_at TEXT NOT NULL
 ) STRICT;
+
 CREATE TABLE events (
   id INTEGER PRIMARY KEY AUTOINCREMENT CHECK (id BETWEEN 1 AND 9007199254740991),
   connection_id TEXT NOT NULL REFERENCES connections(id),
@@ -215,6 +245,8 @@ CREATE TABLE events (
   after_json TEXT CHECK (after_json IS NULL OR json_valid(after_json))
 ) STRICT;
 CREATE INDEX events_connection ON events(connection_id, id);
+
+-- Operational state
 CREATE TABLE provider_credentials (
   connection_id TEXT PRIMARY KEY NOT NULL REFERENCES connections(id),
   provider TEXT NOT NULL,
@@ -225,6 +257,7 @@ CREATE TABLE provider_credentials (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 ) STRICT;
+
 CREATE TABLE scheduled_collections (
   occurrence TEXT PRIMARY KEY NOT NULL,
   scheduled_at TEXT NOT NULL,
@@ -232,15 +265,18 @@ CREATE TABLE scheduled_collections (
   lease_until TEXT NOT NULL
 ) STRICT;
 CREATE INDEX scheduled_collections_scheduled_at ON scheduled_collections(scheduled_at);
+
 CREATE TABLE settings (
   name TEXT PRIMARY KEY NOT NULL,
   value TEXT NOT NULL
 ) STRICT;
+
 CREATE TABLE collection_leases (
   connection_id TEXT PRIMARY KEY NOT NULL,
   holder TEXT NOT NULL CHECK (length(holder) BETWEEN 1 AND 64),
   expires_at INTEGER NOT NULL CHECK (expires_at BETWEEN 0 AND 9007199254740991)
 ) STRICT;
+
 CREATE TABLE event_subscriptions (
   id TEXT PRIMARY KEY NOT NULL,
   generation INTEGER NOT NULL CHECK (generation BETWEEN 1 AND 9007199254740991),

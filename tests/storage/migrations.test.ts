@@ -414,4 +414,24 @@ describe.skipIf(!postgresUrl)("numbered migrations: postgres", () => {
       await database.drop();
     }
   });
+
+  it("refuses a session whose dates would not read back as ISO text, creating nothing", async () => {
+    const database = await disposableDatabase(postgresUrl!, "fonds_datestyle");
+    const pool = new Pool({
+      connectionString: database.url,
+      options: `${database.options} -c DateStyle=SQL,DMY`,
+    });
+    try {
+      await expect(initializePostgresDatabase(pool)).rejects.toThrow(
+        "DateStyle ISO",
+      );
+      expect(
+        (await pool.query("SELECT to_regnamespace('financial') AS name"))
+          .rows[0]?.name,
+      ).toBeNull();
+    } finally {
+      await pool.end();
+      await database.drop();
+    }
+  });
 });

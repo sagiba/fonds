@@ -4,6 +4,7 @@ import { InvalidInputError } from "../domain/errors.js";
 import {
   amountBasisSchema,
   authorizationMethodSchema,
+  calendarDateSchema,
   CANONICAL_TEXT_MAX_LENGTH,
   currencySchema,
   kindSchema,
@@ -27,8 +28,8 @@ export const filtersSchema = z
     merchantName: z.string().min(1).max(CANONICAL_TEXT_MAX_LENGTH).optional(),
     merchantCategoryCode: merchantCategoryCodeSchema.optional(),
     dateRole: z.enum(["transaction", "booking", "billing"]).optional(),
-    from: z.iso.date().optional(),
-    to: z.iso.date().optional(),
+    from: calendarDateSchema.optional(),
+    to: calendarDateSchema.optional(),
     currency: currencySchema.optional(),
     amountBasis: amountBasisSchema.optional(),
     kind: kindSchema.optional(),
@@ -65,7 +66,7 @@ export const pageSchema = filtersSchema.safeExtend({
   limit: pageLimitSchema,
   after: z
     .object({
-      transactionDate: z.iso.date().nullable(),
+      transactionDate: calendarDateSchema.nullable(),
       id: resourceIdSchema,
     })
     .strict()
@@ -127,7 +128,7 @@ export function decodeCursor(kind: CursorKind, cursor: string): number {
 
 /** Browsing lists and the sort tuple each keyset cursor carries. */
 const keysetSchemas = {
-  transactions: z.tuple([z.iso.date().nullable(), resourceIdSchema]),
+  transactions: z.tuple([calendarDateSchema.nullable(), resourceIdSchema]),
   cards: z.tuple([z.string().min(1), resourceIdSchema]),
   accounts: z.tuple([z.string().min(1), resourceIdSchema]),
   sync_runs: z.tuple([z.string().min(1), resourceIdSchema]),
