@@ -44,6 +44,8 @@ interface TransportScenario {
   failure?: Error;
   signal?: AbortSignal;
   limits?: { timeoutMs?: number; maxResponseBytes?: number };
+  /** Keep the provider's default retry budget instead of a single attempt. */
+  retries?: boolean;
 }
 
 function calTransport(scenario: TransportScenario) {
@@ -76,7 +78,9 @@ function calTransport(scenario: TransportScenario) {
   const transport = createCalTransport({
     fetch: request,
     ...(scenario.signal ? { signal: scenario.signal } : {}),
-    limits: { ...scenario.limits, maxAttempts: 1 },
+    limits: scenario.retries
+      ? { ...scenario.limits }
+      : { ...scenario.limits, maxAttempts: 1 },
   });
   return {
     request,
@@ -416,6 +420,8 @@ const providers = [
         rows: [calComponent("2", "11")],
         retained: { comments: [{ value: "note", key: "Synthetic" }] },
       },
+      // Rows replayed without aggregate evidence must not disturb it either.
+      replays: [{ rows: [calComponent("1", "10")] }],
       correction: {
         rows: [calComponent("2", "12")],
       },
@@ -533,8 +539,8 @@ describe.each(providers)("$name shared provider contracts", (provider) => {
   });
 
   it("merges overlapping components quietly and replaces a correction", () => {
-    const { first, second, correction, mergedCount, correctedRows } =
-      provider.mergeFixture();
+    const fixture = provider.mergeFixture();
+    const { first, second, correction, mergedCount, correctedRows } = fixture;
     const merged = provider.merge(first, second);
     expect(merged.rows).toHaveLength(mergedCount);
     expect(provider.merge(provider.merge(merged, first), second)).toEqual(
@@ -543,6 +549,9 @@ describe.each(providers)("$name shared provider contracts", (provider) => {
     const corrected = provider.merge(merged, correction);
     expect(corrected.rows).toEqual(correctedRows);
     expect(provider.merge(corrected, first)).toEqual(corrected);
+    for (const replay of "replays" in fixture ? fixture.replays : []) {
+      expect(provider.merge(corrected, replay)).toEqual(corrected);
+    }
   });
 
   it.each([
@@ -560,6 +569,8 @@ describe.each(providers)("$name shared provider contracts", (provider) => {
         text,
         headers,
         limits: { maxResponseBytes },
+        // An oversized body is final even when the budget allows retries.
+        retries: true,
       });
       const result = run();
       await expect(result).rejects.toMatchObject({ code: "invalid_response" });
