@@ -2033,9 +2033,10 @@ export function planRun(
         // facts restates nothing new, though their lines can conflict with them.
         const priorRestatement = awaitsRestatement(previous);
         // A capture whose own plan facts conflict leaves its count unknown on
-        // purpose: when nothing else about the purchase changes, that is
-        // neither a restatement nor a count to keep.
+        // purpose: without an unresolved earlier restatement, that is neither
+        // a new restatement nor a count to keep when the purchase role agrees.
         const conflictingPlan =
+          !priorRestatement &&
           input.installmentCount === null &&
           input.details.issues.includes("conflicting_installment_facts") &&
           input.kind === previous.kind &&

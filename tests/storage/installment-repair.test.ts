@@ -1080,24 +1080,50 @@ describe.each(backends)("%s installment repair", (backend) => {
     expect(await db.listEvents()).toEqual(events);
   });
 
-  it("holds accepted purchase money after an explicit single-payment contradiction until explicit plan resolution", async () => {
-    await capture(10, [purchase(5), line(1)]);
-    await capture(11, [{ ...purchase(1), amountMinor: -15000 }]);
-    expect((await parent()).amountMinor).toBe(-12500);
-    await capture(12, [{ ...purchase(), amountMinor: -17000 }]);
-    expect(await parent()).toMatchObject({
-      installmentCount: 5,
-      amountMinor: -12500,
-    });
-    expect((await parent()).sourceIssues).toContain(
-      "conflicting_installment_plan",
-    );
-    await capture(13, [{ ...purchase(5), amountMinor: -17000 }]);
-    expect((await parent()).amountMinor).toBe(-17000);
-    expect((await parent()).sourceIssues).not.toContain(
-      "conflicting_installment_plan",
-    );
-  });
+  it.each(["unknown_installment_count", "conflicting_installment_facts"])(
+    "holds accepted purchase money through %s after a single-payment contradiction until explicit plan resolution",
+    async (issue) => {
+      await capture(10, [purchase(5), line(1)]);
+      await capture(11, [{ ...purchase(1), amountMinor: -15000 }]);
+      expect((await parent()).amountMinor).toBe(-12500);
+      const unresolved = {
+        ...purchase(),
+        amountMinor: -17000,
+        details: { ...emptyDetails(), issues: [issue] },
+      };
+      await capture(12, [unresolved]);
+      expect(await parent()).toMatchObject({
+        installmentCount: 5,
+        amountMinor: -12500,
+      });
+      expect((await parent()).sourceIssues).toContain(
+        "conflicting_installment_plan",
+      );
+      expect((await parent()).sourceIssues).toContain(
+        "conflicting_installment_restatement",
+      );
+      await expectBilling(["line-1"], -2500);
+      const before = await parent();
+      const events = await db.listEvents();
+      for (const day of [13, 14]) {
+        await capture(day, [unresolved]);
+        expect(await parent()).toMatchObject({
+          id: before.id,
+          version: before.version,
+          installmentCount: 5,
+          amountMinor: -12500,
+          sourceIssues: before.sourceIssues,
+        });
+        expect(await db.listEvents()).toEqual(events);
+        await expectBilling(["line-1"], -2500);
+      }
+      await capture(15, [{ ...purchase(5), amountMinor: -17000 }]);
+      expect((await parent()).amountMinor).toBe(-17000);
+      expect((await parent()).sourceIssues).not.toContain(
+        "conflicting_installment_plan",
+      );
+    },
+  );
 });
 
 describe.each(backends)(
