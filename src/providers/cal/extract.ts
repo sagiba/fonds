@@ -736,6 +736,35 @@ function extractGroup(
     issues.push("conflicting_original_currency");
     originalCurrency = null;
   }
+  // The original-amount texts restate the structured original money, whether
+  // or not it is published; a text naming another currency or amount leaves
+  // it, and any conversion from it, unknown.
+  let originalConflict = false;
+  if (originalCurrency !== null) {
+    const structured = rows.map((item) =>
+      money(item.trnAmt, originalCurrency!, []),
+    );
+    const texts = stated(rows).flatMap(({ parsed }) => {
+      const text = statedOriginal(parsed);
+      return text === null ? [] : [text];
+    });
+    if (texts.some((text) => text.currency !== originalCurrency)) {
+      issues.push("conflicting_original_currency");
+      originalConflict = true;
+    } else if (
+      texts.some((text) =>
+        structured.some(
+          (amount) => amount !== null && Math.abs(amount) !== text.amountMinor,
+        ),
+      )
+    ) {
+      issues.push("conflicting_original_amount");
+      originalConflict = true;
+    }
+    if (originalConflict) {
+      originalCurrency = null;
+    }
+  }
   if (
     role.kind !== "single" &&
     originalCurrency !== null &&
@@ -774,25 +803,6 @@ function extractGroup(
             : originals[0]!;
     } else {
       issues.push("conflicting_original_amount");
-    }
-  }
-  // The original-amount texts restate the original money; a text that names
-  // another currency or amount leaves it, and any conversion from it, unknown.
-  let originalConflict = false;
-  if (originalAmountMinor !== null && originalCurrency !== null) {
-    const unsigned = Math.abs(originalAmountMinor);
-    const texts = stated(rows).flatMap(({ parsed }) => {
-      const text = statedOriginal(parsed);
-      return text === null ? [] : [text];
-    });
-    if (texts.some((text) => text.currency !== originalCurrency)) {
-      issues.push("conflicting_original_currency");
-      originalAmountMinor = null;
-      originalConflict = true;
-    } else if (texts.some((text) => text.amountMinor !== unsigned)) {
-      issues.push("conflicting_original_amount");
-      originalAmountMinor = null;
-      originalConflict = true;
     }
   }
   if (originalAmountMinor === null) {

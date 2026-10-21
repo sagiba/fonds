@@ -414,6 +414,18 @@ describe("CAL FX", () => {
     expect(result.details.issues).toContain("conflicting_original_currency");
   });
 
+  it("publishes no conversion on a zero-billed row whose original-amount text names another currency", () => {
+    const row = templateRow("FX-ONE-STEP");
+    Object.assign(row, {
+      amountForDisplay: 0,
+      amtBeforeConvAndIndex: 0,
+      transTypeCommentDetails: ["\u200fסכום העסקה - \u200e$50\u200f"],
+    });
+    const result = extractOne(row);
+    expect(result.details.currencyExchange).toBeUndefined();
+    expect(result.details.issues).toContain("conflicting_original_currency");
+  });
+
   it("rounds half up before comparing", () => {
     // 3 EUR × 3.335 = 10.005 → 10.01, so 10.00 is still within one unit and 9.99 is not.
     for (const [billed, reconciles] of [
