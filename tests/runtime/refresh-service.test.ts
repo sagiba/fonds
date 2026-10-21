@@ -1452,11 +1452,8 @@ describe("refresh service", () => {
       status: "failed",
       finishedAt: expect.any(String),
     });
-    expect(writes.at(-1)).toMatchObject({
-      window: { status: "failed" },
-      status: "failed",
-      finishedAt: expect.any(String),
-    });
+    // The first terminal checkpoint is final: no later write changes it.
+    expect(writes.at(-1)).toEqual(checkpoint);
 
     await db.client.execute("DELETE FROM refresh_windows");
     await db.client.execute("DELETE FROM refreshes");
