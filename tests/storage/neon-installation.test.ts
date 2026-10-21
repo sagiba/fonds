@@ -70,7 +70,7 @@ describe.skipIf(!postgresUrl)("Neon installation binding", () => {
     vi.spyOn(process.stderr, "write").mockReturnValue(true);
     expect(
       await runPostgresCommand(
-        ["init", "--connection", "cal-neon", "--provider", "cal"],
+        ["init"],
         { ...env, FONDS_DATABASE_URL: connectionString },
         undefined,
       ),

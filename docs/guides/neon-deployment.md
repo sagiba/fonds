@@ -355,7 +355,7 @@ npm run neon:smoke -- --env-file "$FONDS_ENV" --refresh
 ### Add a stored connection
 
 Another connection is added from the operator's machine, in the repository root,
-with the PostgreSQL target's `init` and `connect` against the Neon database.
+with the PostgreSQL target's `connect` against the initialized Neon database.
 Setup generates `FONDS_CREDENTIALS_KEY` with the env file's other secrets.
 
 1. Build the PostgreSQL target and hold the branch's direct connection string
@@ -373,8 +373,7 @@ Setup generates `FONDS_CREDENTIALS_KEY` with the env file's other secrets.
    `--env-file` supplies the secrets and `FONDS_CREDENTIALS_KEY`:
 
    ```sh
-   node --env-file="$FONDS_ENV" dist/targets/postgres/server.js init --connection cal-second --provider cal
-   node --env-file="$FONDS_ENV" dist/targets/postgres/server.js connect --connection cal-second
+   node --env-file="$FONDS_ENV" dist/targets/postgres/server.js connect cal --name cal-second
    unset FONDS_DATABASE_URL
    ```
 
@@ -382,7 +381,7 @@ Setup generates `FONDS_CREDENTIALS_KEY` with the env file's other secrets.
    scheduled run refreshes the connection.
 
 Keep the key: credentials stored under another key cannot be decrypted, and each
-connection then needs `connect` again.
+connection then needs `connect --connection ID` again.
 
 ## Verification and client connection
 

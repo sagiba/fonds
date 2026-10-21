@@ -153,7 +153,10 @@ describe("one operator CLI for every backend", () => {
     async (name) => {
       const sqlite = await entryPoints.sqlite([name, "--help"]);
       expect(sqlite).toMatchObject({ status: EXIT_CODES.ok, stderr: "" });
-      expect(await entryPoints.postgres([name, "--help"])).toEqual(sqlite);
+      expect(await entryPoints.postgres([name, "--help"])).toEqual({
+        ...sqlite,
+        stdout: sqlite.stdout.replace("  --db <string>\n", ""),
+      });
     },
   );
 
@@ -252,6 +255,11 @@ describe("collect on SQLite", () => {
   const run = (...args: string[]) =>
     entryPoints.sqlite([...args, "--db", dbPath]);
 
+  async function seedConnection(id: string, provider: string) {
+    expect((await run("init")).status).toBe(0);
+    return run("connect", provider, "--name", id, "--offline");
+  }
+
   async function connect(connection: string, username: string) {
     const path = join(directory, `${connection}.json`);
     writeFileSync(
@@ -278,9 +286,7 @@ describe("collect on SQLite", () => {
   }
 
   it("reports a failed discovery of stored connections as a failed run", async () => {
-    expect(
-      (await run("init", "--connection", "first", "--provider", "cal")).status,
-    ).toBe(0);
+    expect((await seedConnection("first", "cal")).status).toBe(0);
     const base = sqliteBackend();
     const failing: OperatorBackend = {
       ...base,
@@ -317,7 +323,7 @@ describe("collect on SQLite", () => {
   });
 
   it("offers bounded sync diagnostics only when requested and validates archive duration", async () => {
-    await run("init", "--connection", "diagnostic", "--provider", "cal");
+    await seedConnection("diagnostic", "cal");
     await connect("diagnostic", "INVENTED-DIAGNOSTIC");
     const first = await run("refresh", "--connection", "diagnostic");
     expect(first.status).toBe(EXIT_CODES.ok);
@@ -394,7 +400,7 @@ describe("collect on SQLite", () => {
 
   it("summarizes every refresh's failure codes as one sorted list", async () => {
     for (const connection of ["first", "second", "third"]) {
-      await run("init", "--connection", connection, "--provider", "cal");
+      await seedConnection(connection, "cal");
     }
     await connect("first", "INVENTED-NETWORK_ERROR");
     await connect("second", "INVENTED-RATE_LIMITED-NETWORK_ERROR");
@@ -424,10 +430,7 @@ describe("collect on SQLite", () => {
 
   it("prints one summary shape for every stored connection and for one", async () => {
     for (const connection of ["first", "second", "without-credentials"]) {
-      expect(
-        (await run("init", "--connection", connection, "--provider", "cal"))
-          .status,
-      ).toBe(0);
+      expect((await seedConnection(connection, "cal")).status).toBe(0);
     }
     await connect("first", "INVENTED-FIRST");
     await connect("second", "INVENTED-SECOND");

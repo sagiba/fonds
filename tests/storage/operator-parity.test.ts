@@ -48,9 +48,11 @@ async function capture(work: () => Promise<number>) {
 // The same command sequence on both backends, from a fresh state directory and
 // database each: every command's exit code, output and message must agree.
 const scenario: string[][] = [
-  ["init", "--connection", "parity", "--provider", "cal"],
-  ["init", "--connection", "parity", "--provider", "cal"],
-  ["init", "--connection", "other", "--provider", "unknown-provider"],
+  ["init"],
+  ["init"],
+  ["connect", "cal", "--name", "parity", "--offline"],
+  ["connect", "cal", "--name", "parity", "--offline"],
+  ["connect", "unknown-provider", "--name", "other", "--offline"],
   ["list-connections"],
   ["get-connection", "--connection-id", "parity"],
   ["connect", "--connection", "missing"],

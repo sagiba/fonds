@@ -59,7 +59,7 @@ function runtimePath(optionValue: string): string {
 function requireExistingDatabase(path: string): void {
   if (path !== ":memory:" && !existsSync(path)) {
     throw new CliError(
-      `No Fonds database at ${path}; create it with init, or try demo.`,
+      `No Fonds database at ${path}; run fonds init first, or try fonds demo.`,
     );
   }
 }
@@ -124,8 +124,7 @@ export function sqliteBackend(
       : runtimePath(db);
   };
   // Resolved at most once per process, and only by a command that needs it;
-  // a command that may create the database (init, ingest, demo) may create the
-  // state too.
+  // Only a new database may create state; an existing ledger needs its original secrets.
   let resolved: Promise<Installation> | undefined;
   const installation = (create: boolean) =>
     (resolved ??= resolveInstallation(stateDirectory(), { create }));
@@ -148,14 +147,17 @@ postgresql:// FONDS_DATABASE_URL makes fonds use PostgreSQL instead.`,
     forbiddenDirectory: repositoryRoot,
     async open(globals, mode) {
       const path = databasePath(globals.db);
-      if (mode.credentials) {
-        validatePrivateDatabase(path);
-      }
       if (!mode.create) {
         requireExistingDatabase(path);
       }
+      if (mode.credentials) {
+        validatePrivateDatabase(path);
+      }
       return {
-        ...(await openSqliteSession(path, await installation(mode.create))),
+        ...(await openSqliteSession(
+          path,
+          await installation(mode.create && !existsSync(path)),
+        )),
         // Journal files a collection created must be as private as the ledger.
         verify: () => validatePrivateDatabase(path),
       };

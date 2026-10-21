@@ -66,6 +66,7 @@ interface Field {
   kind: FieldKind;
   required: boolean;
   nullable: boolean;
+  choices?: string[];
 }
 
 /** Zod's published union of its schema kinds, discriminated by `def.type`. */
@@ -98,6 +99,9 @@ function fieldOf(key: string, schema: Schema): Field {
     kind: valueKind(key, current),
     required,
     nullable,
+    ...(current._zod.def.type === "enum" && {
+      choices: Object.values(current._zod.def.entries).map(String),
+    }),
   };
 }
 
@@ -203,9 +207,20 @@ export function operationInput(
   definition: OperationDefinition,
   values: Readonly<Record<string, string | undefined>>,
 ): Record<string, unknown> {
+  if (
+    values.connection !== undefined &&
+    values["connection-id"] !== undefined
+  ) {
+    throw new CommandInputError(
+      "Use either --connection or --connection-id, not both.",
+    );
+  }
   const input: Record<string, unknown> = {};
   for (const field of operationFields(definition)) {
-    const text = values[field.flag];
+    const text =
+      field.key === "connectionId"
+        ? (values.connection ?? values[field.flag])
+        : values[field.flag];
     if (text !== undefined) {
       input[field.key] = fieldValue(field, text);
     } else if (field.required) {
@@ -222,12 +237,16 @@ export function operationInput(
 }
 
 export function operationOptions(definition: OperationDefinition) {
-  return Object.fromEntries(
+  const options = Object.fromEntries(
     operationFields(definition).map((field) => [
       field.flag,
       { type: "string" as const },
     ]),
   );
+  if ("connectionId" in definition.inputSchema.shape) {
+    options.connection = { type: "string" };
+  }
+  return options;
 }
 
 /** One line per operation command, derived from the contract. */
@@ -242,18 +261,34 @@ export function operationUsage(): string {
     .join("\n");
 }
 
-export function operationHelp(definition: OperationDefinition): string {
+export function operationHelp(
+  definition: OperationDefinition,
+  globals: GlobalOptions = {},
+): string {
   const fields = operationFields(definition)
     .map(
       (field) =>
-        `  --${field.flag} <${field.kind === "json" ? "JSON" : field.kind}>${
+        `  --${field.flag} <${field.choices?.join("|") ?? (field.kind === "json" ? "JSON" : field.kind)}>${
           field.required ? " (required)" : ""
         }${field.nullable ? " (empty text or JSON null clears)" : ""}`,
     )
     .join("\n");
   return `${kebab(definition.name)}${
     definition.readOnly ? "" : " (changes data)"
-  }\n${definition.description}\n${fields}\n`;
+  }\n${definition.description}\n${fields}\n${
+    "connectionId" in definition.inputSchema.shape
+      ? "  --connection <string> (alias for --connection-id)\n"
+      : ""
+  }${globalHelp(globals)}`;
+}
+
+export function globalHelp(globals: GlobalOptions): string {
+  return Object.entries(globals)
+    .map(
+      ([name, { type }]) =>
+        `  --${name}${type === "string" ? " <string>" : ""}\n`,
+    )
+    .join("");
 }
 
 /** Remote callers present a bearer from a private file, never from arguments. */
@@ -355,7 +390,7 @@ export async function runOperationCli(options: {
       ...options.globalOptions,
     });
     if (values.help) {
-      process.stdout.write(operationHelp(definition));
+      process.stdout.write(operationHelp(definition, options.globalOptions));
       return 0;
     }
     const input = operationInput(

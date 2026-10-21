@@ -41,7 +41,11 @@ import {
   type SyncDiagnosticSink,
 } from "../application/sync-diagnostics.js";
 import { cardDiscoverySchema } from "../domain/cards.js";
-import { InvalidInputError, NotFoundError } from "../domain/errors.js";
+import {
+  ConflictError,
+  InvalidInputError,
+  NotFoundError,
+} from "../domain/errors.js";
 import {
   editSchema,
   planAnnotation,
@@ -1192,22 +1196,28 @@ function buildStore<Db>(
       )[0];
       return `${latest}:${rows?.count ?? 0}`;
     },
-    ensureConnection: async (input) => {
+    ensureConnection: async (input, options = {}) => {
       const value = connectionInputSchema.parse(input);
       let row = await getConnection(value.id);
+      if (row && options.requireNew) {
+        throw new ConflictError("Connection already exists");
+      }
       if (!row) {
-        row =
-          (
-            await db.execute(
-              statements.insertConnection(db.root, {
-                id: value.id,
-                provider: value.provider,
-                displayName: value.displayName ?? value.id,
-                config: { schemaVersion: 1 },
-                createdAt: new Date().toISOString(),
-              }),
-            )
-          )[0] ?? (await requireConnection(value.id));
+        row = (
+          await db.execute(
+            statements.insertConnection(db.root, {
+              id: value.id,
+              provider: value.provider,
+              displayName: value.displayName ?? value.id,
+              config: { schemaVersion: 1 },
+              createdAt: new Date().toISOString(),
+            }),
+          )
+        )[0];
+        if (!row && options.requireNew) {
+          throw new ConflictError("Connection already exists");
+        }
+        row ??= await requireConnection(value.id);
       }
       if (row.provider !== value.provider) {
         throw new Error("Connection provider cannot change");

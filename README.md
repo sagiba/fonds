@@ -78,9 +78,9 @@ For the local CAL path, read [Your data stays yours](#your-data-stays-yours) and
 the [provider guide](docs/providers/cal.md) first. Then:
 
 ```sh
-fonds init --connection my-cal --provider cal
-fonds connect --connection my-cal
-fonds refresh --connection my-cal
+fonds init
+fonds connect cal
+fonds refresh
 fonds mcp-config
 ```
 
