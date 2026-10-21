@@ -1,7 +1,16 @@
 {
   "name": "fonds-finance",
   "version": "0.1.0-rc.2",
-  "description": "Fonds, a self-hosted personal financial evidence ledger: CLI, local HTTP/MCP server and hosted service on SQLite or PostgreSQL.",
+  "description": "Self-hosted ledger for your card transactions, connected to your AI assistant over MCP, a REST API and a CLI. Runs on SQLite or PostgreSQL.",
+  "keywords": [
+    "finance",
+    "transactions",
+    "ledger",
+    "self-hosted",
+    "mcp",
+    "sqlite",
+    "postgresql"
+  ],
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
