@@ -284,6 +284,30 @@ describe.each(backends)("%s installment repair", (backend) => {
     await expectBilling(["line-1"], -2500);
   });
 
+  it("still guards a plan when a capture with conflicting counts also restates its kind", async () => {
+    await capture(10, [purchase(4), line(1, 4)]);
+    await capture(11, [
+      {
+        ...purchase(),
+        kind: "refund",
+        amountMinor: 12500,
+        details: {
+          ...purchase().details,
+          issues: ["conflicting_installment_facts"],
+        },
+      },
+    ]);
+    const current = await parent();
+    expect(current).toMatchObject({
+      kind: "purchase",
+      amountMinor: -12500,
+      installmentCount: 4,
+    });
+    expect(current.sourceIssues).toContain(
+      "conflicting_installment_restatement",
+    );
+  });
+
   it("keeps a single-payment restatement stored before provenance until the source restates a plan", async () => {
     await capture(10, [purchase(5), line(1)]);
     const stored = await parent();
