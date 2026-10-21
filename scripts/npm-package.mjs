@@ -522,6 +522,8 @@ async function pack(stage) {
     await rm(join(postgres, file));
   }
   await cp(resolve(root, "deploy/npm/fonds.mjs"), join(stage, "fonds.mjs"));
+  // npmjs.com shows it, resolving its relative links against the repository.
+  await cp(resolve(root, "README.md"), join(stage, "README.md"));
   const manifestPath = join(stage, "package.json");
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
   delete manifest.private;
@@ -542,6 +544,7 @@ async function pack(stage) {
   const expected = [
     "LICENSE",
     "NOTICE",
+    "README.md",
     "THIRD_PARTY_NOTICES",
     "package.json",
     "npm-shrinkwrap.json",
