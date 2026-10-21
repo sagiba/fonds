@@ -256,6 +256,8 @@ describe("shared financial transaction schema", () => {
       { currency: "usd" },
       { currency: "ZZZ" },
       { bookingDate: "2040-02-30" },
+      { transactionDate: "0000-01-01" },
+      { billingDate: "0000-12-31" },
       { installmentCount: -1 },
     ]) {
       expect(
@@ -266,6 +268,14 @@ describe("shared financial transaction schema", () => {
       transactionInputSchema.safeParse({
         ...bankInput(),
         installmentCount: 0,
+      }).success,
+    ).toBe(true);
+    expect(
+      transactionInputSchema.safeParse({
+        ...bankInput(),
+        transactionDate: "0001-01-01",
+        bookingDate: "2040-02-29",
+        billingDate: "9999-12-31",
       }).success,
     ).toBe(true);
     expect(

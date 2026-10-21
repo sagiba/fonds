@@ -132,9 +132,9 @@ CREATE TABLE transactions (
   merchant_provider_id TEXT COLLATE "C",
   merchant_category_code TEXT COLLATE "C" CHECK (merchant_category_code IS NULL OR merchant_category_code ~ '^[0-9]{4}$'),
 
-  transaction_date TEXT COLLATE "C",
-  booking_date TEXT COLLATE "C",
-  billing_date TEXT COLLATE "C",
+  transaction_date DATE CHECK (transaction_date BETWEEN '0001-01-01' AND '9999-12-31'),
+  booking_date DATE CHECK (booking_date BETWEEN '0001-01-01' AND '9999-12-31'),
+  billing_date DATE CHECK (billing_date BETWEEN '0001-01-01' AND '9999-12-31'),
 
   amount_minor BIGINT CHECK (amount_minor BETWEEN -9007199254740991 AND 9007199254740991),
   currency TEXT COLLATE "C" CHECK (currency IS NULL OR currency ~ '^[A-Z]{3}$'),
