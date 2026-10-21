@@ -125,6 +125,29 @@ describe("CAL stated text", () => {
     expect(purchase.details.issues).toContain("conflicting_original_currency");
   });
 
+  it("bills a payment whose plan size only its texts state", () => {
+    const rows = extract(summary({ curPaymentNum: 2 }));
+    const line = rows.find((row) => row.purchaseKey !== undefined)!;
+    expect(line).toMatchObject({ installmentCount: 4, installmentNumber: 2 });
+    expect(
+      rows.find((row) => row.purchaseKey === undefined)!.installmentCount,
+    ).toBe(4);
+  });
+
+  it("leaves a plan's count unknown when a later payment states another", () => {
+    const rows = extract(
+      summary({ curPaymentNum: 1, numOfPayments: 4 }),
+      summary({
+        curPaymentNum: 2,
+        numOfPayments: 5,
+        debCrdDate: "2040-08-10T00:00:00",
+      }),
+    );
+    const purchase = rows.find((row) => row.purchaseKey === undefined)!;
+    expect(purchase.installmentCount).toBeNull();
+    expect(purchase.details.issues).toContain("conflicting_installment_facts");
+  });
+
   it("keeps a structured count that the texts restate", () => {
     const [purchase] = extract(summary({ numOfPayments: 4 }));
     expect(purchase!.installmentCount).toBe(4);

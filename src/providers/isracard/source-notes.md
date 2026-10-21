@@ -304,7 +304,7 @@ and every code had one label. That label is the evidence for a kind:
   standing-order flags and a transfer's bound `motavName` become typed facts; the
   name carries no role beyond the transfer. `presentCard` true becomes
   `cardPresent` true; false states nothing, and the other flags stay raw. An
-  all-zero merchant number or a phone-only city is not published. DigitalV3 `countryCode` is used only as a valid ISO
+  all-zero merchant number or a city without letters is not published. DigitalV3 `countryCode` is used only as a valid ISO
   3166-1 alpha-3 code. An absent optional detail preserves an unambiguously matched
   native transfer's prior counterparty name; a valid bound detail with an empty
   counterparty clears it.

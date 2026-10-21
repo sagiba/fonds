@@ -3,6 +3,7 @@ import { isLosslessNumber, parse } from "lossless-json";
 import { isCountryCode } from "../../domain/countries.js";
 import {
   emptyDetails,
+  isCityName,
   type JsonValue,
   transactionDateTimeSchema,
   type TransactionInput,
@@ -189,10 +190,10 @@ function merchantNumber(value: unknown): string | null {
   return number !== null && /^0+$/.test(number) ? null : number;
 }
 
-/** A city slot holding only a phone number names no city; it stays raw. */
+/** A city slot can hold a phone number instead; that value stays raw only. */
 function cityName(value: unknown): string | null {
   const city = text(value);
-  return city !== null && /^(?=.*\d)[\d\s+().-]+$/.test(city) ? null : city;
+  return city !== null && isCityName(city) ? city : null;
 }
 
 function flagged(value: unknown): boolean {

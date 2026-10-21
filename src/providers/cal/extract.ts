@@ -347,7 +347,14 @@ function cancellation(row: SourceRow): boolean {
 
 /** One billed payment of an installment plan (type 8, two or more payments). */
 function installmentPayment(row: SourceRow): boolean {
-  const count = ordinal(row.numOfPayments);
+  // Grouping needs a stated plan; the group resolves conflicting counts.
+  const texts = unique(
+    stated([row]).flatMap((item) =>
+      item.parsed?.template === "installment_count" ? [item.parsed.count] : [],
+    ),
+  );
+  const count =
+    ordinal(row.numOfPayments) ?? (texts.length === 1 ? texts[0]! : null);
   return (
     token(row.transactionTypeCode) === "8" &&
     row.refundInd === false &&
@@ -771,7 +778,8 @@ function extractGroup(
     }
   }
   // The original-amount texts restate the original money; a text that names
-  // another currency or amount leaves it unknown.
+  // another currency or amount leaves it, and any conversion from it, unknown.
+  let originalConflict = false;
   if (originalAmountMinor !== null && originalCurrency !== null) {
     const unsigned = Math.abs(originalAmountMinor);
     const texts = stated(rows).flatMap(({ parsed }) => {
@@ -781,9 +789,11 @@ function extractGroup(
     if (texts.some((text) => text.currency !== originalCurrency)) {
       issues.push("conflicting_original_currency");
       originalAmountMinor = null;
+      originalConflict = true;
     } else if (texts.some((text) => text.amountMinor !== unsigned)) {
       issues.push("conflicting_original_amount");
       originalAmountMinor = null;
+      originalConflict = true;
     }
   }
   if (originalAmountMinor === null) {
@@ -797,29 +807,25 @@ function extractGroup(
   const installments = rows
     .map((item) => ordinal(item.curPaymentNum, cancel))
     .filter((item): item is number => item !== null);
-  const structuredCount = ordinal(
-    status === "posted" ? row.numOfPayments : row.numberOfPayments,
-  );
-  // The installment texts state the planned count, including where the recent
-  // endpoint leaves the structured count null.
-  const statedCounts = unique(
-    stated(rows).flatMap((item) =>
+  // Every row states the planned count, structurally or in its installment
+  // texts; the recent endpoint can leave the structured count null.
+  const statedCounts = unique([
+    ...rows.flatMap((item) => {
+      const count = ordinal(
+        status === "posted" ? item.numOfPayments : item.numberOfPayments,
+      );
+      return count === null ? [] : [count];
+    }),
+    ...stated(rows).flatMap((item) =>
       item.parsed?.template === "installment_count" && item.parsed.count > 0
         ? [item.parsed.count]
         : [],
     ),
-  );
-  const countConflict =
-    statedCounts.length > 1 ||
-    (structuredCount !== null &&
-      statedCounts.length === 1 &&
-      statedCounts[0] !== structuredCount);
-  if (countConflict) {
+  ]);
+  if (statedCounts.length > 1) {
     issues.push("conflicting_installment_facts");
   }
-  const sourceCount = countConflict
-    ? null
-    : (structuredCount ?? statedCounts[0] ?? null);
+  const sourceCount = statedCounts.length === 1 ? statedCounts[0]! : null;
   if (
     sourceCount !== null &&
     installments.some((number) => number > sourceCount)
@@ -858,7 +864,8 @@ function extractGroup(
     rows.length === 1 &&
     !hasInstallmentComponents &&
     code !== "8" &&
-    (ordinal(row.numOfPayments) ?? 0) <= 1
+    (ordinal(row.numOfPayments) ?? 0) <= 1 &&
+    !originalConflict
       ? calForeignExchange(row, comments[0]!, {
           originalCurrency: resolveOriginalCurrency(row, []),
           billingCurrency: currency,

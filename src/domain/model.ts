@@ -513,6 +513,11 @@ export type StoredTransactionFacts = Omit<
   Pick<LedgerFacts, PaymentContextField>;
 
 /** Billed lines (a purchase link or an ordinal) are never pending/posted matched. */
+/** A merchant city names a place, so a value without any letter, such as a phone number, is none. */
+export function isCityName(value: string): boolean {
+  return /\p{L}/u.test(value);
+}
+
 export function isBilledLine(
   row: Pick<LedgerFacts, "purchaseId" | "installmentNumber">,
 ): boolean {

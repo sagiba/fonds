@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   collectionFailureCodeSchema,
   isBilledLine,
+  isCityName,
   jsonObjectSchema,
   paymentContextConflicts,
   type ReconciliationFailureCode,
@@ -386,13 +387,18 @@ function retainedEnrichment(
     return result;
   }
 
+  const merchant = retainFields(preferred.merchant, fallback.merchant, [
+    "address",
+    "phone",
+    "city",
+    "countryCode",
+  ]);
+  // A stored value that is no city name is not restored once a capture omits it.
   return {
-    merchant: retainFields(preferred.merchant, fallback.merchant, [
-      "address",
-      "phone",
-      "city",
-      "countryCode",
-    ]),
+    merchant:
+      merchant.city != null && !isCityName(merchant.city)
+        ? { ...merchant, city: preferred.merchant.city ?? null }
+        : merchant,
   };
 }
 
