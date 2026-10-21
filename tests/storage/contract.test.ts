@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { deliverFromStore } from "../../src/application/change-delivery.js";
 import {
@@ -270,6 +270,81 @@ for (const backend of backends) {
         expect(await all()).toHaveLength(2);
       },
     );
+
+    it("restores a removed row only from evidence captured after the removal decision", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        await capture(
+          [row("removed-native", { amountMinor: -700 })],
+          synthetic,
+          "seen",
+          {
+            capturedAt: "2040-08-01T00:00:00Z",
+          },
+        );
+        const seen = (await all())[0]!;
+        await db.editAnnotation({
+          transactionId: seen.id,
+          expectedVersion: 0,
+          notes: "Kept through removal",
+        });
+        vi.setSystemTime(new Date("2040-08-05T00:00:00Z"));
+        await db.confirmRemoval({
+          transactionId: seen.id,
+          expectedVersion: seen.version,
+          reason: "Owner verified a synthetic duplicate",
+        });
+        // Newer than the row's last evidence but not newer than the decision.
+        for (const capturedAt of [
+          "2040-08-03T00:00:00Z",
+          "2040-08-05T00:00:00Z",
+        ]) {
+          await capture(
+            [row("removed-native", { amountMinor: -700 })],
+            synthetic,
+            capturedAt,
+            {
+              capturedAt,
+            },
+          );
+          expect(await db.getTransaction(seen.id)).toMatchObject({
+            presence: "removed",
+            annotation: { data: { notes: "Kept through removal" } },
+          });
+        }
+        expect(await db.getTotals({ connectionId })).toMatchObject({
+          includedCount: 0,
+        });
+        await capture(
+          [row("removed-native", { amountMinor: -700 })],
+          synthetic,
+          "after",
+          {
+            capturedAt: "2040-08-06T00:00:00Z",
+          },
+        );
+        expect(await db.getTransaction(seen.id)).toMatchObject({
+          presence: "seen",
+          annotation: { data: { notes: "Kept through removal" } },
+        });
+        expect(await all()).toHaveLength(1);
+        expect(await db.getTotals({ connectionId })).toMatchObject({
+          includedCount: 1,
+        });
+        expect(
+          (await db.listEvents())
+            .filter((event) => event.transactionId === seen.id)
+            .map((event) => event.type),
+        ).toEqual([
+          "transaction.imported",
+          "annotation.updated",
+          "transaction.removed",
+          "transaction.restored",
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
 
     it("keeps explicit recent noncomparable evidence ordered by capture time", async () => {
       const adapter: SourceAdapter = {

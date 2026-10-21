@@ -8,7 +8,7 @@ import { checkStorageCoverage } from "./storage-coverage.mjs";
 // Update these floors only when deliberately removing/reorganizing coverage.
 export const requiredGroups = [
   ["backends.test.ts", "storage contract: libsql-http", 21],
-  ["contract.test.ts", "shared storage behavior: libsql-http", 16],
+  ["contract.test.ts", "shared storage behavior: libsql-http", 17],
   ["statement-counts.test.ts", "statement budgets: libsql-http", 9],
   ["auto-posting.test.ts", "libsql-http automatic posting and split", 67],
   ["billed-lines.test.ts", "libsql-http billed lines", 9],

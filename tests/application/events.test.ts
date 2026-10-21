@@ -345,6 +345,57 @@ describe("durable transaction event operations", () => {
     expect(sendSignedWebhook).toHaveBeenCalledTimes(24);
   });
 
+  it("revokes a failed delivery before retry without sending again or advancing its cursor", async () => {
+    const {
+      service,
+      rows,
+      changes,
+      change,
+      sendSignedWebhook,
+      grantCheck,
+      advance,
+    } = setup();
+    changes.push(change(1));
+    const { id } = await service.subscribe(principal, params);
+    changes.push(change(2));
+    sendSignedWebhook.mockResolvedValueOnce(
+      new Response(null, { status: 503 }),
+    );
+    expect(await service.deliver()).toEqual({
+      sent: 0,
+      acknowledged: 0,
+      failed: 1,
+    });
+    expect(sendSignedWebhook).toHaveBeenCalledOnce();
+    expect(rows.get(id)).toMatchObject({
+      status: "active",
+      reason: "retry_pending",
+      cursor: 1,
+      attempts: 1,
+      pendingBatch: { through: 2 },
+    });
+    grantCheck.mockResolvedValue(false);
+    grantCheck.mockClear();
+    advance(60_001);
+    expect(await service.deliver()).toEqual({
+      sent: 0,
+      acknowledged: 0,
+      failed: 0,
+    });
+    expect(grantCheck).toHaveBeenCalledExactlyOnceWith({
+      ownerId: "owner",
+      clientId: "client",
+    });
+    expect(sendSignedWebhook).toHaveBeenCalledOnce();
+    expect(rows.get(id)).toMatchObject({
+      status: "revoked",
+      reason: "access_revoked",
+      cursor: 1,
+      attempts: 1,
+      pendingBatch: { through: 2 },
+    });
+  });
+
   it("retains a retry boundary and body while newer changes wait for the next wake-up", async () => {
     const { service, changes, change, sendSignedWebhook, rows, advance } =
       setup();

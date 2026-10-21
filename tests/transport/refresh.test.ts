@@ -185,8 +185,11 @@ describe("optional owner refresh interfaces and request diagnostics", () => {
     ]);
     const { request } = setup({ refreshes: { start, startAll } });
     const path = `/v1/connections/${connectionId}/refreshes`;
-    expect((await request(path, "read", {})).status).toBe(403);
+    for (const deniedPath of [path, "/v1/refreshes"]) {
+      expect((await request(deniedPath, "read", {})).status).toBe(403);
+    }
     expect(start).not.toHaveBeenCalled();
+    expect(startAll).not.toHaveBeenCalled();
     const running = await request(path, "write", {});
     expect(running.status).toBe(202);
     expect(await running.json()).toEqual({
@@ -323,16 +326,19 @@ describe("optional owner refresh interfaces and request diagnostics", () => {
       isError: true,
       structuredContent: { error: { code: "not_found" } },
     });
-    expect(
-      await read.callTool({
-        name: "refresh_connection",
-        arguments: { connectionId },
-      }),
-    ).toMatchObject({
-      isError: true,
-      structuredContent: { error: { code: "forbidden" } },
-    });
+    for (const arguments_ of [{ connectionId }, {}]) {
+      expect(
+        await read.callTool({
+          name: "refresh_connection",
+          arguments: arguments_,
+        }),
+      ).toMatchObject({
+        isError: true,
+        structuredContent: { error: { code: "forbidden" } },
+      });
+    }
     expect(start).not.toHaveBeenCalled();
+    expect(startAll).not.toHaveBeenCalled();
     const write = await connect("write");
     expect(
       await write.callTool({
