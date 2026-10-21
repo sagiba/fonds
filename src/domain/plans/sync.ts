@@ -2047,11 +2047,17 @@ export function planRun(
         // Missing plan metadata is not a single-payment assertion. Keep the
         // known plan while accepting fresh purchase facts; explicit conflicts
         // keep accepted money and remain reviewable until the source restates
-        // a plan or the owner removes the lines.
+        // a plan or the owner removes the lines. Repeating accepted non-plan
+        // facts restates nothing new, though their lines can conflict with them.
+        const priorRestatement = awaitsRestatement(previous);
         const restated =
           planParents.has(previous.id) &&
           purchaseKey === null &&
-          inPerspective(input, "billing", false);
+          inPerspective(input, "billing", false) &&
+          (priorRestatement ||
+            !inPerspective(previous, "billing", false) ||
+            previous.installmentCount !== input.installmentCount ||
+            previous.installmentNumber !== input.installmentNumber);
         const unknownPlan =
           restated &&
           input.installmentCount === null &&
@@ -2059,7 +2065,6 @@ export function planRun(
           previous.kind === "purchase" &&
           input.amountBasis === "purchase_commitment" &&
           input.installmentNumber === null;
-        const priorRestatement = awaitsRestatement(previous);
         const accepted = withoutInstallmentFx(
           unknownPlan && !priorRestatement
             ? {
@@ -2217,18 +2222,8 @@ export function planRun(
       recentCutoff,
     );
   }
-  refreshInstallmentParents(plan, {
-    scopes: new Set(
-      extracted
-        .filter(({ result }) =>
-          result.partitions.some(
-            (part) => part.status === "posted" && part.success,
-          ),
-        )
-        .map(({ response }) => response.accountKey),
-    ),
-    contradicted: contradictedPlans,
-  });
+  // Accepted rows of a failed partition still change lines, so every parent is reevaluated.
+  refreshInstallmentParents(plan, contradictedPlans);
   refreshDuplicatePlans(plan);
   const afterRows = plan.orderedRows();
   const reviewRequiredIds: string[] = [];

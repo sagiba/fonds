@@ -468,6 +468,35 @@ describe.each(backends)("%s installment repair", (backend) => {
     ]);
   });
 
+  it("keeps line-count conflicts stable when a single-payment purchase is captured again", async () => {
+    const input = [purchase(1), line(1, 5)];
+    await capture(10, input);
+    const before = await parent();
+    expect(before.sourceIssues).toEqual([
+      "conflicting_installment_lines",
+      "conflicting_installment_plan",
+    ]);
+    const events = await db.listEvents();
+    expect(await capture(11, input)).toMatchObject({ created: 0, updated: 0 });
+    expect(await parent()).toMatchObject({
+      version: before.version,
+      sourceIssues: before.sourceIssues,
+    });
+    expect(await db.listEvents()).toEqual(events);
+  });
+
+  it("reevaluates line conflicts from accepted rows of a partly invalid capture", async () => {
+    await capture(10, [purchase(5), line(1, 6)]);
+    expect((await parent()).sourceIssues).toContain(
+      "conflicting_installment_lines",
+    );
+    await capture(11, [
+      line(1, 5),
+      { ...row("invalid"), amountMinor: 0.5 } as TransactionInput,
+    ]);
+    expect((await parent()).sourceIssues).toEqual([]);
+  });
+
   it("does not infer a count from the highest ordinal when every child count is unknown", async () => {
     await capture(10, [purchase()]);
     await capture(11, [purchase(), line(3, null)], true);

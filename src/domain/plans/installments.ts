@@ -141,16 +141,12 @@ function withLineEvidence(
  * Billed lines can fill unknown plan metadata without replacing newer purchase
  * money. Their explicit counts, not the number or sum of observed payments,
  * establish the plan size. This also repairs ledgers written by older policies.
- * Without `scopes`, every collection scope is refreshed. Returns each row it
- * changed, as it was before.
+ * `contradicted` names purchases a capture restated as a non-plan. Returns
+ * each row it changed, as it was before.
  */
 export function refreshInstallmentParents(
   plan: FinancialPlan,
-  options: {
-    scopes?: Set<string>;
-    /** Purchases this run restated as a non-plan. */
-    contradicted?: Set<string>;
-  } = {},
+  contradicted: ReadonlySet<string> = new Set(),
 ): Transaction[] {
   const children = billedLinesByPurchase(plan.rows.values());
   // The final removed line can resolve a derived conflict without another
@@ -165,7 +161,6 @@ export function refreshInstallmentParents(
     const parent = plan.transaction(id);
     if (
       !parent ||
-      (options.scopes && !options.scopes.has(parent.sourceScope)) ||
       parent.presence === "removed" ||
       parent.supersededById ||
       parent.purchaseId !== null
@@ -176,7 +171,7 @@ export function refreshInstallmentParents(
       withLineEvidence(
         parent,
         lines,
-        options.contradicted?.has(id) === true || awaitsRestatement(parent),
+        contradicted.has(id) || awaitsRestatement(parent),
       ),
       lines.length > 0,
     );
