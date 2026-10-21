@@ -195,15 +195,22 @@ for (const backend of backends) {
       const paused = new Promise<void>((resolve) => {
         release = resolve;
       });
+      let entered!: () => void;
+      const collecting = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
       const first: ProviderCollector = {
         provider: "cal",
         collectorVersion: "synthetic-v1",
         async *collect() {
+          entered();
           await paused;
           yield capture;
         },
       };
       const running = collectFromStore(db, { connectionId }, first, calAdapter);
+      // Remote drivers can answer the two connection reads in either order.
+      await collecting;
       await expect(
         collectFromStore(
           db,
@@ -817,100 +824,106 @@ for (const backend of backends) {
       ).toThrow("reversed");
     });
 
-    it("runs two complete synthetic billing years through CAL transport, streaming archive and extraction", async () => {
-      const cards = ["SYNTHETIC-CARD-A", "SYNTHETIC-CARD-B"];
-      let requests = 0;
-      const fetcher: typeof fetch = async (url, init) => {
-        requests++;
-        if (url === CAL_ENDPOINTS.login) {
-          return Response.json({ token: "SYNTHETIC-SECRET-TOKEN" });
-        }
-        if (url === CAL_ENDPOINTS.init) {
+    it(
+      "runs two complete synthetic billing years through CAL transport, streaming archive and extraction",
+      async () => {
+        const cards = ["SYNTHETIC-CARD-A", "SYNTHETIC-CARD-B"];
+        let requests = 0;
+        const fetcher: typeof fetch = async (url, init) => {
+          requests++;
+          if (url === CAL_ENDPOINTS.login) {
+            return Response.json({ token: "SYNTHETIC-SECRET-TOKEN" });
+          }
+          if (url === CAL_ENDPOINTS.init) {
+            return Response.json({
+              statusCode: 1,
+              result: {
+                bankAccounts: [{ bankAccountUniqueId: "synthetic-account" }],
+                cards: cards.map((cardUniqueId) => ({
+                  cardUniqueId,
+                  bankAccountUniqueId: "synthetic-account",
+                })),
+              },
+            });
+          }
+          if (url === CAL_ENDPOINTS.recent) {
+            return new Response(responseText);
+          }
+          expect(url).toBe(CAL_ENDPOINTS.monthly);
+          const body = JSON.parse(String(init?.body));
           return Response.json({
             statusCode: 1,
             result: {
-              bankAccounts: [{ bankAccountUniqueId: "synthetic-account" }],
-              cards: cards.map((cardUniqueId) => ({
-                cardUniqueId,
-                bankAccountUniqueId: "synthetic-account",
-              })),
+              bankAccounts: [
+                {
+                  debitDates: [
+                    {
+                      transactions: [
+                        {
+                          trnIntId: "SYNTHETIC-HISTORY",
+                          cardUniqueId: body.cardUniqueId,
+                          amtBeforeConvAndIndex: 15.4,
+                        },
+                      ],
+                    },
+                  ],
+                  immidiateDebits: { debitDays: [] },
+                },
+              ],
             },
           });
-        }
-        if (url === CAL_ENDPOINTS.recent) {
-          return new Response(responseText);
-        }
-        expect(url).toBe(CAL_ENDPOINTS.monthly);
-        const body = JSON.parse(String(init?.body));
-        return Response.json({
-          statusCode: 1,
-          result: {
-            bankAccounts: [
-              {
-                debitDates: [
-                  {
-                    transactions: [
-                      {
-                        trnIntId: "SYNTHETIC-HISTORY",
-                        cardUniqueId: body.cardUniqueId,
-                        amtBeforeConvAndIndex: 15.4,
-                      },
-                    ],
-                  },
-                ],
-                immidiateDebits: { debitDays: [] },
-              },
-            ],
+        };
+        const summary = await collectFromStore(
+          db,
+          {
+            connectionId,
+            range: { from: "2039-01-01", to: "2040-12-31" },
           },
+          {
+            provider: "cal",
+            collectorVersion: CAL_COLLECTOR_VERSION,
+            collect: (options) =>
+              collectCal({
+                ...options,
+                historyMode: "monthly",
+                fetch: fetcher,
+                credentials: {
+                  username: "SYNTHETIC-SECRET-USERNAME",
+                  password: "SYNTHETIC-SECRET-PASSWORD",
+                },
+              }),
+          },
+          calAdapter,
+        );
+        expect(summary).toMatchObject({
+          status: "partial",
+          captures: 49,
+          failures: 48,
+          created: 21,
         });
-      };
-      const summary = await collectFromStore(
-        db,
-        {
-          connectionId,
-          range: { from: "2039-01-01", to: "2040-12-31" },
-        },
-        {
-          provider: "cal",
-          collectorVersion: CAL_COLLECTOR_VERSION,
-          collect: (options) =>
-            collectCal({
-              ...options,
-              historyMode: "monthly",
-              fetch: fetcher,
-              credentials: {
-                username: "SYNTHETIC-SECRET-USERNAME",
-                password: "SYNTHETIC-SECRET-PASSWORD",
-              },
-            }),
-        },
-        calAdapter,
-      );
-      expect(summary).toMatchObject({
-        status: "partial",
-        captures: 49,
-        failures: 48,
-        created: 21,
-      });
-      expect(requests).toBe(51);
-      const runs = await readRuns(db);
-      expect(runs).toHaveLength(49);
-      const historical = runs.filter(
-        (run) => run.snapshot.responses[0]?.scope?.kind === "history",
-      );
-      expect(historical).toHaveLength(48);
-      expect(
-        new Set(
-          historical.map((run) => run.snapshot.responses[0]?.scope?.month),
-        ).size,
-      ).toBe(24);
-      expect(
-        historical.every((run) =>
-          run.warnings.includes("unsupported_monthly_rows:1"),
-        ),
-      ).toBe(true);
-      expect(JSON.stringify(runs)).not.toContain("SYNTHETIC-SECRET");
-      expect(await db.listTransactions()).toHaveLength(21);
-    });
+        expect(requests).toBe(51);
+        const runs = await readRuns(db);
+        expect(runs).toHaveLength(49);
+        const historical = runs.filter(
+          (run) => run.snapshot.responses[0]?.scope?.kind === "history",
+        );
+        expect(historical).toHaveLength(48);
+        expect(
+          new Set(
+            historical.map((run) => run.snapshot.responses[0]?.scope?.month),
+          ).size,
+        ).toBe(24);
+        expect(
+          historical.every((run) =>
+            run.warnings.includes("unsupported_monthly_rows:1"),
+          ),
+        ).toBe(true);
+        expect(JSON.stringify(runs)).not.toContain("SYNTHETIC-SECRET");
+        expect(await db.listTransactions()).toHaveLength(21);
+      },
+      // Local D1 runs each statement through workerd, far slower than the
+      // in-process drivers for two years of captures.
+      backend === "d1-local" ? 60_000 : undefined,
+    );
   });
 }
