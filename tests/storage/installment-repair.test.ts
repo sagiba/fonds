@@ -485,6 +485,16 @@ describe.each(backends)("%s installment repair", (backend) => {
     expect(await db.listEvents()).toEqual(events);
   });
 
+  it("treats a linked purchase recaptured as a refund as a restatement", async () => {
+    await capture(10, [purchase(), line(1, null)]);
+    await capture(11, [{ ...purchase(), kind: "refund", amountMinor: 12500 }]);
+    const current = await parent();
+    expect(current).toMatchObject({ kind: "purchase", amountMinor: -12500 });
+    expect(current.sourceIssues).toContain(
+      "conflicting_installment_restatement",
+    );
+  });
+
   it("reevaluates line conflicts from accepted rows of a partly invalid capture", async () => {
     await capture(10, [purchase(5), line(1, 6)]);
     expect((await parent()).sourceIssues).toContain(

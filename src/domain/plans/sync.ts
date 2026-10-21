@@ -2063,7 +2063,9 @@ export function planRun(
           (priorRestatement ||
             !inPerspective(previous, "billing", false) ||
             previous.installmentCount !== input.installmentCount ||
-            previous.installmentNumber !== input.installmentNumber);
+            previous.installmentNumber !== input.installmentNumber ||
+            previous.kind !== input.kind ||
+            previous.amountBasis !== input.amountBasis);
         const unknownPlan =
           restated &&
           input.installmentCount === null &&
