@@ -987,6 +987,68 @@ describe.each(backends)("collection lease on %s", (backend) => {
     expect(attempt).toEqual({ acquired: false });
   });
 
+  it("leaves evidence staged before a lost lease for the next holder to apply", async () => {
+    const runId = `${connectionId}:staged-before-loss`;
+    const failingOnce = {
+      ...synthetic,
+      extract: () => {
+        throw new Error("synthetic interruption after staging");
+      },
+    };
+    const lost = await db.withCollectionLock(
+      connectionId,
+      async (store) => {
+        await expect(
+          store.ingestRun(
+            {
+              runId,
+              connectionId,
+              responses: [
+                {
+                  accountKey: "account",
+                  endpoint: "synthetic:cal/recent",
+                  capturedAt: "2040-08-01T00:00:00Z",
+                  responseText: JSON.stringify([row("staged-native")]),
+                },
+              ],
+            },
+            failingOnce,
+          ),
+        ).rejects.toThrow("synthetic interruption");
+        // Another process took the lease, as after a missed renewal.
+        await db.raw(
+          "UPDATE collection_leases SET holder='synthetic-successor', expires_at=expires_at+600000 WHERE connection_id=?",
+          [connectionId],
+        );
+        await expect(store.applyRun(runId, synthetic)).rejects.toThrow();
+        return "lost";
+      },
+      { leaseMs: 2_000 },
+    );
+    expect(lost).toEqual({ acquired: true, result: "lost" });
+    expect(
+      (await db.listTransactionPage({ connectionId })).transactions,
+    ).toEqual([]);
+    expect(
+      await db.raw("SELECT applied_at FROM sync_runs WHERE id = ?", [runId]),
+    ).toEqual([{ applied_at: null }]);
+    await db.raw("DELETE FROM collection_leases WHERE connection_id=?", [
+      connectionId,
+    ]);
+    const recovered = await db.withCollectionLock(connectionId, (store) =>
+      store.recoverPendingRuns(synthetic),
+    );
+    expect(recovered).toEqual({
+      acquired: true,
+      result: [expect.objectContaining({ replayed: false, created: 1 })],
+    });
+    expect(
+      (await db.listTransactionPage({ connectionId })).transactions.map(
+        (transaction) => transaction.sourceKey,
+      ),
+    ).toEqual([expect.stringContaining("staged-native")]);
+  });
+
   it("aborts a holder whose lease passed on and rejects its later writes", async () => {
     const result = await db.withCollectionLock(
       connectionId,
