@@ -167,7 +167,7 @@ changed first.
 
 ```sh
 npm test -- tests/storage/backends.test.ts tests/storage/domain-contract.test.ts
-npm run check:targets
+npm run check:npm
 ```
 
 The hosted `identity` schema shares neither the financial migrations nor the

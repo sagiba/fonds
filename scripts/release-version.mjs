@@ -12,8 +12,11 @@ const versionDeclaration = /export const FONDS_VERSION = "([^"]*)";/;
 /** Every manifest and lockfile that repeats the root package.json version. */
 const manifests = [
   "package.json",
-  ...Object.keys(targets).map((name) => `deploy/${name}/package.json`),
-  "deploy/npm/package.json",
+  ...new Set(
+    Object.entries(targets).map(
+      ([name, target]) => `${target.recipe ?? `deploy/${name}`}/package.json`,
+    ),
+  ),
 ];
 const lockfiles = manifests.map((path) =>
   path.replace(/package\.json$/, "package-lock.json"),

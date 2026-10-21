@@ -113,7 +113,7 @@ reconciliation output are the SQLite baseline. For the local baseline, with remo
 
 ```sh
 npm run check
-npm run check:targets
+npm run check:npm
 ```
 
 The [storage test runbook](../internals/storage-testing.md) covers the
