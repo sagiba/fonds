@@ -83,7 +83,7 @@ The experimental D1 adapter runs against local D1 in workerd through Miniflare; 
 ```sh
 npm ci --prefix tests/d1-local
 FONDS_TEST_D1=1 npx vitest run tests/storage/d1.test.ts tests/tooling/d1-worker.test.mjs
-FONDS_TEST_D1=1 npx vitest run tests/storage/backends.test.ts tests/storage/contract.test.ts tests/storage/statement-counts.test.ts -t d1-local
+FONDS_TEST_D1=1 npx vitest run tests/storage -t d1-local
 ```
 
 Each case creates a fresh in-memory D1 database and applies `migrations/d1/` in order. See [the D1 storage note](d1-storage.md) for what this does and does not verify.

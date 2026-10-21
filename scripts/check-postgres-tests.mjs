@@ -7,6 +7,27 @@ import { checkStorageCoverage } from "./storage-coverage.mjs";
 // Minimum existing coverage, not an exact total: additions need no CI edit.
 // Update these floors only when deliberately removing/reorganizing coverage.
 export const requiredGroups = [
+  ["lifecycle.test.ts", "owner-confirmed transaction lifecycle: postgres", 34],
+  [
+    "lifecycle-sync.test.ts",
+    "collection and owner lifecycle integration: postgres",
+    23,
+  ],
+  [
+    "query-review.test.ts",
+    "public review state and scalar totals: postgres",
+    24,
+  ],
+  [
+    "reconciliation-index.test.ts",
+    "reconciliation indexes and provider boundaries: postgres",
+    31,
+  ],
+  [
+    "historical-sync.test.ts",
+    "historical capture reconciliation: postgres",
+    44,
+  ],
   ["backends.test.ts", "storage contract: postgres", 34],
   ["contract.test.ts", "shared storage behavior: postgres", 22],
   ["statement-counts.test.ts", "statement budgets: postgres", 8],
