@@ -1,6 +1,6 @@
 import { isLosslessNumber } from "lossless-json";
 
-import type { JsonObject, JsonValue, TransactionFacts } from "./model.js";
+import type { JsonObject, JsonValue } from "./model.js";
 import {
   canonicalJson,
   compareEvidence,
@@ -213,26 +213,4 @@ export function mergeDeclaredEvidence(
     );
   }
   return result;
-}
-
-/** The identity base a provider declares for a row, if any. */
-export function declaredIdentityBase(
-  row: TransactionFacts,
-  provider: string,
-): string | undefined {
-  const identity = row.details.provider[provider]?.identity;
-  if (
-    identity &&
-    typeof identity === "object" &&
-    !Array.isArray(identity) &&
-    typeof identity.baseKey === "string"
-  ) {
-    return identity.baseKey;
-  }
-  return undefined;
-}
-
-/** Rows sharing an identity base form one identity group. */
-export function identityBase(row: TransactionFacts, provider: string): string {
-  return declaredIdentityBase(row, provider) ?? row.sourceKey;
 }

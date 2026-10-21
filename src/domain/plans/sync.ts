@@ -22,8 +22,6 @@ import {
 import {
   currentSourceRowIndices,
   currentSourceRows,
-  declaredIdentityBase,
-  identityBase,
   sortedEvidence,
 } from "../provider-evidence.js";
 import {
@@ -54,7 +52,6 @@ import {
   awaitsRestatement,
   DUPLICATE_ORDINAL,
   INSTALLMENT_CONFLICT,
-  keyMatchedPurchases,
   refreshInstallmentParents,
   RESTATEMENT_CONFLICT,
   withoutInstallmentFx,
@@ -255,6 +252,26 @@ function financialState(row: TransactionFacts) {
     ...financialFacts(row),
     currencyExchange: row.details.currencyExchange ?? null,
   };
+}
+
+function declaredIdentityBase(
+  row: TransactionFacts,
+  provider: string,
+): string | undefined {
+  const identity = row.details.provider[provider]?.identity;
+  if (
+    identity &&
+    typeof identity === "object" &&
+    !Array.isArray(identity) &&
+    typeof identity.baseKey === "string"
+  ) {
+    return identity.baseKey;
+  }
+  return undefined;
+}
+
+function identityBase(row: TransactionFacts, provider: string): string {
+  return declaredIdentityBase(row, provider) ?? row.sourceKey;
 }
 
 function identityFingerprint(
@@ -1612,7 +1629,6 @@ export function planRun(
     // Purchases with live billed lines: a capture that restates one as
     // anything but a plan contradicts its lines.
     const planParents = new Set(billedLinesByPurchase(current).keys());
-    const keyMatched = keyMatchedPurchases(current, adapter.provider);
     // Each input keeps the purchase key it names, if it is a billed line.
     const prepared = result.transactions.map((input) => {
       const resolved = resolveTransaction(plan, input, now, newId);
@@ -1624,7 +1640,7 @@ export function planRun(
         );
       }
       return {
-        facts: withoutInstallmentFx(resolved, false),
+        facts: withoutInstallmentFx(resolved),
         purchaseKey,
         counterpartyAbsent: input.counterpartyName === undefined,
         cardKey: input.cardKey,
@@ -2032,18 +2048,14 @@ export function planRun(
             ? {
                 ...input,
                 installmentCount: previous.installmentCount,
-                billingDate:
-                  previous.installmentCount !== null &&
-                  previous.installmentCount >= 2
-                    ? previous.billingDate
-                    : input.billingDate,
+                // A plan's billing date is its own; an unknown plan's is observed.
+                billingDate: inPerspective(previous, "billing", false)
+                  ? input.billingDate
+                  : previous.billingDate,
               }
             : restated
               ? withFinancialState(input, previous)
               : input,
-          planParents.has(previous.id) &&
-            keyMatched.has(previous.id) &&
-            input.identityStrength === "native",
         );
         if (restated && (!unknownPlan || priorRestatement)) {
           accepted.details.issues = withIssue(

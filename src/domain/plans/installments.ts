@@ -1,6 +1,5 @@
 import { isBilledLine, type TransactionFacts } from "../model.js";
-import { canonicalJson } from "../observations.js";
-import { identityBase, sortedEvidence } from "../provider-evidence.js";
+import { sortedEvidence } from "../provider-evidence.js";
 import { billedLinesByPurchase, inPerspective } from "../read-model.js";
 import type { Transaction } from "../records.js";
 import { FinancialPlan } from "./state.js";
@@ -19,21 +18,13 @@ const PLAN_CONFLICTS = [
   RESTATEMENT_CONFLICT,
   LINE_CONFLICT,
 ];
-const UNREPAIRABLE_LINE_ISSUES = [
-  "conflicting_installment_facts",
-  "invalid_installment_ordinal",
-  DUPLICATE_ORDINAL,
-];
 
 /**
  * Installment-derived rows (plan purchases and billed lines) carry no FX
  * facts, whatever an adapter or a restatement supplies.
  */
-export function withoutInstallmentFx(
-  row: TransactionFacts,
-  hasBilledLines: boolean,
-): TransactionFacts {
-  if (!isBilledLine(row) && inPerspective(row, "billing", hasBilledLines)) {
+export function withoutInstallmentFx(row: TransactionFacts): TransactionFacts {
+  if (!isBilledLine(row) && inPerspective(row, "billing", false)) {
     return row;
   }
   const { currencyExchange: _dropped, ...details } = row.details;
@@ -55,143 +46,65 @@ export function awaitsRestatement(row: Pick<Transaction, "details">): boolean {
   );
 }
 
-/**
- * Purchases a capture matches by native source key: native rows whose identity
- * group holds no other identity strength. Any other purchase is matched on its
- * financial facts, so it keeps the facts its capture states rather than ones
- * derived from its lines.
- */
-export function keyMatchedPurchases(
-  rows: Iterable<Transaction>,
-  provider: string,
-): Set<string> {
-  const groups = Map.groupBy(
-    [...rows].filter((row) => !row.supersededById),
-    (row) => JSON.stringify([row.sourceScope, identityBase(row, provider)]),
-  );
-  return new Set(
-    [...groups.values()].flatMap((group) =>
-      group.every((row) => row.identityStrength === "native")
-        ? group.map((row) => row.id)
-        : [],
-    ),
-  );
-}
-
-/** The repairable plan size the lines state, and whether they contradict the purchase. */
-function lineEvidence(parent: Transaction, lines: Transaction[]) {
+/** Whether a plan purchase's live lines state counts or ordinals that contradict it. */
+function linesConflict(parent: Transaction, lines: Transaction[]): boolean {
   let stated: number | null = null;
-  let complete = true;
-  let conflicting = false;
-  const ordinals = new Set<number>();
-  for (const line of lines) {
+  return lines.some((line) => {
     const count = line.installmentCount;
     const ordinal = line.installmentNumber;
-    if (count !== null) {
-      conflicting ||=
-        (stated !== null && stated !== count) ||
-        (parent.installmentCount !== null && parent.installmentCount !== count);
-      stated ??= count;
-    }
     const bound = count ?? parent.installmentCount;
-    conflicting ||=
-      bound !== null && ordinal !== null && (ordinal < 1 || ordinal > bound);
-    complete &&=
-      count !== null &&
-      count >= 2 &&
-      ordinal !== null &&
-      ordinal >= 1 &&
-      ordinal <= count &&
-      !ordinals.has(ordinal) &&
-      line.sourceScope === parent.sourceScope &&
-      line.identityStrength !== "ambiguous" &&
-      !line.details.issues.some((issue) =>
-        UNREPAIRABLE_LINE_ISSUES.includes(issue),
-      );
-    if (ordinal !== null) {
-      ordinals.add(ordinal);
-    }
-  }
-  return { count: complete ? stated : null, conflicting };
+    const conflicting =
+      (count !== null &&
+        ((stated !== null && stated !== count) ||
+          (parent.installmentCount !== null &&
+            parent.installmentCount !== count))) ||
+      (bound !== null && ordinal !== null && (ordinal < 1 || ordinal > bound));
+    stated ??= count;
+    return conflicting;
+  });
 }
 
-/** A purchase's count, date and conflicts, reevaluated against its live lines. */
-function withLineEvidence(
+/** A purchase's plan conflicts, reevaluated against its live lines. */
+function conflictIssues(
   parent: Transaction,
   lines: Transaction[],
   restated: boolean,
-  keyMatched: boolean,
-): Transaction {
+): string[] {
   // Only a plan purchase's lines can contradict it; other parents keep just
   // their restatement conflicts.
-  const evidence =
+  const conflicting =
     parent.amountBasis === "purchase_commitment" &&
     parent.kind === "purchase" &&
-    parent.identityStrength !== "ambiguous"
-      ? lineEvidence(parent, lines)
-      : { count: null, conflicting: false };
-  const count =
-    parent.installmentCount === null &&
-    keyMatched &&
-    evidence.count !== null &&
-    !evidence.conflicting &&
-    !restated &&
-    !parent.details.issues.includes("conflicting_installment_facts")
-      ? evidence.count
-      : parent.installmentCount;
+    parent.identityStrength !== "ambiguous" &&
+    linesConflict(parent, lines);
   const issues = parent.details.issues.filter(
-    (issue) =>
-      !PLAN_CONFLICTS.includes(issue) &&
-      (count === null || issue !== UNKNOWN_COUNT),
+    (issue) => !PLAN_CONFLICTS.includes(issue),
   );
-  if (evidence.conflicting) {
+  if (conflicting) {
     issues.push(LINE_CONFLICT);
   }
   if (restated) {
     issues.push(RESTATEMENT_CONFLICT);
   }
-  if (evidence.conflicting || restated) {
+  if (conflicting || restated) {
     issues.push(INSTALLMENT_CONFLICT);
   }
-  return {
-    ...parent,
-    installmentCount: count,
-    // An unknown plan's observed date is a payment date, not the plan's.
-    billingDate: count !== parent.installmentCount ? null : parent.billingDate,
-    details: { ...parent.details, issues: sortedEvidence(issues) },
-  };
-}
-
-/** The facts a refresh changes, for comparing a parent with its refreshed form. */
-function refreshedFacts(row: TransactionFacts) {
-  return canonicalJson([
-    row.installmentCount,
-    row.billingDate,
-    row.fxFeeMinor,
-    row.fxFeeCurrency,
-    row.details.currencyExchange ?? null,
-    sortedEvidence(row.details.issues),
-  ]);
+  return sortedEvidence(issues);
 }
 
 /**
- * Billed lines can fill unknown plan metadata without replacing newer purchase
- * money. Their explicit counts, not the number or sum of observed payments,
- * establish the plan size, including for purchases stored without them.
- * Only `parents`, when given, are refreshed. Returns each row it changed, as it
- * was before.
+ * Line conflicts follow the live lines, including for purchases the source no
+ * longer returns. Only review issues change: facts that identify a purchase
+ * stay as its captures state them. Only `parents`, when given, are refreshed.
+ * Returns each row it changed, as it was before.
  */
 export function refreshInstallmentParents(
   plan: FinancialPlan,
   parents?: ReadonlySet<string>,
 ): Transaction[] {
   const children = billedLinesByPurchase(plan.rows.values());
-  const keyMatched = keyMatchedPurchases(
-    plan.rows.values(),
-    plan.snapshot.connection.provider,
-  );
   // Removing the final line resolves a line conflict without another
-  // observation of the purchase; keep that purchase in the repair set.
+  // observation of the purchase; keep that purchase in the refresh set.
   for (const row of plan.rows.values()) {
     if (
       !children.has(row.id) &&
@@ -212,24 +125,13 @@ export function refreshInstallmentParents(
     ) {
       continue;
     }
-    const next = withoutInstallmentFx(
-      withLineEvidence(
-        parent,
-        lines,
-        awaitsRestatement(parent),
-        keyMatched.has(id),
-      ),
-      lines.length > 0 && keyMatched.has(id),
-    );
-    if (refreshedFacts(next) !== refreshedFacts(parent)) {
+    const issues = conflictIssues(parent, lines, awaitsRestatement(parent));
+    if (
+      JSON.stringify(issues) !==
+      JSON.stringify(sortedEvidence(parent.details.issues))
+    ) {
       changed.push(parent);
-      plan.updateTransaction(id, {
-        installmentCount: next.installmentCount,
-        billingDate: next.billingDate,
-        fxFeeMinor: next.fxFeeMinor,
-        fxFeeCurrency: next.fxFeeCurrency,
-        details: next.details,
-      });
+      plan.updateTransaction(id, { details: { ...parent.details, issues } });
     }
   }
   return changed;
