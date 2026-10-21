@@ -9,7 +9,7 @@ import {
   symlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
@@ -222,6 +222,34 @@ describe("quickstart", () => {
       } else {
         delete (process.stdout as { isTTY?: boolean }).isTTY;
       }
+      write.mockRestore();
+    }
+  });
+
+  it("prints the installed fonds command for the package and its MCP hosts", async () => {
+    const write = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    const launcher = join(home, "..", "prefix", "bin", "fonds");
+    const entry = process.argv[1];
+    process.argv[1] = launcher;
+    vi.stubEnv("PATH", dirname(launcher));
+    try {
+      expect(await main(["demo"])).toBe(0);
+      const output = String(write.mock.calls.map((call) => call[0]).join(""));
+      const demoDb = join(home, "demo.sqlite");
+      expect(output).toContain(`  fonds totals --db ${demoDb}`);
+      expect(output).toContain(
+        `claude mcp add fonds-demo -- ${launcher} serve --transport stdio --db ${demoDb}`,
+      );
+      expect(output).toContain(
+        JSON.stringify({
+          command: launcher,
+          args: ["serve", "--transport", "stdio", "--db", demoDb],
+        }),
+      );
+    } finally {
+      process.argv[1] = entry!;
       write.mockRestore();
     }
   });

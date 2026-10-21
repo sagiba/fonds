@@ -14,14 +14,14 @@ on every sync run. The [synthetic fixtures](../../tests/providers/isracard/fixtu
 ## Setup
 
 Use an existing owner-only directory outside the repository for private data.
-These commands are examples, not live-validation receipts:
+These commands, with the [installed](../guides/local-development.md) `fonds`, are
+examples, not live-validation receipts:
 
 ```sh
-npm run build
-node dist/cli.js init --db /path/to/private/isracard.sqlite --connection isracard --provider isracard
-node dist/cli.js connect --db /path/to/private/isracard.sqlite --connection isracard
-node dist/cli.js refresh --db /path/to/private/isracard.sqlite --connection isracard
-node dist/cli.js refresh --db /path/to/private/isracard.sqlite --connection isracard \
+fonds init --db /path/to/private/isracard.sqlite --connection isracard --provider isracard
+fonds connect --db /path/to/private/isracard.sqlite --connection isracard
+fonds refresh --db /path/to/private/isracard.sqlite --connection isracard
+fonds refresh --db /path/to/private/isracard.sqlite --connection isracard \
   --from 2026-09-01 --to 2026-09-30 --credentials-fd 3 3< /private/isracard.json
 ```
 

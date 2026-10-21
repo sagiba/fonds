@@ -87,8 +87,8 @@ Provider credentials are never in the env file; see [deploy](#deploy).
 ## New installation
 
 A placeholder deploy creates the Function so its URL can go into the env file
-before setup and the real deploy. Run every command from the repository root,
-after `npm ci`, replacing `PROFILE`, `YOUR_ORG_ID`, `PROJECT_ID`, `BRANCH_ID`
+before setup and the real deploy. Run every command from a checkout of the
+release tag you deploy, after `npm ci`, replacing `PROFILE`, `YOUR_ORG_ID`, `PROJECT_ID`, `BRANCH_ID`
 and `FUNCTION_ORIGIN` with your own values.
 
 1. Find your organization ID, create the project (`--no-secrets` keeps
@@ -269,6 +269,7 @@ only when you intend to replace what runs there; try a release on a separate
 project first when it changes setup, schemas or login.
 
 ```sh
+git fetch --tags && git checkout vX.Y.Z
 npm ci
 npm run neon:setup -- --env-file "$FONDS_ENV" \
   --project-id PROJECT_ID --branch-id BRANCH_ID --profile PROFILE

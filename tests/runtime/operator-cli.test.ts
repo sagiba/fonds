@@ -193,7 +193,7 @@ describe("one operator CLI for every backend", () => {
         status: EXIT_CODES.failed,
         stdout: "",
         stderr:
-          "FONDS_DATABASE_URL selects PostgreSQL: run this command with the PostgreSQL target's node server.js, or unset it to use SQLite.\n",
+          "FONDS_DATABASE_URL selects PostgreSQL, which the fonds command runs; unset it to use SQLite.\n",
       });
     } finally {
       vi.unstubAllEnvs();
@@ -219,7 +219,7 @@ describe("one operator CLI for every backend", () => {
         status: EXIT_CODES.failed,
         stdout: "",
         stderr:
-          "FONDS_DATABASE_URL is required; without it, use the SQLite CLI (node dist/cli.js).\n",
+          "FONDS_DATABASE_URL is required; without it, fonds uses SQLite.\n",
       });
     } finally {
       rmSync(stateDir, { recursive: true, force: true });

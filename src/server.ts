@@ -28,7 +28,7 @@ import { createMcpServer } from "./transport/mcp.js";
 
 const repositoryRoot = protectedDirectory(import.meta.url);
 const usage = `Fonds — local SQLite HTTP/MCP
-Usage: node dist/server.js [--db <existing private SQLite file outside the repository>]
+Usage: fonds serve [--db <existing private SQLite file outside the repository>]
        [--transport http|stdio] [--port 8787]
 
 Without --db, the server uses ${DEFAULT_DATABASE} in the private data directory ($FONDS_HOME,

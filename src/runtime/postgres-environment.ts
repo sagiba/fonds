@@ -185,7 +185,7 @@ export async function openPostgresSession(
 ): Promise<BackendSession> {
   if (!env.FONDS_DATABASE_URL) {
     throw new CommandInputError(
-      "FONDS_DATABASE_URL is required; without it, use the SQLite CLI (node dist/cli.js).",
+      "FONDS_DATABASE_URL is required; without it, fonds uses SQLite.",
     );
   }
   const store = openPostgresDatabase(

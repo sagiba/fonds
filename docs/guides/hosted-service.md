@@ -9,10 +9,10 @@ The local-first SQLite service needs none of this; see [local development](local
 
 ## Configuration
 
-The PostgreSQL target serves the hosted service when `FONDS_PUBLIC_ORIGIN` is
-set; without it, it serves the loopback bearer API. Run `node server.js` from
-the `postgres` build target (`npm run build:targets -- postgres`), or the
-[image](docker.md#the-hosted-stack).
+With a `postgresql://` `FONDS_DATABASE_URL`, `fonds serve --hosted` runs the
+hosted service at `FONDS_PUBLIC_ORIGIN`; without `--hosted`, `fonds serve` is
+the loopback bearer API, and refuses a public origin. Install the npm package, or
+use the [image](docker.md#the-hosted-stack).
 
 | Variable                                                                           | Meaning                                                                                                                                                                                                                                                                      |
 | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -78,7 +78,7 @@ A one-time **login link** is how the owner enrolls the first passkey and
 recovers access. It is generated where the deployment lives, never sent:
 
 ```sh
-node server.js login-link                                 # any host, same environment
+fonds login-link                                          # any host, same environment
 docker compose exec fonds fonds login-link                # the compose stack
 npm run neon:setup -- login-link …                        # Neon, from the operator's laptop
 ```
@@ -108,8 +108,8 @@ stops are in the [security model](../security-model.md#revocation).
 Create a connection, then store its credentials encrypted with hidden input:
 
 ```sh
-node server.js init --connection cal-main --provider cal
-node server.js connect --connection cal-main
+fonds init --connection cal-main --provider cal
+fonds connect --connection cal-main
 ```
 
 `connect` prompts for the provider's fields (see the [provider guides](../README.md#providers)),
@@ -148,7 +148,7 @@ Authentication failure or challenge marks the refresh `requiresAttention` and
 blocks ordinary and scheduled refreshes until an operator retry succeeds. After
 resolving it, POST `{}` to `/internal/refresh/recent` on the public origin with
 `Authorization: Bearer <FONDS_REFRESH_SECRET>`, or run
-`node server.js refresh --connection …`. The route refreshes every target past
+`fonds refresh --connection …`. The route refreshes every target past
 the block and the cooldown, really calling each provider; the Neon runbook wraps
 it as `neon:smoke --refresh`. An `implausible_empty` rejection
 ([design](../design.md#identity-corrections-and-absence)) is logged in
@@ -181,7 +181,7 @@ runs once, at its first instant. A list of hours outside 0–23, an invalid time
 or an unknown time zone stops the service from starting, with a message that
 names the variable.
 
-**On the Node host** (Docker, or `node server.js`) the service schedules itself,
+**On the Node host** (Docker, or `fonds serve --hosted`) the service schedules itself,
 as the SQLite server and the PostgreSQL loopback launcher also do
 ([collection-schedule.ts](../../src/runtime/collection-schedule.ts)). Each
 occurrence starts a random zero to three minutes after its time and
