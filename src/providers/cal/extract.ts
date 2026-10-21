@@ -345,20 +345,26 @@ function cancellation(row: SourceRow): boolean {
   return row.trnType === "ביטול תשלומים" && row.refundInd === true;
 }
 
-/** One billed payment of an installment plan (type 8, two or more payments). */
-function installmentPayment(row: SourceRow): boolean {
-  // Any stated multi-payment plan makes the row a payment; the group then
-  // resolves conflicting counts.
-  const counts = [
+/**
+ * Whether the row states a plan of two or more payments, structurally or in
+ * its installment texts, however its stated counts then reconcile.
+ */
+function statesPlan(row: SourceRow): boolean {
+  return [
     ordinal(row.numOfPayments),
     ...stated([row]).flatMap((item) =>
       item.parsed?.template === "installment_count" ? [item.parsed.count] : [],
     ),
-  ];
+  ].some((count) => count !== null && count >= 2);
+}
+
+/** One billed payment of an installment plan (type 8, two or more payments). */
+function installmentPayment(row: SourceRow): boolean {
+  // The group resolves conflicting counts; any stated plan makes a payment.
   return (
     token(row.transactionTypeCode) === "8" &&
     row.refundInd === false &&
-    counts.some((count) => count !== null && count >= 2) &&
+    statesPlan(row) &&
     ordinal(row.curPaymentNum) !== null
   );
 }
@@ -873,7 +879,7 @@ function extractGroup(
     rows.length === 1 &&
     !hasInstallmentComponents &&
     code !== "8" &&
-    (ordinal(row.numOfPayments) ?? 0) <= 1 &&
+    !statesPlan(row) &&
     !originalConflict
       ? calForeignExchange(row, comments[0]!, {
           originalCurrency: resolveOriginalCurrency(row, []),

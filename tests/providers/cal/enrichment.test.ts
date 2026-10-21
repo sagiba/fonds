@@ -426,6 +426,20 @@ describe("CAL FX", () => {
     expect(result.details.issues).toContain("conflicting_original_currency");
   });
 
+  it("keeps FX explanations as text on a row whose plan size only its texts state", () => {
+    const row = templateRow("FX-ONE-STEP");
+    Object.assign(row, {
+      numOfPayments: null,
+      onGoingTransactionsComment: "עסקה ב - 4 תשלומים",
+    });
+    const result = extractOne(row);
+    expect(result.installmentCount).toBe(4);
+    expect(result.details.currencyExchange).toBeUndefined();
+    expect(result.details.additionalInformation).toEqual(
+      expect.arrayContaining([expect.stringContaining("בשער יציג")]),
+    );
+  });
+
   it("rounds half up before comparing", () => {
     // 3 EUR × 3.335 = 10.005 → 10.01, so 10.00 is still within one unit and 9.99 is not.
     for (const [billed, reconciles] of [
