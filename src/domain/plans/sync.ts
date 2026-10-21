@@ -49,6 +49,7 @@ import { reviewState } from "./annotation.js";
 import { automaticPostingPairs, postingComponents } from "./auto-posting.js";
 import { purchaseResolver, resolveTransaction } from "./catalog.js";
 import {
+  awaitsRestatement,
   DUPLICATE_ORDINAL,
   INSTALLMENT_CONFLICT,
   refreshInstallmentParents,
@@ -1542,7 +1543,6 @@ export function planRun(
   const baselineDiscoveryAccounts = new Set<string>();
   const observedIds = new Set<string>();
   const contradictedPlans = new Set<string>();
-  const countUnstated = new Set<string>();
   const event = (
     type: EventType,
     id: string | null,
@@ -1630,13 +1630,20 @@ export function planRun(
     // Purchases with live billed lines: a capture that restates one as
     // anything but a plan contradicts its lines.
     const planParents = new Set(billedLinesByPurchase(current).keys());
-    const incomingPurchases = new Set(
-      result.transactions.flatMap((input) =>
+    // Source keys of stored and incoming purchases with billed lines.
+    const linkedPurchaseKeys = new Set([
+      ...[...planParents].flatMap((id) => {
+        const parent = plan.transaction(id)!;
+        return [parent.sourceKey, ...parent.sourceAliases].map((key) =>
+          JSON.stringify([parent.sourceScope, key]),
+        );
+      }),
+      ...result.transactions.flatMap((input) =>
         input.purchaseKey
           ? [JSON.stringify([input.sourceScope, input.purchaseKey])]
           : [],
       ),
-    );
+    ]);
     // Normalize association-based facts before identity fingerprints as well as
     // after writes; otherwise a repeated ambiguous capture changes its own key.
     const prepared = result.transactions.map((input) => {
@@ -1652,15 +1659,11 @@ export function planRun(
         facts: withoutInstallmentFx(
           resolved,
           purchaseKey === null &&
-            ([resolved.sourceKey, ...resolved.sourceAliases].some((key) =>
-              incomingPurchases.has(
+            [resolved.sourceKey, ...resolved.sourceAliases].some((key) =>
+              linkedPurchaseKeys.has(
                 JSON.stringify([resolved.sourceScope, key]),
               ),
-            ) ||
-              planParents.has(
-                purchases.resolve(resolved.sourceScope, resolved.sourceKey) ??
-                  "",
-              )),
+            ),
         ),
         purchaseKey,
         counterpartyAbsent: input.counterpartyName === undefined,
@@ -2042,8 +2045,9 @@ export function planRun(
           input.counterpartyName = previous.counterpartyName;
         }
         // Missing plan metadata is not a single-payment assertion. Keep the
-        // known count while accepting fresh purchase facts; explicit conflicts
-        // keep accepted money and remain reviewable until source resolution.
+        // known plan while accepting fresh purchase facts; explicit conflicts
+        // keep accepted money and remain reviewable until the source restates
+        // a plan or the owner removes the lines.
         const restated =
           planParents.has(previous.id) &&
           purchaseKey === null &&
@@ -2055,10 +2059,7 @@ export function planRun(
           previous.kind === "purchase" &&
           input.amountBasis === "purchase_commitment" &&
           input.installmentNumber === null;
-        // Only recorded provenance survives a capture: an earlier policy also
-        // flagged unknown-count captures, which this one no longer contradicts.
-        const priorRestatement =
-          previous.details.issues.includes(RESTATEMENT_CONFLICT);
+        const priorRestatement = awaitsRestatement(previous);
         const accepted = withoutInstallmentFx(
           unknownPlan && !priorRestatement
             ? {
@@ -2067,7 +2068,7 @@ export function planRun(
                 billingDate:
                   previous.installmentCount !== null &&
                   previous.installmentCount >= 2
-                    ? null
+                    ? previous.billingDate
                     : input.billingDate,
               }
             : restated
@@ -2075,9 +2076,6 @@ export function planRun(
               : input,
           planParents.has(previous.id),
         );
-        if (unknownPlan && !priorRestatement) {
-          countUnstated.add(id);
-        }
         if (restated && (!unknownPlan || priorRestatement)) {
           contradictedPlans.add(id);
           accepted.details.issues = withIssue(
@@ -2230,7 +2228,6 @@ export function planRun(
         .map(({ response }) => response.accountKey),
     ),
     contradicted: contradictedPlans,
-    countUnstated,
   });
   refreshDuplicatePlans(plan);
   const afterRows = plan.orderedRows();

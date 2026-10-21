@@ -266,6 +266,36 @@ describe.each(backends)("%s installment repair", (backend) => {
     });
   });
 
+  it("keeps a single-payment restatement stored before provenance until the source restates a plan", async () => {
+    await capture(10, [purchase(5), line(1)]);
+    const stored = await parent();
+    // The earlier policy flagged an explicit single-payment capture this way.
+    await insertTransactionFixture(
+      db,
+      [
+        {
+          ...stored,
+          details: {
+            ...stored.details,
+            issues: ["conflicting_installment_plan"],
+          },
+        },
+      ],
+      "update",
+    );
+    await capture(11, [{ ...purchase(), amountMinor: -17000 }]);
+    const current = await parent();
+    expect(current).toMatchObject({ installmentCount: 5, amountMinor: -12500 });
+    expect(current.sourceIssues).toContain(
+      "conflicting_installment_restatement",
+    );
+    await capture(12, [{ ...purchase(5), amountMinor: -17000 }]);
+    expect(await parent()).toMatchObject({
+      amountMinor: -17000,
+      sourceIssues: [],
+    });
+  });
+
   it("keeps the same purchase and billing members when history arrives first", async () => {
     await capture(10, [purchase(5), line(1), line(2)], true);
     const before = await parent();
@@ -368,13 +398,63 @@ describe.each(backends)("%s installment repair", (backend) => {
     expect(await db.listEvents()).toEqual(events);
   });
 
-  it("follows unanimous restated line counts while the purchase states none", async () => {
+  it("flags restated line counts instead of replacing an established count", async () => {
     await capture(10, [purchase(), line(1, 3), line(2, 3)]);
     expect((await parent()).installmentCount).toBe(3);
     await capture(11, [purchase(), line(1, 4), line(2, 4)]);
     const current = await parent();
-    expect(current.installmentCount).toBe(4);
-    expect(current.sourceIssues).toEqual([]);
+    expect(current.installmentCount).toBe(3);
+    expect(current.sourceIssues).toEqual([
+      "conflicting_installment_lines",
+      "conflicting_installment_plan",
+    ]);
+  });
+
+  it("flags a line whose ordinal exceeds the purchase's count when the line states none", async () => {
+    await capture(10, [purchase(3), line(4, null)]);
+    expect((await parent()).sourceIssues).toEqual([
+      "conflicting_installment_lines",
+      "conflicting_installment_plan",
+    ]);
+  });
+
+  it("keeps a source-stated plan billing date across refreshes", async () => {
+    const input = [
+      { ...purchase(3), billingDate: "2040-07-10" },
+      line(1, 3),
+      line(2, 3),
+    ];
+    await capture(10, input);
+    const before = await parent();
+    expect(before.billingDate).toBe("2040-07-10");
+    await capture(11, [{ ...purchase(), billingDate: "2040-07-12" }]);
+    expect(await parent()).toMatchObject({
+      installmentCount: 3,
+      billingDate: "2040-07-10",
+    });
+    const events = await db.listEvents();
+    expect(await capture(12, input)).toMatchObject({ created: 0, updated: 0 });
+    expect(await db.listEvents()).toEqual(events);
+  });
+
+  it("does not fill a weak purchase identity's count, so identical captures stay matched", async () => {
+    const input = [
+      { ...purchase(), identityStrength: "weak" as const },
+      line(1, 3),
+    ];
+    await capture(10, input);
+    const before = await parent();
+    expect(before).toMatchObject({
+      installmentCount: null,
+      billingDate: "2040-07-10",
+    });
+    const events = await db.listEvents();
+    expect(await capture(11, input)).toMatchObject({ created: 0, updated: 0 });
+    expect(await parent()).toMatchObject({
+      id: before.id,
+      version: before.version,
+    });
+    expect(await db.listEvents()).toEqual(events);
   });
 
   it("flags unanimous lines that contradict the purchase's stated count", async () => {
