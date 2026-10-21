@@ -40,12 +40,12 @@ export function presentTransaction(
 }
 
 /**
- * Read perspectives. Membership depends only on a row's own facts,
- * never on whether children exist or on other request filters.
+ * Read perspectives. Live child associations are evaluated independently
+ * of other request filters.
  * - spending: every row without a purchase link (purchases, single charges,
  *   standalone billed rows, fees, cancellations);
  * - billing: every row except an installment plan's purchase (two or more
- *   payments and no ordinal of its own), which counts through its lines;
+ *   payments and no ordinal of its own, or live linked billed lines);
  * - all: every row; never totalled, because it would double-count.
  */
 export const PERSPECTIVES = ["spending", "billing", "all"] as const;
@@ -62,8 +62,8 @@ type MembershipFacts = Pick<
 
 /**
  * The membership rule as data, so storage compiles the same predicate into
- * SQL. `billing` is the null-safe form of NOT (count >= 2 AND number IS NULL):
- * a row with both facts null is a member.
+ * SQL. Live billed-line associations also exclude their purchase from billing,
+ * even when its own plan metadata is still unknown.
  */
 export type PerspectiveRule =
   | { kind: "every_row" }
@@ -87,6 +87,7 @@ export function perspectiveRule(perspective: Perspective): PerspectiveRule {
 export function inPerspective(
   row: MembershipFacts,
   perspective: Perspective,
+  hasBilledLines = false,
 ): boolean {
   const rule = perspectiveRule(perspective);
   switch (rule.kind) {
@@ -96,9 +97,10 @@ export function inPerspective(
       return row.purchaseId === null;
     case "without_plan_purchase":
       return (
-        row.installmentCount === null ||
-        row.installmentCount < rule.minimumPayments ||
-        row.installmentNumber !== null
+        !hasBilledLines &&
+        (row.installmentCount === null ||
+          row.installmentCount < rule.minimumPayments ||
+          row.installmentNumber !== null)
       );
   }
 }

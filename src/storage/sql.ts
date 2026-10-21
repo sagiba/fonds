@@ -48,11 +48,20 @@ function perspectiveFilter(
     case "without_purchase":
       return isNull(table.purchaseId);
     case "without_plan_purchase":
-      // Null-safe: NOT (count >= n AND number IS NULL) would drop null counts.
-      return or(
-        isNull(table.installmentCount),
-        lt(table.installmentCount, rule.minimumPayments),
-        isNotNull(table.installmentNumber),
+      // Associations are global to the perspective, not narrowed by page/date filters.
+      return and(
+        or(
+          isNull(table.installmentCount),
+          lt(table.installmentCount, rule.minimumPayments),
+          isNotNull(table.installmentNumber),
+        ),
+        sql`not exists (
+          select 1 from ${table.id.table} as billed_line
+          where billed_line.connection_id = ${table.connectionId}
+            and billed_line.purchase_id = ${table.id}
+            and billed_line.presence <> 'removed'
+            and billed_line.superseded_by_id is null
+        )`,
       );
   }
 }

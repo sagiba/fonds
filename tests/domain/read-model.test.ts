@@ -123,6 +123,12 @@ describe("perspectives", () => {
     expect(inPerspective(roles[role], "all")).toBe(true);
   });
 
+  it("excludes a purchase with live billed lines even when its count is unknown", () => {
+    expect(inPerspective(roles.unknownCount, "billing", true)).toBe(false);
+    expect(inPerspective(roles.unknownCount, "spending", true)).toBe(true);
+    expect(inPerspective(roles.unknownCount, "all", true)).toBe(true);
+  });
+
   const row: TotalRow = {
     status: "posted",
     amountBasis: "purchase_commitment",

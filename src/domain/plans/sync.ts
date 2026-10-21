@@ -172,7 +172,7 @@ export interface SyncResult {
 }
 
 /** Bump when shared reconciliation rules change, independently of archived parser versions. */
-export const RECONCILIATION_POLICY_VERSION = "auto-posting-v10";
+export const RECONCILIATION_POLICY_VERSION = "auto-posting-v11";
 
 export function reconciliationFailure(warnings: readonly string[]) {
   const failureCode = reconciliationFailureCodeSchema.options.find((code) =>
@@ -1305,6 +1305,113 @@ function implausiblyEmptyPosted(
   );
 }
 
+/**
+ * Billed lines can fill unknown plan metadata without replacing newer purchase
+ * money. Their explicit counts, not the number or sum of observed payments,
+ * establish the plan size. This also repairs ledgers written by older policies.
+ */
+function refreshInstallmentParents(
+  plan: FinancialPlan,
+  scopes: Set<string>,
+  contradicted: Set<string>,
+): void {
+  const children = Map.groupBy(
+    [...plan.rows.values()].filter(
+      (row) =>
+        row.purchaseId !== null &&
+        row.presence !== "removed" &&
+        !row.supersededById,
+    ),
+    (row) => row.purchaseId!,
+  );
+  for (const [id, lines] of children) {
+    const parent = plan.transaction(id);
+    if (
+      !parent ||
+      !scopes.has(parent.sourceScope) ||
+      parent.presence === "removed" ||
+      parent.supersededById ||
+      parent.purchaseId !== null ||
+      parent.amountBasis !== "purchase_commitment" ||
+      parent.kind !== "purchase" ||
+      parent.identityStrength === "ambiguous"
+    ) {
+      continue;
+    }
+    const count = lines[0]!.installmentCount;
+    const consistent =
+      count !== null &&
+      count >= 2 &&
+      new Set(lines.map((line) => line.installmentNumber)).size ===
+        lines.length &&
+      lines.every(
+        (line) =>
+          line.sourceScope === parent.sourceScope &&
+          line.identityStrength !== "ambiguous" &&
+          line.installmentCount === count &&
+          line.installmentNumber !== null &&
+          line.installmentNumber >= 1 &&
+          line.installmentNumber <= count &&
+          !line.details.issues.some((issue) =>
+            [
+              "conflicting_installment_facts",
+              "invalid_installment_ordinal",
+              "duplicate_installment_ordinal",
+            ].includes(issue),
+          ),
+      );
+    const statedCounts = lines.flatMap((line) =>
+      line.installmentCount === null ? [] : [line.installmentCount],
+    );
+    const conflicting =
+      new Set(statedCounts).size > 1 ||
+      (parent.installmentCount !== null &&
+        statedCounts.some((value) => value !== parent.installmentCount)) ||
+      lines.some(
+        (line) =>
+          line.installmentCount !== null &&
+          line.installmentNumber !== null &&
+          (line.installmentNumber < 1 ||
+            line.installmentNumber > line.installmentCount),
+      );
+    if (conflicting || contradicted.has(id)) {
+      plan.updateTransaction(id, {
+        details: {
+          ...parent.details,
+          issues: withIssue(
+            parent.details.issues,
+            "conflicting_installment_plan",
+          ),
+        },
+      });
+      continue;
+    }
+    if (
+      consistent &&
+      parent.installmentCount === null &&
+      !parent.details.issues.includes("conflicting_installment_facts")
+    ) {
+      const repaired = withoutInstallmentFx({
+        ...parent,
+        installmentCount: count,
+        billingDate: null,
+      });
+      plan.updateTransaction(id, {
+        installmentCount: count,
+        billingDate: null,
+        fxFeeMinor: repaired.fxFeeMinor,
+        fxFeeCurrency: repaired.fxFeeCurrency,
+        details: {
+          ...repaired.details,
+          issues: repaired.details.issues.filter(
+            (issue) => issue !== "conflicting_installment_plan",
+          ),
+        },
+      });
+    }
+  }
+}
+
 /** Every financial operation uses the same content rule, including indirect review changes. */
 export function finishTransactionContent(
   plan: FinancialPlan,
@@ -1551,6 +1658,7 @@ export function planRun(
   let baselineCreated = 0;
   const baselineDiscoveryAccounts = new Set<string>();
   const observedIds = new Set<string>();
+  const contradictedPlans = new Set<string>();
   const event = (
     type: EventType,
     id: string | null,
@@ -2037,20 +2145,42 @@ export function planRun(
         ) {
           input.counterpartyName = previous.counterpartyName;
         }
-        // A capture that restates a purchase with live billed lines as
-        // anything but a plan contradicts them. The accepted facts keep the
-        // plan's own facts, so the purchase and its lines are never both
-        // counted, and flag the purchase until the source restates the plan
-        // or the owner removes the lines (absence alone never removes them).
-        // The observed input is left as captured.
+        // Missing plan metadata is not a single-payment assertion. Keep the
+        // known count while accepting fresh purchase facts; explicit conflicts
+        // keep accepted money and remain reviewable until source resolution.
         const restated =
           planParents.has(previous.id) &&
           purchaseKey === null &&
           inPerspective(input, "billing");
+        const unknownPlan =
+          restated &&
+          input.installmentCount === null &&
+          input.kind === "purchase" &&
+          previous.kind === "purchase" &&
+          input.amountBasis === "purchase_commitment" &&
+          input.installmentNumber === null;
         const accepted = withoutInstallmentFx(
-          restated ? withFinancialState(input, previous) : input,
+          unknownPlan
+            ? {
+                ...input,
+                installmentCount: previous.installmentCount,
+                billingDate: null,
+              }
+            : restated
+              ? withFinancialState(input, {
+                  ...previous,
+                  installmentCount:
+                    previous.installmentCount ?? input.installmentCount,
+                })
+              : input,
         );
-        if (restated) {
+        if (
+          restated &&
+          (!unknownPlan ||
+            (previous.installmentCount !== null &&
+              previous.details.issues.includes("conflicting_installment_plan")))
+        ) {
+          contradictedPlans.add(id);
           accepted.details.issues = withIssue(
             accepted.details.issues,
             "conflicting_installment_plan",
@@ -2190,6 +2320,19 @@ export function planRun(
       recentCutoff,
     );
   }
+  refreshInstallmentParents(
+    plan,
+    new Set(
+      extracted
+        .filter(({ result }) =>
+          result.partitions.some(
+            (part) => part.status === "posted" && part.success,
+          ),
+        )
+        .map(({ response }) => response.accountKey),
+    ),
+    contradictedPlans,
+  );
   refreshDuplicatePlans(plan);
   const afterRows = plan.orderedRows();
   const reviewRequiredIds: string[] = [];
