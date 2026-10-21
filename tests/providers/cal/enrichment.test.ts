@@ -365,6 +365,41 @@ describe("CAL FX", () => {
     },
   );
 
+  it("parses a one-decimal representative rate", () => {
+    const row = templateRow("FX-ONE-STEP");
+    // 50 EUR × 3.9 + 1.50 − 0.50 = 196.00 billed.
+    Object.assign(row, {
+      amountForDisplay: 196,
+      amtBeforeConvAndIndex: 196,
+      comments: (row.comments as { key: string }[]).map((comment) =>
+        comment.key.includes("בשער יציג")
+          ? { ...comment, key: ILS_TEMPLATE("3.9") }
+          : comment,
+      ),
+    });
+    const result = extractOne(row);
+    expect(result.details.currencyExchange).toMatchObject([
+      { exchangeRate: "3.9" },
+    ]);
+    expect(result.fxFeeMinor).toBe(-100);
+  });
+
+  it("parses a USD conversion rate stated with three decimals", () => {
+    const row = templateRow("FX-TWO-STEP");
+    Object.assign(row, {
+      comments: (row.comments as { key: string }[]).map((comment) => ({
+        ...comment,
+        key: comment.key.replace("בשער 1.270000.", "בשער 1.270."),
+      })),
+    });
+    const result = extractOne(row);
+    expect(result.details.currencyExchange).toMatchObject([
+      { sourceCurrency: "GBP", exchangeRate: "1.270" },
+      { sourceCurrency: "USD" },
+    ]);
+    expect(result.fxFeeMinor).toBe(-178);
+  });
+
   it("rounds half up before comparing", () => {
     // 3 EUR × 3.335 = 10.005 → 10.01, so 10.00 is still within one unit and 9.99 is not.
     for (const [billed, reconciles] of [

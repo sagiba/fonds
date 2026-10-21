@@ -18,6 +18,8 @@ import {
   calForeignExchange,
   calPaymentContext,
   calProviderTransactionCode,
+  type CalStatedText,
+  calStatedText,
 } from "./enrichment.js";
 import { calRowEvidence, retainCalEvidence } from "./evidence.js";
 import { calHasUnsupportedPagination } from "./pagination.js";
@@ -132,6 +134,12 @@ function identifier(value: unknown): string | null {
   return isLosslessNumber(value) ? value.value : text(value);
 }
 
+/** Foreign rows state merchant number `0`, which names no merchant. */
+function merchantNumber(value: unknown): string | null {
+  const number = identifier(value);
+  return number !== null && /^0+$/.test(number) ? null : number;
+}
+
 /** Reviewed CAL classification mapping; shape alone does not verify an ISO registry entry. */
 function merchantCategoryCode(value: unknown, issues: string[]): string | null {
   if (
@@ -236,7 +244,16 @@ function money(
 function additionalInformation(
   rows: SourceRow[],
   comments: CalComment[][],
+  typed: Pick<
+    TransactionInput,
+    "installmentCount" | "originalAmountMinor" | "originalCurrency"
+  >,
 ): string[] {
+  const restated = new Set(
+    stated(rows).flatMap(({ text, parsed }) =>
+      restatesTyped(parsed, typed) ? [text] : [],
+    ),
+  );
   const prose = (value: unknown): string[] =>
     typeof value === "string" && value.trim().length > 0 ? [value] : [];
   const slot = (items: unknown, field?: string): string[] =>
@@ -255,6 +272,60 @@ function additionalInformation(
       ...slot(row.transTypeCommentDetails),
       ...prose(row.onGoingTransactionsComment),
     ]),
+  ).filter((text) => !restated.has(text));
+}
+
+/** The string-slot texts of the rows, each parsed by exact template. */
+function stated(rows: SourceRow[]) {
+  return rows
+    .flatMap((row) => [
+      ...(Array.isArray(row.transTypeCommentDetails)
+        ? row.transTypeCommentDetails
+        : []),
+      row.onGoingTransactionsComment,
+    ])
+    .flatMap((value) =>
+      typeof value === "string"
+        ? [{ text: value, parsed: calStatedText(value) }]
+        : [],
+    );
+}
+
+/** The unsigned original money an original-amount text states, when its marker resolves. */
+function statedOriginal(
+  parsed: CalStatedText | null,
+): { currency: string; amountMinor: number | null } | null {
+  const currency =
+    parsed?.template === "original_amount"
+      ? resolveOriginalSymbol(parsed.marker)
+      : null;
+  if (parsed?.template !== "original_amount" || currency === null) {
+    return null;
+  }
+  try {
+    return { currency, amountMinor: decimalToMinor(parsed.amount, currency) };
+  } catch {
+    return { currency, amountMinor: null };
+  }
+}
+
+/** Whether a parsed text states exactly what a typed field already does. */
+function restatesTyped(
+  parsed: CalStatedText | null,
+  typed: Pick<
+    TransactionInput,
+    "installmentCount" | "originalAmountMinor" | "originalCurrency"
+  >,
+): boolean {
+  if (parsed?.template === "installment_count") {
+    return parsed.count === typed.installmentCount;
+  }
+  const text = statedOriginal(parsed);
+  return (
+    text !== null &&
+    typed.originalAmountMinor !== null &&
+    text.currency === typed.originalCurrency &&
+    text.amountMinor === Math.abs(typed.originalAmountMinor)
   );
 }
 
@@ -344,7 +415,12 @@ function resolveOriginalCurrency(
     return null;
   }
   const currency = iso ?? provider;
+  // `srcCurrencyCode` restates the ISO numeric code, empty exactly when it is null.
+  const source = identifier(row.srcCurrencyCode);
+  const stated = identifier(row.trnCurrencyIsoCode);
   if (
+    (source !== null &&
+      (stated === null || Number(source) !== Number(stated))) ||
     (iso && provider && iso !== provider) ||
     (currency &&
       row.trnCurrencySymbol != null &&
@@ -456,13 +532,17 @@ function conflictingBillingCurrency(
 ): boolean {
   return (
     unique(rows.map((row) => token(row.debCrdCurrencyCode))).length !== 1 ||
-    rows.some((row) =>
-      [row.currencyForDisplay, row.debCrdCurrencySymbol].some(
-        (marker) =>
-          marker !== undefined &&
-          marker !== null &&
-          lookup(displaySymbols, text(marker)) !== currency,
-      ),
+    rows.some(
+      (row) =>
+        [row.currencyForDisplay, row.debCrdCurrencySymbol].some(
+          (marker) =>
+            marker !== undefined &&
+            marker !== null &&
+            lookup(displaySymbols, text(marker)) !== currency,
+        ) ||
+        // The billing currency's ISO alphabetic code, when stated as one.
+        (/^[A-Z]{3}$/.test(text(row.crmIccCurrencyDesc) ?? "") &&
+          text(row.crmIccCurrencyDesc) !== currency),
     )
   );
 }
@@ -642,6 +722,14 @@ function extractGroup(
     currency = null;
   }
   let originalCurrency = resolveOriginalCurrency(row, issues);
+  // Every contributing row restates the currency, not only the first.
+  if (
+    originalCurrency !== null &&
+    rows.some((item) => resolveOriginalCurrency(item, []) !== originalCurrency)
+  ) {
+    issues.push("conflicting_original_currency");
+    originalCurrency = null;
+  }
   if (
     role.kind !== "single" &&
     originalCurrency !== null &&
@@ -682,6 +770,22 @@ function extractGroup(
       issues.push("conflicting_original_amount");
     }
   }
+  // The original-amount texts restate the original money; a text that names
+  // another currency or amount leaves it unknown.
+  if (originalAmountMinor !== null && originalCurrency !== null) {
+    const unsigned = Math.abs(originalAmountMinor);
+    const texts = stated(rows).flatMap(({ parsed }) => {
+      const text = statedOriginal(parsed);
+      return text === null ? [] : [text];
+    });
+    if (texts.some((text) => text.currency !== originalCurrency)) {
+      issues.push("conflicting_original_currency");
+      originalAmountMinor = null;
+    } else if (texts.some((text) => text.amountMinor !== unsigned)) {
+      issues.push("conflicting_original_amount");
+      originalAmountMinor = null;
+    }
+  }
   if (originalAmountMinor === null) {
     originalCurrency = null;
   }
@@ -693,9 +797,29 @@ function extractGroup(
   const installments = rows
     .map((item) => ordinal(item.curPaymentNum, cancel))
     .filter((item): item is number => item !== null);
-  const sourceCount = ordinal(
+  const structuredCount = ordinal(
     status === "posted" ? row.numOfPayments : row.numberOfPayments,
   );
+  // The installment texts state the planned count, including where the recent
+  // endpoint leaves the structured count null.
+  const statedCounts = unique(
+    stated(rows).flatMap((item) =>
+      item.parsed?.template === "installment_count" && item.parsed.count > 0
+        ? [item.parsed.count]
+        : [],
+    ),
+  );
+  const countConflict =
+    statedCounts.length > 1 ||
+    (structuredCount !== null &&
+      statedCounts.length === 1 &&
+      statedCounts[0] !== structuredCount);
+  if (countConflict) {
+    issues.push("conflicting_installment_facts");
+  }
+  const sourceCount = countConflict
+    ? null
+    : (structuredCount ?? statedCounts[0] ?? null);
   if (
     sourceCount !== null &&
     installments.some((number) => number > sourceCount)
@@ -748,7 +872,11 @@ function extractGroup(
       details.currencyExchange = fx.currencyExchange;
     }
   }
-  details.additionalInformation = additionalInformation(rows, comments);
+  details.additionalInformation = additionalInformation(rows, comments, {
+    installmentCount,
+    originalAmountMinor,
+    originalCurrency,
+  });
   const categoryCode = merchantCategoryCode(row.internationalBranchID, issues);
   details.issues = unique(issues);
   return {
@@ -764,7 +892,7 @@ function extractGroup(
     counterpartyName: null,
     kind,
     merchantName: text(row.merchantName),
-    merchantProviderId: identifier(row.merchantId),
+    merchantProviderId: merchantNumber(row.merchantId),
     merchantCategoryCode: categoryCode,
     transactionDate,
     bookingDate: null,

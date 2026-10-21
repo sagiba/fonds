@@ -13,14 +13,53 @@ const CONTACTLESS = "עסקה שבוצעה באמצעות Contact less";
 const SECURE_PURCHASE =
   "עסקה זו בוצעה באינטרנט ואושרה על ידך באמצעות שירות קניה בטוחה";
 const ILS_CONVERSION =
-  /^בתאריך (\d{2}\/\d{2}\/\d{4}) בוצעה המרה ל-₪ בשער יציג (\d+\.\d{2,4})$/;
+  /^בתאריך (\d{2}\/\d{2}\/\d{4}) בוצעה המרה ל-₪ בשער יציג (\d+\.\d{1,4})$/;
 // The double space before "הבינלאומית" is part of the issuer's template.
 const USD_CONVERSION =
-  /^בתאריך (\d{2}\/\d{2}\/\d{4}) העסקה הומרה ל- (-?\d+(?:\.\d{1,2})?)\$ בשער (\d+\.\d{5,6})\. ההמרה ל- \$ בוצעה לפי שער חליפין מכירה של {2}הבינלאומית\.$/;
+  /^בתאריך (\d{2}\/\d{2}\/\d{4}) העסקה הומרה ל- (-?\d+(?:\.\d{1,2})?)\$ בשער (\d+\.\d{3,6})\. ההמרה ל- \$ בוצעה לפי שער חליפין מכירה של {2}הבינלאומית\.$/;
 const FX_FEE = 'עמלת עסקת מט"ח';
 const FX_FEE_DISCOUNT_MARKER = 'עסקה עם הנחה בעמלת מט"ח';
 const FX_FEE_DISCOUNT = 'סכום הנחה בעמלת עסקאות מט"ח';
 const AMOUNT = /^-?\d+(?:\.\d{1,2})?$/;
+
+/**
+ * Templates of the string slots `transTypeCommentDetails[]` and
+ * `onGoingTransactionsComment`, matched exactly. The installment templates
+ * state a plan's planned count; the amount templates restate the original
+ * purchase amount with a currency marker and optional digit groups.
+ */
+const INSTALLMENT_COUNT_DETAIL = /^עסקה ב-\u200e(\d+)\u200f תשלומים$/;
+const INSTALLMENT_COUNT_ONGOING = /^עסקה ב - (\d+) תשלומים$/;
+const STATED_AMOUNT = String.raw`(\D+?)(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)`;
+const ORIGINAL_AMOUNT = new RegExp(
+  `^\u200fסכום העסקה - \u200e${STATED_AMOUNT}\u200f$`,
+);
+const CASH_ORIGINAL_AMOUNT = new RegExp(`^משיכת מזומן -${STATED_AMOUNT}$`);
+
+export type CalStatedText =
+  | { template: "installment_count"; count: number }
+  | { template: "original_amount"; marker: string; amount: string };
+
+/** One string-slot text, parsed by exact template, or null. */
+export function calStatedText(text: string): CalStatedText | null {
+  const count =
+    INSTALLMENT_COUNT_DETAIL.exec(text) ?? INSTALLMENT_COUNT_ONGOING.exec(text);
+  if (count) {
+    const value = Number(count[1]);
+    // An unrepresentable count is no statement, as for structured counts.
+    return Number.isSafeInteger(value)
+      ? { template: "installment_count", count: value }
+      : null;
+  }
+  const amount = ORIGINAL_AMOUNT.exec(text) ?? CASH_ORIGINAL_AMOUNT.exec(text);
+  return amount
+    ? {
+        template: "original_amount",
+        marker: amount[1]!,
+        amount: amount[2]!.replaceAll(",", ""),
+      }
+    : null;
+}
 
 type ParsedComment =
   | { template: "contactless" }

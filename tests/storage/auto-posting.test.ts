@@ -1094,7 +1094,7 @@ describe.each(backends)("%s automatic posting and split", (backend) => {
     expect(await harness.state()).toEqual(before);
   });
 
-  it("blocks unapplied cal-v5 archives under cal-v12 without changing evidence or financial state", async () => {
+  it("blocks unapplied cal-v5 archives under cal-v13 without changing evidence or financial state", async () => {
     await expect(
       db.ingestRun(
         {
@@ -1123,7 +1123,7 @@ describe.each(backends)("%s automatic posting and split", (backend) => {
     const runs = await db.listSyncRuns(harness.connectionId, {
       limit: 20,
     });
-    expect(calAdapter.parserVersion).toBe("cal-v12");
+    expect(calAdapter.parserVersion).toBe("cal-v13");
     await expect(db.applyRun("cal-v5-unapplied", calAdapter)).rejects.toThrow(
       "Run parser version differs from adapter",
     );
@@ -1395,6 +1395,7 @@ describe.each(backends)("%s automatic posting and split", (backend) => {
       postedSource.debCrdCurrencySymbol = currencySymbols[billed];
       postedSource.amountForDisplay = postedAmount;
       postedSource.trnCurrencyIsoCode = original ? isoCodes[original] : null;
+      postedSource.srcCurrencyCode = original ? isoCodes[original] : "";
       postedSource.transOriginalCurrencyCode = null;
       postedSource.trnCurrencySymbol = original
         ? currencySymbols[original]
