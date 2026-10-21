@@ -8,6 +8,7 @@ import { z } from "zod";
 import {
   type Application,
   createApplication,
+  operationDefinitions,
 } from "../../src/application/operations.js";
 import { openDatabase } from "../../src/storage/sqlite/database.js";
 import type {
@@ -24,39 +25,56 @@ import { createMcpHttpHandler } from "../../src/transport/mcp.js";
 const publicOrigin = "https://financial.synthetic.invalid";
 const issuer = "https://issuer.synthetic.invalid/auth";
 const token = "synthetic-local-token-00000000000000000000";
-const names = [
-  "list_connections",
-  "list_accounts",
-  "get_account",
-  "list_cards",
-  "get_card",
-  "list_transactions",
-  "get_transaction",
-  "get_transaction_totals",
-  "list_events",
-  "list_sync_runs",
-  "update_annotation",
-  "undo_annotation",
-  "link_pending_transaction",
-  "unlink_pending_transaction",
-  "confirm_removal",
-];
+const expectedScopes = {
+  list_connections: "financial:read",
+  get_connection: "financial:read",
+  list_cards: "financial:read",
+  get_card: "financial:read",
+  list_accounts: "financial:read",
+  get_account: "financial:read",
+  list_transactions: "financial:read",
+  get_transaction: "financial:read",
+  get_transaction_totals: "financial:read",
+  list_events: "financial:read",
+  list_sync_runs: "financial:read",
+  update_annotation: "financial:write",
+  refresh_connection: "financial:write",
+  get_refresh: "financial:read",
+  list_refreshes: "financial:read",
+  undo_annotation: "financial:write",
+  link_pending_transaction: "financial:write",
+  unlink_pending_transaction: "financial:write",
+  confirm_removal: "financial:write",
+} as const;
 const routes = [
-  ["GET", "/v1/connections"],
-  ["GET", "/v1/accounts"],
-  ["GET", "/v1/accounts/synthetic"],
-  ["GET", "/v1/cards"],
-  ["GET", "/v1/cards/synthetic"],
-  ["GET", "/v1/transactions"],
-  ["GET", "/v1/transactions/synthetic"],
-  ["GET", "/v1/transactions/totals"],
-  ["GET", "/v1/events"],
-  ["GET", "/v1/connections/synthetic/sync-runs"],
-  ["PATCH", "/v1/transactions/synthetic/annotation"],
-  ["POST", "/v1/annotations/undo"],
-  ["POST", "/v1/transactions/synthetic/link-pending"],
-  ["POST", "/v1/transactions/synthetic/unlink-pending"],
-  ["POST", "/v1/transactions/synthetic/removal"],
+  ["list_connections", "GET", "/v1/connections"],
+  ["get_connection", "GET", "/v1/connections/synthetic"],
+  ["list_accounts", "GET", "/v1/accounts"],
+  ["get_account", "GET", "/v1/accounts/synthetic"],
+  ["list_cards", "GET", "/v1/cards"],
+  ["get_card", "GET", "/v1/cards/synthetic"],
+  ["list_transactions", "GET", "/v1/transactions"],
+  ["get_transaction", "GET", "/v1/transactions/synthetic"],
+  ["get_transaction_totals", "GET", "/v1/transactions/totals"],
+  ["list_events", "GET", "/v1/events"],
+  ["list_sync_runs", "GET", "/v1/connections/synthetic/sync-runs"],
+  ["update_annotation", "PATCH", "/v1/transactions/synthetic/annotation"],
+  ["refresh_connection", "POST", "/v1/connections/synthetic/refreshes"],
+  ["refresh_connection", "POST", "/v1/refreshes"],
+  ["get_refresh", "GET", "/v1/refreshes/synthetic"],
+  ["list_refreshes", "GET", "/v1/connections/synthetic/refreshes"],
+  ["undo_annotation", "POST", "/v1/annotations/undo"],
+  [
+    "link_pending_transaction",
+    "POST",
+    "/v1/transactions/synthetic/link-pending",
+  ],
+  [
+    "unlink_pending_transaction",
+    "POST",
+    "/v1/transactions/synthetic/unlink-pending",
+  ],
+  ["confirm_removal", "POST", "/v1/transactions/synthetic/removal"],
 ] as const;
 const services: ReturnType<typeof createHttpService>[] = [];
 const clients: Client[] = [];
@@ -79,15 +97,11 @@ function identity(
 function setup(provider?: HostedAuthProvider) {
   const application: Application = {
     backend: "sqlite",
-    operations: names.map((name, index) => ({
-      name,
-      description: "Synthetic operation",
+    operations: operationDefinitions.map((definition) => ({
+      ...definition,
       inputSchema: z.object({}).strict(),
       outputSchema: z.object({ name: z.string() }).strict(),
-      access: index < 8 ? ("read" as const) : ("write" as const),
-      readOnly: index < 8,
-      openWorld: false,
-      execute: vi.fn(async () => ({ name })),
+      execute: vi.fn(async () => ({ name: definition.name })),
     })),
   };
   const authProvider = provider ?? {
@@ -260,19 +274,23 @@ describe("hosted trusted auth boundary", () => {
 
   it("requires the operation's explicit scope on every REST route and health", async () => {
     const { application, request } = setup();
-    for (const [index, [method, path]] of routes.entries()) {
-      const readOnly = index < 8;
+    for (const [name, method, path] of routes) {
+      const operation = application.operations.find(
+        (entry) => entry.name === name,
+      )!;
+      vi.mocked(operation.execute).mockClear();
+      const readOnly = expectedScopes[name] === "financial:read";
       const init = { method, ...(method !== "GET" && { body: "{}" }) };
       const denied = await request(path, readOnly ? "write" : "read", init);
       expect(denied.status).toBe(403);
       expect(denied.headers.get("www-authenticate")).toContain(
         'error="insufficient_scope"',
       );
-      expect(application.operations[index]!.execute).not.toHaveBeenCalled();
+      expect(operation.execute).not.toHaveBeenCalled();
       expect(
         (await request(path, readOnly ? "read" : "write", init)).status,
       ).toBe(200);
-      expect(application.operations[index]!.execute).toHaveBeenCalledOnce();
+      expect(operation.execute).toHaveBeenCalledOnce();
     }
     expect((await request("/health", "write")).status).toBe(403);
     expect((await request("/health", "neither")).status).toBe(403);
@@ -310,13 +328,16 @@ describe("hosted trusted auth boundary", () => {
         connect("read"),
         connect("write"),
       ]);
-      for (const [index, name] of names.entries()) {
+      for (const [name, scope] of Object.entries(expectedScopes)) {
+        const operation = application.operations.find(
+          (entry) => entry.name === name,
+        )!;
         const [readResult, writeResult] = await Promise.all([
           reader.callTool({ name, arguments: {} }),
           writer.callTool({ name, arguments: {} }),
         ]);
-        const denied = index < 8 ? writeResult : readResult;
-        const allowed = index < 8 ? readResult : writeResult;
+        const denied = scope === "financial:read" ? writeResult : readResult;
+        const allowed = scope === "financial:read" ? readResult : writeResult;
         expect(denied).toMatchObject({
           isError: true,
           structuredContent: {
@@ -324,7 +345,8 @@ describe("hosted trusted auth boundary", () => {
           },
         });
         expect(allowed.isError).not.toBe(true);
-        expect(application.operations[index]!.execute).toHaveBeenCalledOnce();
+        expect(allowed.structuredContent).toEqual({ name });
+        expect(operation.execute).toHaveBeenCalledOnce();
       }
     },
   );
@@ -383,27 +405,7 @@ describe("operation scopes", () => {
             operationScope(operation),
           ]),
         ),
-      ).toEqual({
-        list_connections: "financial:read",
-        get_connection: "financial:read",
-        list_cards: "financial:read",
-        get_card: "financial:read",
-        list_accounts: "financial:read",
-        get_account: "financial:read",
-        list_transactions: "financial:read",
-        get_transaction: "financial:read",
-        get_transaction_totals: "financial:read",
-        list_events: "financial:read",
-        list_sync_runs: "financial:read",
-        update_annotation: "financial:write",
-        refresh_connection: "financial:write",
-        get_refresh: "financial:read",
-        list_refreshes: "financial:read",
-        undo_annotation: "financial:write",
-        link_pending_transaction: "financial:write",
-        unlink_pending_transaction: "financial:write",
-        confirm_removal: "financial:write",
-      });
+      ).toEqual(expectedScopes);
     } finally {
       await db.close();
     }

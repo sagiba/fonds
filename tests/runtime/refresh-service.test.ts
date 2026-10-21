@@ -1,3 +1,5 @@
+import { inspect } from "node:util";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -223,6 +225,103 @@ describe("refresh service", () => {
       expect(JSON.stringify(result)).not.toContain("private-credential-value");
     }
   });
+
+  it.each(["credential loading", "collection"] as const)(
+    "keeps secrets from %s failures out of stored refreshes, sync runs and every logging sink",
+    async (stage) => {
+      const secret = "private-credential-value";
+      const log = vi.fn();
+      const consoleMethods = [
+        "log",
+        "info",
+        "warn",
+        "error",
+        "debug",
+        "trace",
+        "dir",
+        "table",
+      ] as const;
+      const consoleSpies = consoleMethods.map((method) =>
+        vi.spyOn(console, method).mockImplementation(() => {}),
+      );
+      const stdout = vi
+        .spyOn(process.stdout, "write")
+        .mockImplementation(() => true);
+      const stderr = vi
+        .spyOn(process.stderr, "write")
+        .mockImplementation(() => true);
+      try {
+        const collect = vi.fn(async function* () {
+          throw new Error(secret);
+        });
+        const refreshes = service(
+          async () => {
+            if (stage === "credential loading") {
+              throw new Error(secret);
+            }
+            return source(collect);
+          },
+          { log },
+        );
+        const [result] = await refreshes.wait([
+          await refreshes.start(connectionId, {
+            trigger: "manual",
+            operator: true,
+          }),
+        ]);
+        await refreshes.settled();
+        expect(collect).toHaveBeenCalledTimes(stage === "collection" ? 1 : 0);
+        const stored = await db.getRefresh(result!.refresh!.id);
+        expect(stored).toMatchObject({
+          status: "failed",
+          failureCodes: stage === "collection" ? ["network_error"] : [],
+          failureReason: null,
+          counts: { failures: 1 },
+        });
+        expect(JSON.stringify(stored)).not.toContain(secret);
+        const runs = await db.listSyncRuns(connectionId, { limit: 10 });
+        expect(runs).toHaveLength(stage === "collection" ? 1 : 0);
+        const persistedRuns = await db.client.execute(
+          "SELECT * FROM sync_runs",
+        );
+        expect(persistedRuns.rows).toHaveLength(stage === "collection" ? 1 : 0);
+        expect(JSON.stringify(persistedRuns.rows)).not.toContain(secret);
+        if (stage === "collection") {
+          expect(runs[0]).toMatchObject({ status: "failed" });
+          expect(log).toHaveBeenCalledWith(
+            expect.objectContaining({
+              event: "fonds_sync",
+              stage: "collection",
+              outcome: "failed",
+              reason: "collector_exception",
+              failureCategory: "collection",
+            }),
+          );
+        }
+        expect(log).toHaveBeenCalledWith(
+          expect.objectContaining({
+            event: "fonds_refresh",
+            status: "failed",
+          }),
+        );
+        expect(inspect(log.mock.calls, { depth: null })).not.toContain(secret);
+        for (const sink of [...consoleSpies, stdout, stderr]) {
+          expect(inspect(sink.mock.calls, { depth: null })).not.toContain(
+            secret,
+          );
+        }
+        for (const sink of [stdout, stderr]) {
+          for (const [chunk] of sink.mock.calls) {
+            expect(String(chunk)).not.toContain(secret);
+          }
+        }
+      } finally {
+        for (const sink of [...consoleSpies, stdout, stderr]) {
+          sink.mockRestore();
+        }
+      }
+    },
+  );
 
   it("stops requesting months after an authentication failure and needs attention", async () => {
     const requested: string[] = [];
