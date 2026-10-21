@@ -124,8 +124,9 @@ summed exactly in application code with no stored total column
 - Transaction calendar dates are PostgreSQL `date`, checked to years 0001–9999,
   and `YYYY-MM-DD` text on SQLite. In that range PostgreSQL's ISO output is the
   stored text, so dates round-trip exactly and sort, filter and page as SQLite
-  text does. PostgreSQL has no year zero, so the domain rejects it everywhere. A
-  read under a non-ISO `DateStyle` fails rather than reinterpret a date.
+  text does. PostgreSQL has no year zero, so the domain rejects it everywhere.
+  Financial pools set `DateStyle` to ISO; initialization refuses another style,
+  and a read under one fails rather than reinterpret a date.
 - IDs stay text: the API matches any ID string exactly, and not every ID is a
   UUID. A `uuid` column would error on other strings and equate UUID spellings
   that SQLite keeps distinct.

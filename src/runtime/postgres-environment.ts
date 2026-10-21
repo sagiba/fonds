@@ -13,7 +13,7 @@ import {
   readInstallation,
 } from "../storage/postgres/installation.js";
 import {
-  FINANCIAL_SCHEMA,
+  FINANCIAL_SESSION_OPTIONS,
   initializePostgresDatabase,
   openPostgresDatabase,
 } from "../storage/postgres/store.js";
@@ -29,7 +29,10 @@ import { CommandInputError } from "./operation-cli.js";
 import type { BackendSession } from "./operator-cli.js";
 import { STATE_SECRETS, StateError } from "./state.js";
 
-export { FINANCIAL_SCHEMA } from "../storage/postgres/store.js";
+export {
+  FINANCIAL_SCHEMA,
+  FINANCIAL_SESSION_OPTIONS,
+} from "../storage/postgres/store.js";
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 /** The sslmode values that refuse a plaintext connection. */
@@ -80,7 +83,7 @@ export function financialPoolConfig(connectionString: string): PoolConfig {
     connectionString: databaseUrl(connectionString, {
       allowPlaintextRemote: true,
     }),
-    options: `-c search_path=${FINANCIAL_SCHEMA}`,
+    options: FINANCIAL_SESSION_OPTIONS,
   };
 }
 

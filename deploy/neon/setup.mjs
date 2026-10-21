@@ -456,8 +456,11 @@ async function initializeDatabase(connectionString, values) {
   const { runtimeProvider } = await import("../../src/runtime/providers.js");
   runtimeProvider(values.FONDS_CONNECTION_PROVIDER);
   const { Pool } = await import("pg");
-  const { ensurePostgresSchema, openPostgresDatabase } =
-    await import("../../src/storage/postgres/store.js");
+  const {
+    ensurePostgresSchema,
+    FINANCIAL_SESSION_OPTIONS,
+    openPostgresDatabase,
+  } = await import("../../src/storage/postgres/store.js");
   const { bindPostgresInstallation, neonInstallation } =
     await import("../../src/runtime/postgres-environment.js");
   const financialPool = new Pool({
@@ -465,7 +468,7 @@ async function initializeDatabase(connectionString, values) {
     max: 1,
     connectionTimeoutMillis: 15_000,
     statement_timeout: 30_000,
-    options: "-c search_path=financial",
+    options: FINANCIAL_SESSION_OPTIONS,
   });
   financialPool.on("error", () => {});
   const authPool = identityPool(Pool, connectionString);

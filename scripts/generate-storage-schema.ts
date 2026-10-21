@@ -8,6 +8,7 @@ import type { Migration } from "../src/storage/migrations.js";
 import {
   ensurePostgresSchema,
   FINANCIAL_SCHEMA,
+  FINANCIAL_SESSION_OPTIONS,
   migratePostgresSchema,
 } from "../src/storage/postgres/initialize.js";
 import {
@@ -141,7 +142,7 @@ try {
   url.pathname = `/${database}`;
   const pool = new Pool({
     connectionString: url.href,
-    options: `-c search_path=${FINANCIAL_SCHEMA}`,
+    options: FINANCIAL_SESSION_OPTIONS,
     max: 1,
   });
   try {

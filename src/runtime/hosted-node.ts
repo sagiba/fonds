@@ -32,7 +32,7 @@ import { listen } from "./node-service.js";
 import {
   bindPostgresInstallation,
   databaseUrl,
-  FINANCIAL_SCHEMA,
+  FINANCIAL_SESSION_OPTIONS,
   financialPoolConfig,
   postgresInstallation,
   verifyPostgresInstallation,
@@ -130,19 +130,19 @@ export async function bootstrapHostedDatabase(
     credentialsKeyId: string | null;
   },
 ) {
-  const pool = (schema: string) => {
+  const pool = (options: string) => {
     const created = new Pool({
       ...financialPoolConfig(config.connectionString),
       max: 1,
       connectionTimeoutMillis: 15_000,
       statement_timeout: 30_000,
-      options: `-c search_path=${schema}`,
+      options,
     });
     created.on("error", () => {});
     return created;
   };
-  const financialPool = pool(FINANCIAL_SCHEMA);
-  const authPool = pool("identity");
+  const financialPool = pool(FINANCIAL_SESSION_OPTIONS);
+  const authPool = pool("-c search_path=identity");
   try {
     // A fresh database is migrated and bound in one transaction, before
     // anything is populated, so an interrupted first start resumes safely.

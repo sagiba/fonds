@@ -13,6 +13,9 @@ import { operationsManifest, schemaManifest } from "./schema-manifest.js";
 /** Every PostgreSQL entry point keeps the financial tables in this schema. */
 export const FINANCIAL_SCHEMA = "financial";
 
+/** Pool options for that schema, with ISO dates so `date` columns read back as stored. */
+export const FINANCIAL_SESSION_OPTIONS = `-c search_path=${FINANCIAL_SCHEMA} -c DateStyle=ISO`;
+
 async function declarations(client: PoolClient, sql: string) {
   const { rows } = await client.query<{
     kind: string;
@@ -72,14 +75,18 @@ export async function migratePostgresSchema(
       async version(client) {
         const { rows } = await client.query<{
           schema: string | null;
+          dateStyle: string;
           recorded: boolean;
         }>(
-          "SELECT current_schema() AS schema, EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = current_schema() AND tablename = 'schema_migrations') AS recorded",
+          "SELECT current_schema() AS schema, current_setting('DateStyle') AS \"dateStyle\", EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = current_schema() AND tablename = 'schema_migrations') AS recorded",
         );
         if (rows[0]?.schema !== FINANCIAL_SCHEMA) {
           throw new Error(
             `PostgreSQL storage needs search_path=${FINANCIAL_SCHEMA}`,
           );
+        }
+        if (!rows[0].dateStyle.startsWith("ISO")) {
+          throw new Error("PostgreSQL storage needs DateStyle ISO");
         }
         if (!rows[0].recorded) {
           return 0;
