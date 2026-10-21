@@ -115,7 +115,8 @@ export function createNeonService(env: NodeJS.ProcessEnv) {
     attachPool: (pool) => attachDatabasePool(pool, { onUnexpectedError }),
     ...(google && { googleLogin: neonGoogleLogin(google) }),
     // An invocation lives at most 15 minutes; a longer refresh continues in a
-    // new one, and the runtime keeps each alive until its refresh settles.
+    // new one, and the runtime keeps each alive until its refresh or its
+    // write's delivery settles.
     refreshExecution: { background: waitUntil, budgetMs: 14 * 60_000 },
     scheduler: {
       authenticate: neonTriggerAuthenticator(REFRESH_TRIGGER_NAME),

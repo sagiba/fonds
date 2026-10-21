@@ -27,7 +27,13 @@ import {
   createEmbeddedScheduler,
   type EmbeddedSchedulerOptions,
 } from "./collection-schedule.js";
-import { collectionTargets, scheduledRefreshes } from "./collection-service.js";
+import {
+  collectionTargets,
+  deliveryPass,
+  scheduledRefreshes,
+  stdoutLog,
+  writeDelivery,
+} from "./collection-service.js";
 import {
   type CredentialsKey,
   parseCredentialsKey,
@@ -191,8 +197,9 @@ export interface HostedServiceOptions {
   connectionString: string;
   /**
    * For hosts whose invocations end (Neon): keeps an invocation alive while a
-   * refresh runs, and bounds how long it may; a longer refresh continues in a
-   * new invocation through the internal continuation route.
+   * refresh or an owner write's delivery runs, and bounds how long a refresh
+   * may; a longer one continues in a new invocation through the internal
+   * continuation route.
    */
   refreshExecution?: Pick<RefreshServiceOptions, "background" | "budgetMs">;
   /** Lets a host track pool lifetime, for example across suspended instances. */
@@ -259,15 +266,13 @@ function collectionServices(
     verifyWebhookCallback,
     grantCheck: issuer.hasActiveEventReadGrant,
   });
-  const deliver = async (signal: AbortSignal, quiet = false) => {
-    const outcome = await events.deliver({
-      limit: 100,
-      signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
-    });
-    if (!quiet || outcome.sent || outcome.failed) {
-      logEvent("fonds_event_delivery", outcome);
-    }
-  };
+  const deliver = deliveryPass(events, stdoutLog);
+  // Owner writes deliver too: a serverless host has no tick to deliver them.
+  const writes = writeDelivery((signal) => deliver(signal, true), {
+    signal: shutdown,
+    background: execution?.background,
+    log: stdoutLog,
+  });
   if (embedded?.schedule && !config.collection) {
     throw new HostedConfigurationError(
       "FONDS_REFRESH_SCHEDULE needs FONDS_REFRESH_SECRET",
@@ -281,7 +286,9 @@ function collectionServices(
       signal: shutdown,
       log: (entry) => console.info(JSON.stringify(entry)),
       // Each refresh also delivers changes made through the API since the last one.
-      afterRefresh: (signal) => deliver(signal),
+      afterRefresh: async (signal) => {
+        await deliver(signal);
+      },
       ...execution,
       ...(execution?.budgetMs !== undefined && {
         continueLater: continuationRequest(
@@ -304,7 +311,7 @@ function collectionServices(
       log: logEvent,
     });
   if (!config.collection || !refreshes) {
-    return { events, scheduler: embeddedScheduler };
+    return { events, writes, scheduler: embeddedScheduler };
   }
   const routes = createCollectionRoutes(
     refreshes,
@@ -317,7 +324,7 @@ function collectionServices(
     },
     embedded?.schedule && (() => embeddedScheduler!.runCurrent()),
   );
-  return { events, refreshes, routes, scheduler: embeddedScheduler };
+  return { events, writes, refreshes, routes, scheduler: embeddedScheduler };
 }
 
 /**
@@ -370,7 +377,7 @@ export function createHostedService(
     ...(options.googleLogin && { googleLogin: options.googleLogin }),
   });
   const shutdown = new AbortController();
-  const { events, refreshes, routes, scheduler } = collectionServices(
+  const { events, writes, refreshes, routes, scheduler } = collectionServices(
     config,
     options.scheduler,
     store,
@@ -381,10 +388,10 @@ export function createHostedService(
     options.refreshExecution,
   );
   const service = createHttpService(
-    createApplication(
-      store,
-      refreshes ? { refreshes: ownerRefreshes(refreshes) } : {},
-    ),
+    createApplication(store, {
+      ...(refreshes && { refreshes: ownerRefreshes(refreshes) }),
+      afterWrite: writes.afterWrite,
+    }),
     {
       publicOrigin: config.publicOrigin,
       ownerId: config.ownerId,
@@ -415,9 +422,11 @@ export function createHostedService(
   /** Ending a pool waits for clients that requests still have checked out. */
   const dispose = async () => {
     try {
-      // Neither scheduled runs nor refreshes are requests the listener drains.
+      // Neither scheduled runs, refreshes nor deliveries are requests the
+      // listener drains.
       await scheduler?.settled();
       await refreshes?.settled();
+      await writes.settled();
       await service.close();
     } finally {
       await Promise.allSettled([store.close(), authPool.end()]);
