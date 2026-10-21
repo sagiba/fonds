@@ -240,12 +240,22 @@ describe("quickstart", () => {
       const demoDb = join(home, "demo.sqlite");
       expect(output).toContain(`  fonds totals --db ${demoDb}`);
       expect(output).toContain(
-        `claude mcp add fonds-demo -- ${launcher} serve --transport stdio --db ${demoDb}`,
+        `claude mcp add fonds-demo --scope local --transport stdio --env FONDS_STATE_DIR=${home} -- ${process.execPath}`,
+      );
+      expect(output).toContain(
+        `codex mcp add fonds-demo --env FONDS_STATE_DIR=${home}`,
       );
       expect(output).toContain(
         JSON.stringify({
-          command: launcher,
-          args: ["serve", "--transport", "stdio", "--db", demoDb],
+          command: process.execPath,
+          args: [
+            resolve("dist/server.js"),
+            "--transport",
+            "stdio",
+            "--db",
+            demoDb,
+          ],
+          env: { FONDS_STATE_DIR: home },
         }),
       );
     } finally {
@@ -263,7 +273,7 @@ describe("quickstart", () => {
       const demoDb = join(home, "demo.sqlite");
       expect(demo.stdout).toContain(`--db ${demoDb}`);
       expect(demo.stdout).toMatch(
-        /claude mcp add fonds-demo -- node \S+server\.js/,
+        /claude mcp add fonds-demo .*--transport stdio --db/,
       );
 
       const list = cli(home, "list", "--db", demoDb, "--limit", "5");

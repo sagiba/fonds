@@ -35,7 +35,7 @@ claude mcp add fonds -- docker run -i --rm -v fonds-data:/data fonds \
 
 The SQLite HTTP server binds only `127.0.0.1` inside the container, so a
 published port cannot reach it; for loopback HTTP, run Node from a
-[checkout](local-development.md).
+[checkout](local-setup.md).
 
 ## The hosted stack
 

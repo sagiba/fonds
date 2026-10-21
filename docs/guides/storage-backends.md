@@ -73,7 +73,7 @@ not a verified hosting limit. The Neon Function is bundled by `neon deploy` from
 
 The SQLite target keeps its launcher arguments and private-file checks
 (`fonds serve --db /absolute/private/path/service.sqlite`); see the
-[local service guide](local-development.md) for synthetic initialization, token
+[local service guide](local-setup.md) for synthetic initialization, token
 files and stdio. Runtime files stay outside the source tree and deployed
 application directory.
 
@@ -87,9 +87,9 @@ PostgreSQL and Turso launchers read server-side environment configuration:
 | `PORT`                      | Loopback port; default 8787                                 |
 
 With a command, the same entry points run the CLI instead of the service:
-PostgreSQL the same [operator CLI](local-development.md#operator-commands) as
+PostgreSQL the same [operator CLI](local-setup.md#operator-commands) as
 SQLite, Turso only the embedded
-[operation commands](local-development.md#use-the-command-line). With
+[operation commands](local-setup.md#use-the-command-line). With
 `--transport stdio`, the PostgreSQL target serves MCP over stdio to a trusted local
 client: the operations and refresh, without Events or scheduling. PostgreSQL
 launchers and commands take their secrets, the API token and credentials key

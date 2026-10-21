@@ -105,7 +105,10 @@ const entryPoints = {
 const commands = Object.keys(operatorCommandFlags());
 
 /** What each backend genuinely lacks; everything else must run on both. */
-const lacking = { sqlite: ["login-link"], postgres: ["demo", "backup"] };
+const lacking = {
+  sqlite: ["login-link"],
+  postgres: ["demo", "backup", "mcp-config"],
+};
 
 describe("one operator CLI for every backend", () => {
   it("prints the same usage on every entry point, apart from its own paragraph", async () => {

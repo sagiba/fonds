@@ -1803,6 +1803,87 @@ describe("stored provider credentials", () => {
     ]);
   });
 
+  it("refreshes two CAL logins and Isracard together without mixing credentials or records", async () => {
+    collectorState.partial = false;
+    const logins = [
+      {
+        id: "cal-one",
+        provider: "cal",
+        credentials: {
+          username: "INVENTED-FIRST",
+          password: "INVENTED-FIRST-PASSWORD",
+        },
+      },
+      {
+        id: "cal-two",
+        provider: "cal",
+        credentials: {
+          username: "INVENTED-SECOND",
+          password: "INVENTED-SECOND-PASSWORD",
+        },
+      },
+      {
+        id: "isracard-one",
+        provider: "isracard",
+        credentials: {
+          username: "INVENTED-THIRD",
+          password: "INVENTED-THIRD-PASSWORD",
+          cardSuffix: "123456",
+        },
+      },
+    ];
+    for (const login of logins) {
+      await init(login.id, login.provider);
+      await withCredentialFile(login.credentials, (fd) =>
+        success(
+          "connect",
+          "--db",
+          dbPath,
+          "--connection",
+          login.id,
+          "--credentials-fd",
+          fd,
+        ),
+      );
+    }
+    const result = await run("refresh", "--db", dbPath);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ status: "completed" });
+    expect(collectorState.calls).toMatchObject(
+      logins.slice(0, 2).map(({ credentials }) => ({ credentials })),
+    );
+    expect(collectorState.isracardCalls).toMatchObject([
+      { credentials: logins[2]!.credentials },
+    ]);
+    const rows = await Promise.all(
+      logins.map(async ({ id }) => {
+        const database = await openDatabase(dbPath);
+        try {
+          return await database.listTransactions({
+            connectionId: id,
+            perspective: "all",
+          });
+        } finally {
+          await database.close();
+        }
+      }),
+    );
+    expect(rows.map((group) => group.length)).toEqual([21, 21, 2]);
+    expect(new Set(rows.flat().map((row) => row.id)).size).toBe(44);
+    for (const login of logins) {
+      for (const value of Object.values(login.credentials)) {
+        expect(result.stdout + result.stderr).not.toContain(value);
+      }
+    }
+    collectorState.calls = [];
+    collectorState.isracardCalls = [];
+    await success("refresh", "--db", dbPath, "--connection", "cal-two");
+    expect(collectorState.calls).toMatchObject([
+      { credentials: logins[1]!.credentials },
+    ]);
+    expect(collectorState.isracardCalls).toEqual([]);
+  });
+
   it("prefers an explicit descriptor over stored credentials", async () => {
     await init("cal-cli", "cal");
     await withCredentialFile(calCredentials, (fd) =>

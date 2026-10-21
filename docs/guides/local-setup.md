@@ -1,31 +1,129 @@
-# Run the local HTTP and MCP service
+# Install Fonds and connect a local assistant
 
-Run the SQLite service locally, query it over loopback bearer HTTP, or connect a
-trusted local MCP client over stdio; both serve the same
-[operations](../api.md#operations) from `fonds serve`. Synthetic development
-needs no provider credentials, and refresh is opt-in. Hosted setup is in the
-[hosted-service guide](hosted-service.md).
+Install Fonds, try synthetic data, then connect ChatGPT desktop or Claude to
+your local SQLite ledger. No provider credentials are needed for the demo;
+refresh is opt-in. For internet access, use the [hosted-service guide](hosted-service.md).
 
-## Start with synthetic data
+## Install and try the demo
 
-Use Node 24.11 or newer. Install the `fonds` command, then create the synthetic
-demo ledger and serve it over HTTP:
+Use Node.js 24.11 or newer (`node --version`). The commands below use a POSIX
+shell on macOS or Linux; native Windows setup is unverified. Install the published package:
 
 ```sh
 npm install --global fonds-finance
+fonds --version
 fonds demo
-fonds serve --db <the demo database demo printed>
 ```
 
-From a source checkout, `npm ci && npm run build` provides the same commands as
-`node dist/cli.js` and, for `fonds serve`, `node dist/server.js`.
+The npm package is named `fonds-finance`; its executable is `fonds`. To update,
+repeat the install command. If `fonds` is not found, put npm's global `bin`
+directory on your `PATH`. With a Node version manager, install under the Node
+version you will keep using.
 
-`demo` creates `demo.sqlite` in the private data directory (`$FONDS_HOME`, otherwise
-`~/.local/share/fonds` on Linux or `~/Library/Application Support/Fonds` on macOS,
-created `0700`) and replays the committed synthetic CAL captures; running it again
-changes nothing. Without `--db`, the CLI and the server use `fonds.sqlite` in the same
-directory, which is where your own data goes. Pass `--db` to use any other private
-database outside the repository.
+Alternatively, from source:
+
+```sh
+git clone https://github.com/sagiba/fonds.git
+cd fonds
+npm ci
+npm run build
+node dist/cli.js demo
+```
+
+For the remaining examples, replace `fonds <command>` with
+`node dist/cli.js <command>`, except `fonds serve`, which is
+`node dist/server.js`. The checkout is a development package, so `npm link`
+does not install the `fonds` command. Keep the checkout and rerun the build after
+pulling updates. Both installation paths print the same client setup.
+
+`demo` creates `demo.sqlite` with invented CAL transactions, separately from
+your default `fonds.sqlite`. Rerunning it does not reset annotations. Databases
+live in `$FONDS_HOME`, otherwise `~/.local/share/fonds` on Linux or
+`~/Library/Application Support/Fonds` on macOS. Fonds creates its data directory
+as `0700`; use `--db` for another database outside the checkout.
+
+## Connect an MCP client locally
+
+`fonds demo` prints setup for its sample ledger. For an initialized real ledger:
+
+```sh
+fonds mcp-config
+```
+
+Add `--db /absolute/private/path.sqlite` for a different ledger. This prints
+snippets; it does not install a client or modify its settings. The generated
+configuration pins Node, the server, database and state directory to absolute
+paths, so GUI apps need not inherit your shell's `PATH`, `FONDS_HOME` or
+`FONDS_STATE_DIR`. No credentials or tokens appear in it.
+For multiple ledgers in one client, give each a different server name: change
+`fonds` in the printed add command or JSON key. Connection IDs inside a ledger
+do not need separate MCP registrations.
+
+- **ChatGPT desktop:** in Settings → MCP servers → Add server, choose STDIO.
+  Enter the generated JSON's `command`, `args` and `env` values, then save and
+  restart. Alternatively, with Codex CLI installed on the same local host,
+  run the printed `codex mcp add` command. They share
+  [MCP configuration](https://learn.chatgpt.com/docs/extend/mcp).
+- **Claude Code:** run the printed `claude mcp add` command from the project
+  where you will use it. It explicitly uses private local scope; change to
+  `--scope user` to make it available across your projects
+  ([scopes](https://code.claude.com/docs/en/mcp#local-scope)).
+- **Claude Desktop:** open Settings → Developer → Edit Config, merge the
+  printed `mcpServers` entry with existing entries, then fully quit and restart
+  ([client instructions](https://modelcontextprotocol.io/docs/develop/connect-local-servers)).
+
+Check `/mcp` or the client's MCP settings, then ask it to call `list_connections`.
+For the demo, expect connection `demo`; ask for its totals by currency next.
+The client starts and stops Fonds over stdio. You do not start an HTTP server
+or supply an HTTP token. A trusted local client can read, annotate and request
+refreshes across the ledger's connections; installing it does not refresh data.
+
+For a failed connection, run the generated Node command manually with its
+`FONDS_STATE_DIR` environment setting; it waits silently for MCP input on
+success. Check the client's MCP logs for startup errors. Keep the state directory
+with the database. After moving the installation or changing Node versions,
+rerun `mcp-config` and replace the client entry. Remove `fonds-demo` in the
+client's MCP settings when finished. **ChatGPT web** uses the
+[hosted connection guide](chatgpt-connect.md), not these local settings.
+
+## Add provider logins
+
+Read [Your data stays yours](../../README.md#your-data-stays-yours) and the
+provider guide ([CAL](../providers/cal.md), [Isracard](../providers/isracard.md))
+before collecting. A connection represents one provider login, not one card or
+billing account. Multiple logins, including the same provider, share one ledger:
+
+```sh
+fonds init --connection cal-personal --provider cal
+fonds connect --connection cal-personal
+fonds init --connection cal-other --provider cal
+fonds connect --connection cal-other
+fonds init --connection my-isracard --provider isracard
+fonds connect --connection my-isracard
+fonds list-connections
+fonds refresh
+fonds mcp-config
+```
+
+Choose distinct IDs and use only accounts you own. `connect` prompts privately
+for each login's fields and saves credentials for that connection; it does not
+validate the login with the provider. `refresh`
+without `--connection` refreshes all connections with saved credentials;
+`fonds refresh --connection my-isracard` targets one. Cards and billing accounts
+are discovered within each connection. Avoid overlapping card access, even
+through different logins: connections remain separate, so ledger-wide totals
+count overlapping records twice. Use `fonds totals --connection-id ID` to scope
+totals to one login.
+One MCP registration exposes all connections, including ones added later.
+`fonds list --connection-id cal-personal` filters CLI results to one connection.
+If a combined refresh fails, use `fonds list-refreshes --connection-id ID` for
+each connection to find the failure before retrying it.
+
+## Local HTTP (optional)
+
+```sh
+fonds serve --db <the demo database demo printed>
+```
 
 HTTP listens at `http://127.0.0.1:8787`; MCP is `http://127.0.0.1:8787/mcp`.
 `--port` selects another port; `--port 0` selects an available one and prints
@@ -39,21 +137,8 @@ links are refused, and Fonds never changes existing permissions. The local
 launcher has no public OAuth mode; use the [hosted service](hosted-service.md)
 for remote OAuth access.
 
-To query without placing the token in a command argument, use another terminal
-and set `FONDS_STATE_FILE` to the `fonds.env` path printed at startup:
-
-```sh
-node --input-type=module - "$FONDS_STATE_FILE" <<'JS'
-import { readFileSync } from 'node:fs';
-import { parseEnv } from 'node:util';
-const token = parseEnv(readFileSync(process.argv[2], 'utf8')).FONDS_API_TOKEN;
-const response = await fetch('http://127.0.0.1:8787/v1/transactions?connectionId=demo&limit=10', {
-  headers: { Authorization: `Bearer ${token}` },
-});
-if (!response.ok) throw new Error(`HTTP ${response.status}`);
-console.log(JSON.stringify(await response.json(), null, 2));
-JS
-```
+For CLI access, set `FONDS_STATE_FILE` to that printed path, then use the
+private token-file example below.
 
 The [API reference](../api.md) owns routes, filters, cursors and the
 [version-guarded annotation update](../api.md#annotations).
@@ -108,6 +193,7 @@ PostgreSQL; otherwise SQLite uses `--db` or the default ledger.
 | `ingest`     | Archives and applies one captured provider response offline                                   |
 | `backup`     | SQLite: a coherent copy of the ledger; on PostgreSQL use `pg_dump` and the state directory    |
 | `login-link` | PostgreSQL: a one-time owner sign-in link for the hosted service                              |
+| `mcp-config` | SQLite: prints setup for a local MCP client without changing client settings                  |
 | `demo`       | SQLite: a separate ledger of synthetic CAL data                                               |
 
 Unavailable commands exit 3; otherwise 0 means success, 1 failure or `busy`, 2 partial
@@ -126,37 +212,6 @@ temporary raw-response retention in the database, subject to provider redactions
 by default completed ingestion releases bodies. See
 [evidence retention](../database.md#what-the-financial-tables-hold). These are operator flags,
 not API or MCP inputs.
-
-## Connect an MCP client locally
-
-For a host supporting stdio MCP, configure the `fonds` command by its absolute
-path, since a host may not share your shell's `PATH`. `demo` prints ready-made
-versions for its ledger. For your own default ledger, after `fonds init` has
-created it, for Claude Code:
-
-```sh
-claude mcp add fonds -- "$(command -v fonds)" serve --transport stdio
-```
-
-Other hosts take the same command as JSON, for example Claude Desktop's
-`claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "fonds": {
-      "command": "/absolute/path/to/fonds",
-      "args": ["serve", "--transport", "stdio"]
-    }
-  }
-}
-```
-
-Without `--db` the server uses your default ledger; add
-`"--db", "/absolute/private/path.sqlite"` for another one. Stdio needs no HTTP
-token, and stdout carries only protocol messages. HTTP MCP clients can instead
-use `/mcp` with the bearer header from private client configuration.
-[MCP behavior](../api.md#mcp-and-events) is in the API reference.
 
 ## Refresh and Events on the server
 

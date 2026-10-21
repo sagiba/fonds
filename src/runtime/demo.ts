@@ -15,6 +15,7 @@ import {
   inProcessInvoker,
 } from "../application/operations.js";
 import type { Database } from "../storage/sqlite/database.js";
+import { localMcpSetup, shellWord } from "./mcp-setup.js";
 import { CommandInputError } from "./operation-cli.js";
 import { runtimeProvider } from "./providers.js";
 
@@ -88,13 +89,6 @@ interface Totals {
   totals: { currency: string; amount: string; amountBasis: string }[];
 }
 
-/** A POSIX shell word, quoted only when it needs to be. */
-function shellWord(value: string): string {
-  return /^[\w./:@%+=-]+$/.test(value)
-    ? value
-    : `'${value.replaceAll("'", `'\\''`)}'`;
-}
-
 /**
  * The installed `fonds` command when this process runs through it, as an
  * absolute path: an MCP host may start it without the shell's PATH.
@@ -120,6 +114,7 @@ export async function demoSummary(
   database: Database,
   databasePath: string,
   moduleUrl: string,
+  stateDirectory: string,
   launcher: string | undefined = installedLauncher(),
 ): Promise<string> {
   const invoker = inProcessInvoker(createApplication(database));
@@ -139,9 +134,6 @@ export async function demoSummary(
   })) as Totals;
   const source = moduleUrl.endsWith(".ts");
   const cli = fileURLToPath(moduleUrl);
-  const server = fileURLToPath(
-    new URL(source ? "../dist/server.js" : "./server.js", moduleUrl),
-  );
   const db = shellWord(databasePath);
   const onPath =
     launcher !== undefined &&
@@ -154,13 +146,6 @@ export async function demoSummary(
     : source
       ? `npx tsx ${entryCommand(cli)}`
       : `node ${entryCommand(cli)}`;
-  // The installed command serves through `fonds serve`; a checkout or build
-  // runs its server entry point with Node.
-  const [command, ...serve] = launcher ? [launcher, "serve"] : ["node", server];
-  const mcpArgs = [...serve, "--transport", "stdio", "--db", databasePath];
-  const desktop = JSON.stringify({
-    mcpServers: { "fonds-demo": { command, args: mcpArgs } },
-  });
   return [
     "Demo ledger ready: synthetic CAL data, not real transactions.",
     `  Database:      ${databasePath}`,
@@ -177,10 +162,7 @@ export async function demoSummary(
     `  ${run} list --db ${db} --limit 5`,
     `  ${run} totals --db ${db}`,
     "",
-    "Ask an agent. Claude Code:",
-    `  claude mcp add fonds-demo -- ${[command, ...mcpArgs].map(shellWord).join(" ")}`,
-    "Claude Desktop (add to claude_desktop_config.json):",
-    `  ${desktop}`,
+    localMcpSetup(databasePath, stateDirectory, moduleUrl, "fonds-demo"),
     "",
     "Running demo again changes nothing. Your own data goes in a separate",
     'ledger; see "Use your own data" in the README.',

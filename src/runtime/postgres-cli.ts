@@ -38,6 +38,8 @@ secrets is refused.`,
       return openPostgresSession(env, current, { initialize: mode.create });
     },
     unavailable: {
+      "mcp-config":
+        "mcp-config is not available on PostgreSQL: configure the server as described in docs/guides/storage-backends.md.",
       demo: "demo is not available on PostgreSQL: unset FONDS_DATABASE_URL to run fonds demo on SQLite.",
       backup:
         "backup is not available on PostgreSQL: back up with pg_dump plus the state directory's fonds.env (docs/database.md#state-directory-and-backup).",
