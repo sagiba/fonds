@@ -3,10 +3,17 @@
   "description": "Self-hosted ledger for your card transactions, connected to your AI assistant over MCP, a REST API and a CLI. Runs on SQLite or PostgreSQL.",
   "keywords": [
     "finance",
+    "personal-finance",
     "transactions",
+    "credit-card",
+    "expense-tracker",
     "ledger",
     "self-hosted",
+    "israel",
     "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "cli",
     "sqlite",
     "postgresql"
   ],
