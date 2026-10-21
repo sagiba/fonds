@@ -1,9 +1,12 @@
 import { readFileSync } from "node:fs";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { FinancialStore } from "../../src/application/financial-store.js";
-import { createApplication } from "../../src/application/operations.js";
+import {
+  createApplication,
+  inProcessInvoker,
+} from "../../src/application/operations.js";
 import { decodeKeyset } from "../../src/application/query-inputs.js";
 import { annotationSchema } from "../../src/domain/model.js";
 import { reviewBasis } from "../../src/domain/plans/annotation.js";
@@ -1187,6 +1190,178 @@ describe("asynchronous application storage contract", () => {
     expectNoServiceWrapper(removed);
     expect(removed).toEqual({
       transaction: { id: row.id, version: row.version + 1 },
+    });
+  });
+});
+
+describe("follow-up after owner writes", () => {
+  let db: Database;
+  let afterWrite: ReturnType<typeof vi.fn<() => void>>;
+  let invoke: (name: string, input: unknown) => Promise<unknown>;
+  beforeEach(async () => {
+    db = await openDatabase(":memory:");
+    await db.ensureConnection({ id: connectionId, provider: "cal" });
+    await db.ingestRun(
+      {
+        runId: "synthetic-follow-up-run",
+        connectionId,
+        responses: [
+          {
+            accountKey: "synthetic-account",
+            endpoint: "synthetic:cal/recent",
+            capturedAt: "2040-08-01T00:00:00Z",
+            responseText: readFileSync(
+              new URL(
+                "../providers/cal/fixtures/recent-01.json",
+                import.meta.url,
+              ),
+              "utf8",
+            ),
+          },
+        ],
+      },
+      calAdapter,
+    );
+    afterWrite = vi.fn<() => void>();
+    const application = createApplication(db, {
+      refreshes: { start: vi.fn(), startAll: async () => [] },
+      afterWrite: () => afterWrite(),
+    });
+    invoke = inProcessInvoker(application).invoke;
+  });
+  afterEach(async () => {
+    await db.close();
+  });
+
+  it("follows each committed write, and no read, refresh or failed write", async () => {
+    const transaction = (await db.listTransactions())[0]!;
+    for (const [name, input] of [
+      ["list_connections", {}],
+      ["get_connection", { connectionId }],
+      ["list_cards", { connectionId }],
+      ["list_accounts", { connectionId }],
+      ["list_transactions", { connectionId }],
+      ["get_transaction", { transactionId: transaction.id }],
+      ["get_transaction_totals", { connectionId }],
+      ["list_events", { connectionId }],
+      ["list_sync_runs", { connectionId }],
+      ["list_refreshes", { connectionId }],
+    ] as const) {
+      await invoke(name, input);
+    }
+    await expect(
+      invoke("get_refresh", { refreshId: "missing" }),
+    ).rejects.toThrow();
+    expect(await invoke("refresh_connection", {})).toEqual({ refreshes: [] });
+    expect(afterWrite).not.toHaveBeenCalled();
+
+    const updated = (await invoke("update_annotation", {
+      transactionId: transaction.id,
+      expectedVersion: 0,
+      notes: "Synthetic follow-up note",
+    })) as { annotation: { version: number } };
+    expect(afterWrite).toHaveBeenCalledTimes(1);
+    // A stale version and invalid input commit nothing.
+    await expect(
+      invoke("update_annotation", {
+        transactionId: transaction.id,
+        expectedVersion: 0,
+        notes: "Synthetic stale note",
+      }),
+    ).rejects.toThrow();
+    await expect(
+      invoke("update_annotation", { transactionId: transaction.id }),
+    ).rejects.toThrow();
+    expect(afterWrite).toHaveBeenCalledTimes(1);
+
+    const [edit] = (
+      await db.listEvents({ connectionId, after: 0, limit: 1000 })
+    )
+      .filter((event) => event.type === "annotation.updated")
+      .slice(-1);
+    await invoke("undo_annotation", {
+      eventId: edit!.id,
+      expectedVersion: updated.annotation.version,
+    });
+    expect(afterWrite).toHaveBeenCalledTimes(2);
+    await invoke("confirm_removal", {
+      transactionId: transaction.id,
+      expectedTransactionVersion: transaction.version,
+      reason: "Synthetic confirmed removal",
+    });
+    expect(afterWrite).toHaveBeenCalledTimes(3);
+  });
+
+  it("follows a pending-to-posted link and its unlink", async () => {
+    await db.ingestRun(
+      {
+        runId: "synthetic-follow-up-posted",
+        connectionId,
+        responses: [
+          {
+            accountKey: "synthetic-account",
+            endpoint: "synthetic:cal/recent",
+            capturedAt: "2040-08-02T00:00:00Z",
+            responseText: readFileSync(
+              new URL(
+                "../providers/cal/fixtures/recent-02.json",
+                import.meta.url,
+              ),
+              "utf8",
+            ),
+          },
+        ],
+      },
+      calAdapter,
+    );
+    const rows = await db.listTransactions();
+    const pending = rows.find((row) =>
+      row.sourceKey.includes("SYNTHETIC-AUTH-PENDING-POSTED"),
+    )!;
+    const posted = rows.find((row) =>
+      row.sourceKey.includes("SYNTHETIC-TXN-PENDING-POSTED"),
+    )!;
+    const pair = {
+      transactionId: pending.id,
+      postedId: posted.id,
+      expectedPendingAnnotationVersion: 0,
+      expectedPostedAnnotationVersion: 0,
+      reason: "Synthetic owner confirmation",
+    };
+    await invoke("link_pending_transaction", {
+      ...pair,
+      expectedPendingTransactionVersion: pending.version,
+      expectedPostedTransactionVersion: posted.version,
+    });
+    expect(afterWrite).toHaveBeenCalledTimes(1);
+    await invoke("unlink_pending_transaction", {
+      ...pair,
+      expectedPendingTransactionVersion: pending.version + 1,
+      expectedPostedTransactionVersion: posted.version + 1,
+    });
+    expect(afterWrite).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns the committed result when the follow-up throws", async () => {
+    const transaction = (await db.listTransactions())[0]!;
+    afterWrite.mockImplementation(() => {
+      throw new Error("synthetic delivery failure");
+    });
+    const result = await invoke("update_annotation", {
+      transactionId: transaction.id,
+      expectedVersion: 0,
+      notes: "Synthetic committed note",
+    });
+    expect(afterWrite).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      annotation: { transactionId: transaction.id, version: 1 },
+    });
+    expect(
+      await invoke("get_transaction", { transactionId: transaction.id }),
+    ).toMatchObject({
+      transaction: {
+        annotation: { version: 1, notes: "Synthetic committed note" },
+      },
     });
   });
 });

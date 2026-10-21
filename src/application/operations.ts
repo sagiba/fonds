@@ -189,6 +189,13 @@ export interface ApplicationCapabilities {
     /** Continues an active refresh a read meets, in case its process died. */
     recover?(refresh: Refresh): void;
   };
+  /**
+   * Told when an owner write has committed, so its events can be delivered; a
+   * refresh delivers through its own service instead. It returns at once and
+   * runs any work in the background; its failure never changes the write's
+   * result.
+   */
+  afterWrite?(): void;
 }
 
 export interface Application {
@@ -564,12 +571,18 @@ type Executors = {
 function bindOperation(
   definition: OperationDefinition,
   execute: (input: never) => unknown,
+  afterWrite?: () => void,
 ): Operation {
   return {
     ...definition,
     execute: async (input) => {
       // Executors are typed against their own definition's schema.
       const value = await execute(definition.inputSchema.parse(input) as never);
+      try {
+        afterWrite?.();
+      } catch {
+        // The write has committed; its receipt is the result.
+      }
       if (outputByteLength(value) > OUTPUT_MAX_BYTES) {
         throw new OutputLimitError();
       }
@@ -772,6 +785,10 @@ export function createApplication(
         bindOperation(
           definition,
           executors[definition.name as keyof Executors],
+          definition.access === "write" &&
+            definition.name !== "refresh_connection"
+            ? capabilities.afterWrite
+            : undefined,
         ),
       ),
   };

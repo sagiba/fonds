@@ -220,12 +220,12 @@ Delivery troubleshooting:
   hours of receiver downtime) exhaust the subscription. Redirects and other
   3xx/4xx, including 410 and 413, stop it at once. Unsubscribe marks it inactive.
 - **Timing.** Due delivery runs for up to 30 seconds after every scheduled or
-  operator run, even one with nothing to refresh. The Node host also runs a pass
-  about once a minute, with or without a schedule; there is no separate
-  delivery process. On Neon delivery runs only with the native trigger and
-  owner refreshes: with a daily schedule a failed delivery retries the next day
-  and an API change waits for the next run, so choose hourly or a list of hours
-  if a subscriber relies on timely Events.
+  operator run, even one with nothing to refresh, and after each committed owner
+  write, such as an annotation, without delaying or changing its response. The
+  Node host also runs a pass about once a minute, with or without a schedule;
+  there is no separate delivery process. Neon has no minute pass: with a daily
+  schedule a failed delivery can wait a day to retry, so choose hourly or a list
+  of hours if a subscriber relies on timely retries.
 - **Contract.** Historical `transaction.created` subscriptions are not converted
   or compatible. Delivery has synthetic verification only; accept it against
   the real host on each deployment.

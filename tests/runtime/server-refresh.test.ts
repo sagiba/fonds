@@ -10,6 +10,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SignedWebhookInput } from "../../src/application/events.js";
+import { decodeCursor } from "../../src/application/query-inputs.js";
 import { main } from "../../src/cli.js";
 import { createCredentialVault } from "../../src/runtime/credential-vault.js";
 import { startServer } from "../../src/server.js";
@@ -50,6 +51,8 @@ let dbPath: string;
 let running: Awaited<ReturnType<typeof startServer>>;
 let headers: Record<string, string>;
 const sent: SignedWebhookInput[] = [];
+/** How the synthetic webhook receiver answers each delivery. */
+let receive: (input: SignedWebhookInput) => Promise<Response>;
 
 /** Holds the next collection inside the provider until the returned release. */
 function holdNextCollection() {
@@ -92,6 +95,40 @@ async function connection(connectionId = "synthetic-cal") {
   ).connection;
 }
 
+/** One MCP request with the protocol metadata the server requires. */
+async function mcp(
+  method: string,
+  params: { name?: string; [field: string]: unknown } = {},
+) {
+  const response = await fetch(`${running!.url}/mcp`, {
+    method: "POST",
+    headers: {
+      ...headers,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+      "MCP-Protocol-Version": "2026-07-28",
+      "Mcp-Method": method,
+      ...("name" in params && method === "tools/call"
+        ? { "Mcp-Name": String(params.name) }
+        : {}),
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method,
+      params: {
+        ...params,
+        _meta: {
+          [PROTOCOL_VERSION_META_KEY]: "2026-07-28",
+          [CLIENT_INFO_META_KEY]: { name: "synthetic-local", version: "1" },
+          [CLIENT_CAPABILITIES_META_KEY]: {},
+        },
+      },
+    }),
+  });
+  return (await response.json()).result;
+}
+
 /** The CLI's refresh in this process, against its own database handle. */
 async function cliCollect() {
   let stdout = "";
@@ -118,6 +155,7 @@ async function cliCollect() {
 beforeEach(async () => {
   collector.calls = 0;
   sent.length = 0;
+  receive = async () => new Response(null, { status: 204 });
   directory = mkdtempSync(join(tmpdir(), "fonds-server-refresh-"));
   dbPath = join(directory, "service.sqlite");
   const db = await openBoundDatabase(dbPath);
@@ -136,7 +174,7 @@ beforeEach(async () => {
     webhooks: {
       sendSignedWebhook: async (input) => {
         sent.push(input);
-        return new Response(null, { status: 204 });
+        return receive(input);
       },
       verifyWebhookCallback: async () => {},
     },
@@ -224,39 +262,6 @@ describe("refresh on the local SQLite server", () => {
   });
 
   it("offers refresh and Events over MCP and delivers a wake-up after a refresh", async () => {
-    async function mcp(
-      method: string,
-      params: { name?: string; [field: string]: unknown } = {},
-    ) {
-      const response = await fetch(`${running!.url}/mcp`, {
-        method: "POST",
-        headers: {
-          ...headers,
-          "Content-Type": "application/json",
-          Accept: "application/json, text/event-stream",
-          "MCP-Protocol-Version": "2026-07-28",
-          "Mcp-Method": method,
-          ...("name" in params && method === "tools/call"
-            ? { "Mcp-Name": String(params.name) }
-            : {}),
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method,
-          params: {
-            ...params,
-            _meta: {
-              [PROTOCOL_VERSION_META_KEY]: "2026-07-28",
-              [CLIENT_INFO_META_KEY]: { name: "synthetic-local", version: "1" },
-              [CLIENT_CAPABILITIES_META_KEY]: {},
-            },
-          },
-        }),
-      });
-      return (await response.json()).result;
-    }
-
     expect((await mcp("server/discover")).capabilities.events).toEqual({});
     expect(
       (await mcp("tools/list")).tools.map(({ name }: { name: string }) => name),
@@ -317,5 +322,216 @@ describe("refresh on the local SQLite server", () => {
     // Later ticks find the occurrence claimed and collect nothing more.
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(collector.calls).toBe(1);
+  });
+});
+
+describe("Events delivery after owner writes on the local SQLite server", () => {
+  const delivery = {
+    mode: "webhook",
+    url: "https://callback.synthetic.invalid/events",
+    secret: `whsec_${btoa("w".repeat(32))}`,
+  };
+
+  /** Imports synthetic rows, then subscribes after them. */
+  async function subscribed() {
+    expect((await refresh()).body.refresh.status).toBe("completed");
+    const subscription = await mcp("events/subscribe", {
+      name: "changes.available",
+      arguments: { connectionId: "synthetic-cal" },
+      delivery,
+    });
+    const page = await (
+      await fetch(
+        `${running!.url}/v1/transactions?connectionId=synthetic-cal&limit=2`,
+        { headers },
+      )
+    ).json();
+    return {
+      subscription,
+      transactions: page.data as { id: string; version: number }[],
+    };
+  }
+
+  async function write(path: string, method: string, body: unknown) {
+    const response = await fetch(`${running!.url}${path}`, {
+      method,
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return { status: response.status, body: await response.json() };
+  }
+
+  async function sentAtLeast(count: number) {
+    const deadline = Date.now() + 4_000;
+    while (sent.length < count && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(sent).toHaveLength(count);
+  }
+
+  it("wakes subscribers after an annotation update and a confirmed removal, but not after reads", async () => {
+    const { subscription, transactions } = await subscribed();
+    const [first, second] = transactions;
+    // An annotation committed outside this server: only a pass can deliver it.
+    const db = await openDatabase(dbPath);
+    await db.editAnnotation({
+      transactionId: second!.id,
+      expectedVersion: 0,
+      notes: "Synthetic out-of-band note",
+      actor: "owner",
+    });
+    await db.close();
+    for (const path of [
+      "/v1/connections",
+      "/v1/connections/synthetic-cal",
+      "/v1/transactions?connectionId=synthetic-cal",
+      `/v1/transactions/${first!.id}`,
+      "/v1/transactions/totals?connectionId=synthetic-cal",
+      "/v1/events?connectionId=synthetic-cal",
+      "/v1/connections/synthetic-cal/sync-runs",
+      "/v1/connections/synthetic-cal/refreshes",
+    ]) {
+      expect((await fetch(`${running!.url}${path}`, { headers })).status).toBe(
+        200,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(sent).toHaveLength(0);
+
+    const updated = await write(
+      `/v1/transactions/${first!.id}/annotation`,
+      "PATCH",
+      { expectedVersion: 0, notes: "Synthetic owner note" },
+    );
+    expect(updated.status).toBe(200);
+    await sentAtLeast(1);
+    expect(sent[0]).toMatchObject({
+      subscriptionId: subscription.id,
+      body: {
+        name: "changes.available",
+        data: { connectionId: "synthetic-cal" },
+      },
+    });
+    const events = await (
+      await fetch(
+        `${running!.url}/v1/events?connectionId=synthetic-cal&cursor=${String(
+          (sent[0]!.body.data as { after: string }).after,
+        )}`,
+        { headers },
+      )
+    ).json();
+    // One wake-up covers the out-of-band edit and the owner's own.
+    expect(events.data.map((event: { type: string }) => event.type)).toEqual([
+      "annotation.updated",
+      "annotation.updated",
+    ]);
+    expect(events.nextCursor).toBe(
+      (sent[0]!.body.data as { highWaterMark: string }).highWaterMark,
+    );
+
+    const removed = await write(
+      `/v1/transactions/${first!.id}/removal`,
+      "POST",
+      {
+        expectedTransactionVersion: first!.version,
+        reason: "Synthetic confirmed removal",
+      },
+    );
+    expect(removed.status).toBe(200);
+    await sentAtLeast(2);
+    expect(sent[1]!.eventId).not.toBe(sent[0]!.eventId);
+  });
+
+  it("closes the database only after a write's pass ends", async () => {
+    const { transactions } = await subscribed();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // This receiver ignores the shutdown signal.
+    receive = async () => {
+      await held;
+      return new Response(null, { status: 204 });
+    };
+    const updated = await write(
+      `/v1/transactions/${transactions[0]!.id}/annotation`,
+      "PATCH",
+      { expectedVersion: 0, notes: "Synthetic shutdown note" },
+    );
+    expect(updated.status).toBe(200);
+    await sentAtLeast(1);
+    let closed = false;
+    const closing = running!.close().then(() => {
+      closed = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(closed).toBe(false);
+    release();
+    await closing;
+    running = undefined;
+    const db = await openDatabase(dbPath);
+    try {
+      // The pass recorded its acknowledgement before the database closed.
+      const [subscription] = await db.eventSubscriptions.listDue(
+        Date.now() + 1,
+        10,
+      );
+      expect(subscription).toMatchObject({
+        pendingBatch: null,
+        attempts: 0,
+        cursor: decodeCursor(
+          "event",
+          (sent[0]!.body.data as { highWaterMark: string }).highWaterMark,
+        ),
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("answers the committed write while a receiver is slow or failing, and keeps its backoff", async () => {
+    const { transactions } = await subscribed();
+    const [first, second] = transactions;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    receive = async () => {
+      await held;
+      return new Response(null, { status: 500 });
+    };
+    const slow = await write(
+      `/v1/transactions/${first!.id}/annotation`,
+      "PATCH",
+      { expectedVersion: 0, notes: "Synthetic slow-receiver note" },
+    );
+    // The response arrives while its delivery is still held at the receiver.
+    expect(slow).toMatchObject({
+      status: 200,
+      body: { annotation: { transactionId: first!.id, version: 1 } },
+    });
+    await sentAtLeast(1);
+    release();
+    const reread = await (
+      await fetch(`${running!.url}/v1/transactions/${first!.id}`, { headers })
+    ).json();
+    expect(reread.transaction.annotation).toMatchObject({
+      version: 1,
+      notes: "Synthetic slow-receiver note",
+    });
+
+    // The failed delivery backs off: the next write sends nothing yet.
+    receive = async () => new Response(null, { status: 204 });
+    const next = await write(
+      `/v1/transactions/${second!.id}/annotation`,
+      "PATCH",
+      { expectedVersion: 0, notes: "Synthetic backed-off note" },
+    );
+    expect(next).toMatchObject({
+      status: 200,
+      body: { annotation: { transactionId: second!.id, version: 1 } },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(sent).toHaveLength(1);
   });
 });
