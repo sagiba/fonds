@@ -237,6 +237,35 @@ describe.each(backends)("%s installment repair", (backend) => {
     expect((await parent()).annotation).toEqual(annotation);
   });
 
+  it("clears a known-count conflict stored by an unknown-count recapture before provenance", async () => {
+    await capture(10, [purchase()]);
+    await capture(11, [purchase(5), line(1), line(2)], true);
+    const stored = await parent();
+    // The earlier policy flagged a later unknown-count capture as a restatement.
+    await insertTransactionFixture(
+      db,
+      [
+        {
+          ...stored,
+          details: {
+            ...stored.details,
+            issues: [
+              "unknown_installment_count",
+              "conflicting_installment_plan",
+            ],
+          },
+        },
+      ],
+      "update",
+    );
+    await capture(12, [purchase()]);
+    expect(await parent()).toMatchObject({
+      installmentCount: 5,
+      sourceIssues: [],
+      reviewRequired: false,
+    });
+  });
+
   it("keeps the same purchase and billing members when history arrives first", async () => {
     await capture(10, [purchase(5), line(1), line(2)], true);
     const before = await parent();

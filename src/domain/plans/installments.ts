@@ -36,10 +36,11 @@ export function withoutInstallmentFx(
 }
 
 /**
- * A source restatement awaiting source resolution. A conflict stored before
- * provenance was recorded is one when the purchase still states a count.
+ * A source restatement awaiting source resolution. Until the purchase is
+ * captured again, a conflict stored before provenance was recorded is one when
+ * the purchase still states a count.
  */
-export function awaitsRestatement(
+function awaitsRestatement(
   row: Pick<Transaction, "installmentCount" | "details">,
 ): boolean {
   const { issues } = row.details;

@@ -49,7 +49,6 @@ import { reviewState } from "./annotation.js";
 import { automaticPostingPairs, postingComponents } from "./auto-posting.js";
 import { purchaseResolver, resolveTransaction } from "./catalog.js";
 import {
-  awaitsRestatement,
   DUPLICATE_ORDINAL,
   INSTALLMENT_CONFLICT,
   refreshInstallmentParents,
@@ -2056,7 +2055,10 @@ export function planRun(
           previous.kind === "purchase" &&
           input.amountBasis === "purchase_commitment" &&
           input.installmentNumber === null;
-        const priorRestatement = awaitsRestatement(previous);
+        // Only recorded provenance survives a capture: an earlier policy also
+        // flagged unknown-count captures, which this one no longer contradicts.
+        const priorRestatement =
+          previous.details.issues.includes(RESTATEMENT_CONFLICT);
         const accepted = withoutInstallmentFx(
           unknownPlan && !priorRestatement
             ? {
