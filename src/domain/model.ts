@@ -98,7 +98,9 @@ const canonicalTextSchema = z
 const nullableCanonicalText = canonicalTextSchema
   .max(CANONICAL_TEXT_MAX_LENGTH)
   .nullable();
-const nullableDate = z.iso.date().nullable();
+/** `YYYY-MM-DD` from year 0001: PostgreSQL's `date` has no year zero. */
+export const calendarDateSchema = z.iso.date().regex(/^(?!0000)/);
+const nullableDate = calendarDateSchema.nullable();
 
 /** Preserve source precision and any supplied offset; no offset means timezone unknown. */
 export const transactionDateTimeSchema = z.iso

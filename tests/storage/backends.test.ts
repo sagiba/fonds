@@ -488,6 +488,98 @@ for (const backend of backends) {
       ).toBeNull();
     });
 
+    it("keeps calendar dates exact from year 0001 to 9999 and orders, filters and pages by them", async () => {
+      await capture(
+        JSON.stringify([
+          row("first", {
+            transactionDate: "0001-01-01",
+            bookingDate: "0001-01-01",
+            billingDate: "9999-12-31",
+          }),
+          row("early", { transactionDate: "0999-12-31" }),
+          row("leap", {
+            transactionDate: "2040-02-29",
+            bookingDate: "2040-03-01",
+          }),
+          row("last", { transactionDate: "9999-12-31" }),
+          row("undated", { transactionDate: null }),
+        ]),
+      );
+      const paged = [];
+      let after: { transactionDate: string | null; id: string } | undefined;
+      for (;;) {
+        const page = (await db.listTransactionPage({
+          connectionId,
+          limit: 1,
+          ...(after && { after }),
+        }))!;
+        paged.push(...page.transactions);
+        if (!page.hasMore) {
+          break;
+        }
+        const last = page.transactions.at(-1)!;
+        after = { transactionDate: last.transactionDate, id: last.id };
+      }
+      expect(paged.map((t) => [t.sourceKey, t.transactionDate])).toEqual([
+        ["last", "9999-12-31"],
+        ["leap", "2040-02-29"],
+        ["early", "0999-12-31"],
+        ["first", "0001-01-01"],
+        ["undated", null],
+      ]);
+      const first = paged.find((t) => t.sourceKey === "first")!;
+      expect([first.bookingDate, first.billingDate]).toEqual([
+        "0001-01-01",
+        "9999-12-31",
+      ]);
+      const keys = async (
+        dateRole: "transaction" | "booking" | "billing",
+        from: string,
+        to: string,
+      ) =>
+        (await db.listTransactionPage({
+          connectionId,
+          limit: 200,
+          dateRole,
+          from,
+          to,
+        }))!.transactions.map((t) => t.sourceKey);
+      expect(await keys("transaction", "0001-01-01", "0999-12-31")).toEqual([
+        "early",
+        "first",
+      ]);
+      expect(await keys("booking", "2040-02-29", "2040-03-01")).toEqual([
+        "leap",
+      ]);
+      expect(await keys("billing", "9999-12-31", "9999-12-31")).toEqual([
+        "first",
+      ]);
+      await expect(
+        Promise.resolve().then(() =>
+          keys("transaction", "0000-01-01", "0001-01-01"),
+        ),
+      ).rejects.toThrow();
+      if (backend === "postgres") {
+        for (const invalid of ["0000-01-01", "10000-01-01", "2040-02-30"]) {
+          await expect(
+            db.raw(
+              "UPDATE transactions SET transaction_date = ? WHERE id = ?",
+              [invalid, first.id],
+            ),
+          ).rejects.toThrow();
+        }
+        // The harness pool has one connection, so the setting reaches the read.
+        await db.raw("SET DateStyle TO 'SQL, DMY'");
+        await expect(db.getTransaction(first.id)).rejects.toThrow(
+          "DateStyle ISO",
+        );
+        await db.raw("SET DateStyle TO ISO");
+        expect((await db.getTransaction(first.id))?.transactionDate).toBe(
+          "0001-01-01",
+        );
+      }
+    });
+
     it("preserves fixture evidence, annotations, correction staleness, replay and exact totals", async () => {
       const runId = nextRun();
       expect(

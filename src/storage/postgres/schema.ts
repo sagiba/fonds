@@ -52,6 +52,20 @@ const scalarText = customType<{ data: string; driverData: string }>({
   fromDriver: decodeScalarText,
 });
 
+/**
+ * A native `date` read back as the stored `YYYY-MM-DD` text. Any other form
+ * means a session `DateStyle` other than ISO; refuse it rather than reparse.
+ */
+const calendarDate = customType<{ data: string; driverData: string }>({
+  dataType: () => "date",
+  fromDriver: (value) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      throw new Error("PostgreSQL dates require DateStyle ISO");
+    }
+    return value;
+  },
+});
+
 export const connections = pgTable("connections", {
   id: text().primaryKey(),
   provider: text().notNull(),
@@ -186,9 +200,9 @@ export const transactions = pgTable(
     merchantName: text("merchant_name"),
     merchantProviderId: text("merchant_provider_id"),
     merchantCategoryCode: text("merchant_category_code"),
-    transactionDate: text("transaction_date"),
-    bookingDate: text("booking_date"),
-    billingDate: text("billing_date"),
+    transactionDate: calendarDate("transaction_date"),
+    bookingDate: calendarDate("booking_date"),
+    billingDate: calendarDate("billing_date"),
     amountMinor: bigint("amount_minor", { mode: "number" }),
     currency: text(),
     amountBasis: text("amount_basis")

@@ -17,6 +17,7 @@ import * as statements from "./statements.js";
 export {
   ensurePostgresSchema,
   FINANCIAL_SCHEMA,
+  FINANCIAL_SESSION_OPTIONS,
   initializePostgresDatabase,
 } from "./initialize.js";
 
