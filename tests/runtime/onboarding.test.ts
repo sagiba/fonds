@@ -12,8 +12,9 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+import { main } from "../../src/cli.js";
 import { createCredentialVault } from "../../src/runtime/credential-vault.js";
 import { resolveInstallation } from "../../src/runtime/installation.js";
 import { openDatabase } from "../../src/storage/sqlite/database.js";
@@ -28,18 +29,61 @@ beforeEach(() => {
   home = join(directory, "data");
   state = join(directory, "state");
   mkdirSync(state, { mode: 0o700 });
-});
-afterEach(() => rmSync(directory, { recursive: true, force: true }));
-
-function run(args: string[], credentials?: object) {
-  let fd: number | undefined;
-  if (credentials) {
-    const file = join(directory, "invented.json");
-    writeFileSync(file, JSON.stringify(credentials), { mode: 0o600 });
-    fd = openSync(file, "r");
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith("FONDS_")) {
+      vi.stubEnv(key, undefined);
+    }
   }
+  vi.stubEnv("FONDS_HOME", home);
+  vi.stubEnv("FONDS_STATE_DIR", state);
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+  rmSync(directory, { recursive: true, force: true });
+});
+
+function credentialFile(credentials: object | undefined) {
+  if (!credentials) {
+    return undefined;
+  }
+  const file = join(directory, "invented.json");
+  writeFileSync(file, JSON.stringify(credentials), { mode: 0o600 });
+  return openSync(file, "r");
+}
+
+/** Exercise the real parser, storage and vault without paying for a cold CLI per assertion. */
+async function run(args: string[], credentials?: object) {
+  const fd = credentialFile(credentials);
+  let stdout = "";
+  let stderr = "";
+  const out = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+    stdout += String(chunk);
+    return true;
+  });
+  const err = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+    stderr += String(chunk);
+    return true;
+  });
   try {
-    return spawnSync(
+    const status = await main([
+      ...args,
+      ...(fd !== undefined ? ["--credentials-fd", String(fd)] : []),
+    ]);
+    return { status, stdout, stderr };
+  } finally {
+    out.mockRestore();
+    err.mockRestore();
+    if (fd !== undefined) {
+      closeSync(fd);
+    }
+  }
+}
+
+/** The separate-process smoke retains executable startup and inherited-fd coverage. */
+function executable(args: string[], credentials?: object) {
+  const fd = credentialFile(credentials);
+  try {
+    const result = spawnSync(
       process.execPath,
       [
         "--import",
@@ -51,18 +95,14 @@ function run(args: string[], credentials?: object) {
       {
         encoding: "utf8",
         timeout: 15_000,
-        env: {
-          ...Object.fromEntries(
-            Object.entries(process.env).filter(
-              ([key]) => !key.startsWith("FONDS_"),
-            ),
-          ),
-          FONDS_HOME: home,
-          FONDS_STATE_DIR: state,
-        },
         stdio: fd === undefined ? "pipe" : ["pipe", "pipe", "pipe", fd],
       },
     );
+    if (result.error) {
+      throw result.error;
+    }
+    expect(result.signal).toBeNull();
+    return result;
   } finally {
     if (fd !== undefined) {
       closeSync(fd);
@@ -70,15 +110,18 @@ function run(args: string[], credentials?: object) {
   }
 }
 
+async function json(args: string[]) {
+  const result = await run(args);
+  expect(result.status, result.stderr).toBe(0);
+  return JSON.parse(result.stdout);
+}
+
 const credentials = {
   username: "INVENTED-LOGIN",
   password: "INVENTED-PASSWORD",
 };
-const connections = () =>
-  JSON.parse(run(["list-connections"]).stdout).data as {
-    id: string;
-    provider: string;
-  }[];
+const connections = async () =>
+  (await json(["list-connections"])).data as { id: string; provider: string }[];
 
 async function savedCredentials(id: string) {
   const { credentialsKey } = await resolveInstallation(state, {
@@ -95,7 +138,7 @@ async function savedCredentials(id: string) {
   }
 }
 
-it("requires storage initialization before connect or offline ingestion", () => {
+it("requires storage initialization before connect or offline ingestion", async () => {
   for (const args of [
     ["connect", "cal"],
     ["connect", "isracard", "--offline"],
@@ -111,7 +154,7 @@ it("requires storage initialization before connect or offline ingestion", () => 
       resolve("tests/providers/cal/fixtures/recent-01.json"),
     ],
   ]) {
-    const result = run(args);
+    const result = await run(args);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("run fonds init first");
     expect(existsSync(join(home, "fonds.sqlite"))).toBe(false);
@@ -120,9 +163,9 @@ it("requires storage initialization before connect or offline ingestion", () => 
 });
 
 it("initializes only storage, then adds default and named logins without overwriting existing credentials", async () => {
-  expect(run(["init"]).status).toBe(0);
+  expect((await run(["init"])).status).toBe(0);
   const originalState = readFileSync(join(state, "fonds.env"), "utf8");
-  expect(connections()).toEqual([]);
+  expect(await connections()).toEqual([]);
   for (const [args, input] of [
     [["connect", "cal"], credentials],
     [["connect", "isracard"], { ...credentials, cardSuffix: "123456" }],
@@ -131,13 +174,13 @@ it("initializes only storage, then adds default and named logins without overwri
       { ...credentials, username: "INVENTED-OTHER" },
     ],
   ] as const) {
-    const result = run([...args], input);
+    const result = await run([...args], input);
     expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout).credentials).toBe("stored");
     expect(result.stdout + result.stderr).not.toContain("INVENTED-");
   }
   expect(
-    connections()
+    (await connections())
       .map(({ id, provider }) => ({ id, provider }))
       .sort((a, b) => a.id.localeCompare(b.id)),
   ).toEqual([
@@ -153,26 +196,28 @@ it("initializes only storage, then adds default and named logins without overwri
     ["connect", "isracard", "--name", "cal"],
     ["connect", "cal", "--name", "cal-other", "--offline"],
   ]) {
-    const result = run(args);
+    const result = await run(args);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("already exists");
     expect(result.stderr).not.toContain("interactive terminal");
   }
   expect(await savedCredentials("cal")).toEqual(credentials);
   expect(await savedCredentials("cal-other")).toEqual(other);
-  expect(run(["init"]).status).toBe(0);
-  expect(connections()).toHaveLength(3);
+  expect((await run(["init"])).status).toBe(0);
+  expect(await connections()).toHaveLength(3);
   expect(readFileSync(join(state, "fonds.env"), "utf8")).toBe(originalState);
   expect(
-    run(["connect", "--connection", "cal-other"], credentials).status,
+    (await run(["connect", "--connection", "cal-other"], credentials)).status,
   ).toBe(0);
   expect(await savedCredentials("cal-other")).toEqual(credentials);
-}, 30_000);
+});
 
-it("leaves no new login after missing or invalid credentials and refuses mixed targeting flags", () => {
-  expect(run(["init"]).status).toBe(0);
-  expect(run(["connect", "cal"]).stderr).toContain("interactive terminal");
-  expect(run(["connect", "isracard"], credentials).status).toBe(1);
+it("leaves no new login after missing or invalid credentials and refuses mixed targeting flags", async () => {
+  expect((await run(["init"])).status).toBe(0);
+  expect((await run(["connect", "cal"])).stderr).toContain(
+    "interactive terminal",
+  );
+  expect((await run(["connect", "isracard"], credentials)).status).toBe(1);
   for (const args of [
     ["connect", "cal", "--connection", "cal"],
     ["connect", "cal", "extra"],
@@ -181,25 +226,26 @@ it("leaves no new login after missing or invalid credentials and refuses mixed t
     ["connect", "cal", "--offline", "--credentials-fd", "3"],
     ["init", "--provider", "cal"],
   ]) {
-    expect(run(args).status).toBe(1);
+    expect((await run(args)).status).toBe(1);
   }
-  expect(connections()).toEqual([]);
-  expect(run(["connect", "cal", "--offline"]).status).toBe(0);
-  const refresh = run(["refresh"]);
+  expect(await connections()).toEqual([]);
+  expect((await run(["connect", "cal", "--offline"])).status).toBe(0);
+  const refresh = await run(["refresh"]);
   expect(refresh.status).toBe(0);
   expect(refresh.stderr).toContain("No connections have saved credentials");
-}, 30_000);
+});
 
-it("accepts the connection filter alias and exposes choices and global flags in help", () => {
-  expect(run(["init"]).status).toBe(0);
-  expect(run(["connect", "cal", "--offline"]).status).toBe(0);
-  expect(run(["totals", "--connection", "cal"]).stdout).toEqual(
-    run(["totals", "--connection-id", "cal"]).stdout,
+it("accepts the connection filter alias and exposes choices and global flags in help", async () => {
+  expect((await run(["init"])).status).toBe(0);
+  expect((await run(["connect", "cal", "--offline"])).status).toBe(0);
+  expect(await json(["totals", "--connection", "cal"])).toEqual(
+    await json(["totals", "--connection-id", "cal"]),
   );
   expect(
-    run(["list", "--connection", "cal", "--connection-id", "cal"]).stderr,
+    (await run(["list", "--connection", "cal", "--connection-id", "cal"]))
+      .stderr,
   ).toContain("not both");
-  const help = run(["help", "list"]);
+  const help = await run(["help", "list"]);
   expect(help.status).toBe(0);
   expect(help.stdout).toContain("--status <posted|pending>");
   expect(help.stdout).toContain("--db");
@@ -207,9 +253,32 @@ it("accepts the connection filter alias and exposes choices and global flags in 
   expect(help.stdout).toContain("--token-file");
 });
 
-it("does not regenerate lost state for an existing SQLite ledger", () => {
-  expect(run(["init"]).status).toBe(0);
+it("does not regenerate lost state for an existing SQLite ledger", async () => {
+  expect((await run(["init"])).status).toBe(0);
   rmSync(join(state, "fonds.env"));
-  expect(run(["init"]).status).toBe(1);
+  expect((await run(["init"])).status).toBe(1);
   expect(existsSync(join(state, "fonds.env"))).toBe(false);
 });
+
+// Cold starts on a loaded runner need more time than the in-process behavior cases.
+it("persists a login across executable invocations using a private inherited descriptor", async () => {
+  const initialized = executable(["init"]);
+  expect(initialized.status, initialized.stderr).toBe(0);
+  const connected = executable(["connect", "cal"], credentials);
+  expect(connected.status, connected.stderr).toBe(0);
+  expect(JSON.parse(connected.stdout)).toEqual({
+    connectionId: "cal",
+    provider: "cal",
+    credentials: "stored",
+  });
+  expect(connected.stdout + connected.stderr).not.toContain("INVENTED-");
+  const listed = executable(["list-connections"]);
+  expect(listed.status, listed.stderr).toBe(0);
+  expect(JSON.parse(listed.stdout).data).toMatchObject([
+    { id: "cal", provider: "cal" },
+  ]);
+  const duplicate = executable(["connect", "cal"]);
+  expect(duplicate.status).toBe(1);
+  expect(duplicate.stderr).toContain("already exists");
+  expect(await savedCredentials("cal")).toEqual(credentials);
+}, 30_000);
