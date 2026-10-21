@@ -402,6 +402,18 @@ describe("CAL patterns evidenced by the live shape audit", () => {
       trnType: "חיוב/זיכוי",
     },
     {
+      transactionTypeCode: 76,
+      refundInd: false,
+      amountForDisplay: 88.5,
+      trnType: "חיוב/זיכוי",
+    },
+    {
+      transactionTypeCode: 76,
+      refundInd: true,
+      amountForDisplay: -88.5,
+      trnType: "חיוב/זיכוי",
+    },
+    {
       transactionTypeCode: 72,
       refundInd: false,
       amountForDisplay: 60,
@@ -422,6 +434,9 @@ describe("CAL patterns evidenced by the live shape audit", () => {
         amountMinor: null,
         currency: null,
       });
+      if (difference.transactionTypeCode === 76) {
+        expect(row.identityStrength).toBe("native");
+      }
       expect(row.details.issues).toContain("unsupported_transaction_type");
       expect(row.details.provider.cal?.rows).toEqual([
         expect.objectContaining({
@@ -449,39 +464,6 @@ describe("CAL patterns evidenced by the live shape audit", () => {
       expect(result.transactions[0]!.details.issues).toContain(
         "unsupported_amount_direction",
       );
-    },
-  );
-
-  it.each([
-    { refundInd: false, amountForDisplay: 88.5 },
-    { refundInd: true, amountForDisplay: -88.5 },
-  ])(
-    "retains type76 charge/credit evidence unresolved without inventing financial meaning %j",
-    (direction) => {
-      const result = extract([
-        {
-          ...regular,
-          transactionTypeCode: 76,
-          trnType: "חיוב/זיכוי",
-          ...direction,
-        },
-      ]);
-      expect(result.transactions[0]).toMatchObject({
-        identityStrength: "native",
-        kind: "unknown",
-        amountMinor: null,
-        currency: null,
-      });
-      expect(result.transactions[0]!.details.issues).toContain(
-        "unsupported_transaction_type",
-      );
-      expect(result.transactions[0]!.details.provider.cal?.rows).toEqual([
-        expect.objectContaining({
-          transactionTypeCode: "76",
-          amountForDisplay: String(direction.amountForDisplay),
-          refundInd: direction.refundInd,
-        }),
-      ]);
     },
   );
 });

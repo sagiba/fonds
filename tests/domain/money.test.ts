@@ -41,44 +41,49 @@ describe("exact minor-unit conversion", () => {
   });
 
   it.each([
-    "HRK",
-    "TRY",
-    "BAM",
-    "GBP",
-    "HUF",
-    "CZK",
-    "HKD",
-    "MXN",
-    "THB",
-    "CHF",
-    "UAH",
-    "CAD",
-    "PLN",
-    "AUD",
-    "SEK",
-  ])(
-    "uses verified two-decimal minor units for %s without rounding",
-    (currency) => {
-      expect(decimalToMinor("42.75", currency)).toBe(4275);
-      expect(decimalToMinor("-0.01", currency)).toBe(-1);
-      expect(() => decimalToMinor("42.751", currency)).toThrow(/precision/);
+    [
+      "two-decimal",
+      [
+        "HRK",
+        "TRY",
+        "BAM",
+        "GBP",
+        "HUF",
+        "CZK",
+        "HKD",
+        "MXN",
+        "THB",
+        "CHF",
+        "UAH",
+        "CAD",
+        "PLN",
+        "AUD",
+        "SEK",
+      ],
+      "42.75",
+      "-0.01",
+      "42.751",
+    ],
+    [
+      "zero-decimal",
+      ["JPY", "KRW", "VND", "BIF", "CLP", "ISK", "RWF", "UGX"],
+      "4275.000",
+      "-1",
+      "42.75",
+    ],
+    ["three-decimal", ["JOD"], "4.275", "-0.001", "4.2751"],
+  ] as const)(
+    "uses verified %s minor units without rounding",
+    (_scale, currencies, positive, negative, excessive) => {
+      for (const currency of currencies) {
+        expect(decimalToMinor(positive, currency), currency).toBe(4275);
+        expect(decimalToMinor(negative, currency), currency).toBe(-1);
+        expect(() => decimalToMinor(excessive, currency), currency).toThrow(
+          /precision/,
+        );
+      }
     },
   );
-
-  it.each(["JPY", "KRW", "VND", "BIF", "CLP", "ISK", "RWF", "UGX"])(
-    "uses verified zero-decimal minor units for %s without rounding",
-    (currency) => {
-      expect(decimalToMinor("4275.000", currency)).toBe(4275);
-      expect(decimalToMinor("-1", currency)).toBe(-1);
-      expect(() => decimalToMinor("42.75", currency)).toThrow(/precision/);
-    },
-  );
-
-  it("uses verified three-decimal minor units for JOD without rounding", () => {
-    expect(decimalToMinor("4.275", "JOD")).toBe(4275);
-    expect(decimalToMinor("-0.001", "JOD")).toBe(-1);
-    expect(() => decimalToMinor("4.2751", "JOD")).toThrow(/precision/);
-  });
 
   it.each(["BHD", "IQD", "LYD", "OMR", "TND"])(
     "uses ISO three-decimal minor units for %s without rounding",

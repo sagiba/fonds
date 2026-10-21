@@ -8,7 +8,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CredentialInputError } from "../../src/domain/credentials.js";
 import { loadCredentials } from "../../src/runtime/credentials.js";
@@ -44,10 +44,26 @@ describe("private credential input", () => {
         password: "invented-password",
       }),
     );
-    await expect(loadCredentials({ fd })).resolves.toEqual({
-      username: "invented-user",
-      password: "invented-password",
-    });
+    const output = [
+      vi.spyOn(process.stdout, "write"),
+      vi.spyOn(process.stderr, "write"),
+      ...(["log", "info", "warn", "error", "debug"] as const).map((method) =>
+        vi.spyOn(console, method),
+      ),
+    ];
+    try {
+      await expect(loadCredentials({ fd })).resolves.toEqual({
+        username: "invented-user",
+        password: "invented-password",
+      });
+      for (const spy of output) {
+        expect(spy).not.toHaveBeenCalled();
+      }
+    } finally {
+      for (const spy of output) {
+        spy.mockRestore();
+      }
+    }
   });
 
   it("reads a provider-defined token without assuming username/password fields", async () => {

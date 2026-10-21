@@ -148,100 +148,115 @@ describe("Isracard extraction", () => {
     },
   );
 
-  it("does not infer a wallet from flags, missing or mismatched detail vouchers, duplicate details or ambiguous transactions", () => {
-    for (const variant of [
-      "missing",
-      "mismatch",
-      "padded",
-      "duplicate-detail",
-      "ambiguous-transaction",
-      "flag-only",
-      "whitespace",
-    ] as const) {
-      const capture = baseline();
-      const entry = capture.responses.details![0]!;
-      entry.responseText = JSON.stringify({
-        Header: { Status: "1" },
-        PirteyIska_204Bean: {
-          ...(variant === "missing"
-            ? {}
-            : {
-                voucherNumberRatz:
-                  variant === "mismatch"
-                    ? "OTHER-SYNTHETIC-VOUCHER"
-                    : variant === "padded"
-                      ? ` ${entry.voucherNumber} `
-                      : entry.voucherNumber,
-              }),
-          walletPayName:
-            variant === "flag-only"
-              ? null
-              : variant === "whitespace"
-                ? " \t\n "
-                : "Apple Pay",
-        },
-      });
-      if (variant === "duplicate-detail") {
-        capture.responses.details!.push({ ...entry });
-      }
-      updateDigital(capture, (rows) => {
-        rows[0]!.isWalletTransaction = true;
-        if (variant === "ambiguous-transaction") {
-          rows.push({ ...rows[0] });
+  it.each([
+    [
+      "wallet flags",
+      [
+        "missing",
+        "mismatch",
+        "padded",
+        "duplicate-detail",
+        "ambiguous-transaction",
+        "flag-only",
+        "whitespace",
+      ],
+    ],
+    [
+      "detail projection",
+      ["mismatch", "missing", "padded", "numeric", "bound"],
+    ],
+    ["walletPayName", ["mismatch", "missing", "matched"]],
+    ["transactionType", ["mismatch", "missing", "matched"]],
+  ] as const)(
+    "binds %s only to unique matching vouchers",
+    (context, variants) => {
+      for (const variant of variants) {
+        const capture = baseline();
+        if (variant === "bound") {
+          const row = extract(capture).transactions[0]!;
+          expect(row.details.merchant).toMatchObject({
+            address: "1 Synthetic Street",
+            phone: "SYNTHETIC-PHONE",
+          });
+          expect(row.details.issues).not.toContain(
+            "invalid_transaction_detail",
+          );
+          continue;
         }
-      });
-      for (const row of extract(capture).transactions) {
-        expect(row.wallet).toBeNull();
-        expect(row.cardPresent ?? null).toBeNull();
+        const entry = capture.responses.details![0]!;
+        const rich = context === "detail projection";
+        const bean: Row = rich
+          ? (JSON.parse(entry.responseText) as { PirteyIska_204Bean: Row })
+              .PirteyIska_204Bean
+          : {};
+        if (rich) {
+          expect(bean.voucherNumberRatz).toBe(entry.voucherNumber);
+        }
+        if (variant === "missing") {
+          delete bean.voucherNumberRatz;
+        } else {
+          bean.voucherNumberRatz =
+            variant === "mismatch"
+              ? "OTHER-SYNTHETIC-VOUCHER"
+              : variant === "padded"
+                ? rich
+                  ? `0${entry.voucherNumber}`
+                  : ` ${entry.voucherNumber} `
+                : variant === "numeric"
+                  ? 1
+                  : entry.voucherNumber;
+        }
+        const field =
+          context === "transactionType" ? "transactionType" : "walletPayName";
+        bean[field] =
+          variant === "flag-only"
+            ? null
+            : variant === "whitespace"
+              ? " \t\n "
+              : context === "transactionType"
+                ? "APPLE PAY"
+                : "Apple Pay";
+        entry.responseText = JSON.stringify({
+          Header: { Status: "1" },
+          PirteyIska_204Bean: bean,
+        });
+        if (variant === "duplicate-detail") {
+          capture.responses.details!.push({ ...entry });
+        }
+        if (context === "wallet flags") {
+          updateDigital(capture, (rows) => {
+            rows[0]!.isWalletTransaction = true;
+            if (variant === "ambiguous-transaction") {
+              rows.push({ ...rows[0] });
+            }
+          });
+        }
+        const rows = extract(capture).transactions;
+        if (context === "wallet flags") {
+          for (const row of rows) {
+            expect(row.wallet, variant).toBeNull();
+            expect(row.cardPresent ?? null, variant).toBeNull();
+          }
+        } else {
+          const row = rows[0]!;
+          expect(row.wallet, variant).toBe(
+            variant === "matched" ? "apple_pay" : null,
+          );
+          if (rich) {
+            expect(row.details.merchant.address, variant).toBeNull();
+            expect(row.details.merchant.phone, variant).toBeNull();
+            expect(row.details.provider.isracard!.detail).toBeUndefined();
+            expect(
+              row.details.sourceRefs.map((ref) => ref.path),
+            ).not.toContainEqual(
+              expect.stringContaining("$.responses.details"),
+            );
+            expect(row.details.issues).toContain("invalid_transaction_detail");
+          }
+        }
       }
-    }
-  });
-
-  it("projects no address, phone, wallet or detail copy from a detail bound to another voucher", () => {
-    for (const variant of [
-      "mismatch",
-      "missing",
-      "padded",
-      "numeric",
-    ] as const) {
-      const capture = baseline();
-      const entry = capture.responses.details![0]!;
-      const bean = (
-        JSON.parse(entry.responseText) as { PirteyIska_204Bean: Row }
-      ).PirteyIska_204Bean;
-      expect(bean.voucherNumberRatz).toBe(entry.voucherNumber);
-      if (variant === "missing") {
-        delete bean.voucherNumberRatz;
-      } else {
-        bean.voucherNumberRatz =
-          variant === "mismatch"
-            ? "OTHER-SYNTHETIC-VOUCHER"
-            : variant === "padded"
-              ? `0${entry.voucherNumber}`
-              : 1;
-      }
-      bean.walletPayName = "Apple Pay";
-      entry.responseText = JSON.stringify({
-        Header: { Status: "1" },
-        PirteyIska_204Bean: bean,
-      });
-      const row = extract(capture).transactions[0]!;
-      expect(row.details.merchant.address, variant).toBeNull();
-      expect(row.details.merchant.phone, variant).toBeNull();
-      expect(row.wallet).toBeNull();
-      expect(row.details.provider.isracard!.detail).toBeUndefined();
-      expect(row.details.sourceRefs.map((ref) => ref.path)).not.toContainEqual(
-        expect.stringContaining("$.responses.details"),
-      );
-      expect(row.details.issues).toContain("invalid_transaction_detail");
-    }
-    const bound = extract(baseline()).transactions[0]!;
-    expect(bound.details.merchant).toMatchObject({
-      address: "1 Synthetic Street",
-      phone: "SYNTHETIC-PHONE",
-    });
-    expect(bound.details.issues).not.toContain("invalid_transaction_detail");
-  });
+    },
+  );
 
   it("projects established time, channel and location from rich observed field shapes while retaining discount and source-code evidence", () => {
     const capture = baseline("card-month-rich");
@@ -849,36 +864,6 @@ describe("Isracard extraction", () => {
         Object.assign(rows[0]!, { isHoraatKeva: null, ...legacy }),
       );
       expect(extract(capture).transactions[0]!.recurring).toBe(recurring);
-    },
-  );
-
-  it.each([
-    ["walletPayName", "Apple Pay"],
-    ["transactionType", "APPLE PAY"],
-  ])(
-    "takes a wallet from detail %s only when the detail is bound to the voucher",
-    (field, name) => {
-      for (const [voucher, wallet] of [
-        ["OTHER-SYNTHETIC-VOUCHER", null],
-        [undefined, null],
-        ["matched", "apple_pay"],
-      ] as const) {
-        const capture = baseline();
-        const entry = capture.responses.details![0]!;
-        entry.responseText = JSON.stringify({
-          Header: { Status: "1" },
-          PirteyIska_204Bean: {
-            ...(voucher === undefined
-              ? {}
-              : {
-                  voucherNumberRatz:
-                    voucher === "matched" ? entry.voucherNumber : voucher,
-                }),
-            [field]: name,
-          },
-        });
-        expect(extract(capture).transactions[0]!.wallet).toBe(wallet);
-      }
     },
   );
 
@@ -1965,19 +1950,179 @@ describe("Isracard extraction", () => {
     },
   );
 
-  it.each([undefined, null, 0, "0", ""])(
-    "accepts imported DigitalV3 root errorCode %s with transport-compatible semantics",
-    (errorCode) => {
-      const capture = baseline("card-month-approvals");
-      const digital = JSON.parse(capture.responses.digital!) as Row;
-      delete digital.errorCode;
-      capture.responses.digital = JSON.stringify(digital);
-      const expected = extract(capture);
-      if (errorCode !== undefined) {
-        digital.errorCode = errorCode;
+  it.each<{
+    name: string;
+    errorCode: unknown;
+    accepted: boolean;
+    archive?: boolean;
+    pending?: boolean;
+  }>([
+    { name: "missing", errorCode: undefined, accepted: true },
+    { name: "null", errorCode: null, accepted: true },
+    { name: "numeric zero", errorCode: 0, accepted: true },
+    { name: "string zero", errorCode: "0", accepted: true, archive: true },
+    { name: "empty", errorCode: "", accepted: true },
+    {
+      name: "numeric one",
+      errorCode: 1,
+      accepted: false,
+      archive: true,
+      pending: true,
+    },
+    {
+      name: "numeric thirteen",
+      errorCode: 13,
+      accepted: false,
+      archive: true,
+      pending: true,
+    },
+    {
+      name: "numeric ninety-one",
+      errorCode: 91,
+      accepted: false,
+      archive: true,
+    },
+    { name: "string one", errorCode: "1", accepted: false, archive: true },
+    {
+      name: "string thirteen",
+      errorCode: "13",
+      accepted: false,
+      archive: true,
+      pending: true,
+    },
+    { name: "unknown", errorCode: "unknown", accepted: false, archive: true },
+    { name: "padded zero", errorCode: "00", accepted: false },
+    { name: "spaced zero", errorCode: " 0 ", accepted: false },
+    { name: "false", errorCode: false, accepted: false },
+    {
+      name: "unrecognized numeric code",
+      errorCode: 999,
+      accepted: false,
+      pending: true,
+    },
+  ])(
+    "extracts and retains imported DigitalV3 evidence with $name root status",
+    async ({ errorCode, accepted, archive, pending }) => {
+      if (accepted) {
+        const capture = baseline("card-month-approvals");
+        const digital = JSON.parse(capture.responses.digital!) as Row;
+        delete digital.errorCode;
+        capture.responses.digital = JSON.stringify(digital);
+        const expected = extract(capture);
+        if (errorCode !== undefined) {
+          digital.errorCode = errorCode;
+        }
+        capture.responses.digital = JSON.stringify(digital);
+        expect(extract(capture)).toEqual(expected);
+      } else if (errorCode !== 999) {
+        for (const keepLegacy of [true, false]) {
+          const capture = baseline("card-month-approvals");
+          if (!keepLegacy) {
+            delete capture.responses.legacy;
+          }
+          const digital = JSON.parse(capture.responses.digital!) as Row;
+          digital.errorCode = errorCode;
+          capture.responses.digital = JSON.stringify(digital);
+          const withoutDigital = structuredClone(capture);
+          delete withoutDigital.responses.digital;
+          const result = extract(capture);
+          expect(result.transactions).toEqual(
+            extract(withoutDigital).transactions,
+          );
+          expect(
+            result.transactions
+              .flatMap((row) => row.details.sourceRefs)
+              .every(({ path }) => !path.startsWith("$.responses.digital")),
+          ).toBe(true);
+          expect(result.warnings).toContain("invalid_digital_response");
+          expect(result.partitions).toEqual([
+            expect.objectContaining({
+              status: "pending",
+              success: false,
+              comparable: false,
+            }),
+            expect.objectContaining({
+              status: "posted",
+              success: false,
+              comparable: false,
+            }),
+          ]);
+          if (!keepLegacy) {
+            expect(result.transactions).toEqual([]);
+          }
+        }
       }
-      capture.responses.digital = JSON.stringify(digital);
-      expect(extract(capture)).toEqual(expected);
+      if (pending) {
+        const capture = baseline("card-month-approvals");
+        capture.card.companyCode = "77";
+        capture.responses.cardList = JSON.stringify({
+          isSuccess: true,
+          data: { cardsList: [capture.card] },
+        });
+        delete capture.responses.legacy;
+        delete capture.responses.details;
+        delete capture.legacyCardIndex;
+        const digital = JSON.parse(capture.responses.digital!) as {
+          errorCode?: unknown;
+          data: Row;
+        };
+        const approvals = digital.data.approvals as {
+          approvedTransactions: Row[];
+        };
+        digital.data.approvals = {
+          approvedTransactions: [approvals.approvedTransactions[0]!],
+          totalEstimatedAmount: 86.4,
+        };
+        digital.errorCode = errorCode;
+        capture.responses.digital = JSON.stringify(digital);
+        const result = extract(capture);
+        expect(result.transactions).toEqual([]);
+        expect(
+          result.partitions.every(
+            (partition) => !partition.success && !partition.comparable,
+          ),
+        ).toBe(true);
+      }
+      if (archive) {
+        const capture = baseline("card-month-approvals");
+        const digital = JSON.parse(capture.responses.digital!) as Row;
+        digital.errorCode = errorCode;
+        capture.responses.digital = ` \n${JSON.stringify(digital, null, 2)}\n`;
+        const source = serializeIsracardCapture(capture);
+        const db = await openDatabase(":memory:");
+        try {
+          await db.ensureConnection({
+            id: "synthetic-isracard",
+            provider: "isracard",
+          });
+          const result = await ingestCapture(db, capture, 1);
+          if (errorCode === "0") {
+            expect(result.status).toBe("completed");
+          } else {
+            expect(result.status).not.toBe("completed");
+          }
+          const [run] = await db.orm.select().from(syncRuns).all();
+          const [body] = await db.orm.select().from(syncRunBodies).all();
+          expect(run!.snapshot.responses[0]).not.toHaveProperty("responseText");
+          expect(body!.snapshot.responses[0]!.responseText).toBe(source);
+          const archived = JSON.parse(
+            body!.snapshot.responses[0]!.responseText,
+          ) as IsracardCapture;
+          expect(archived.responses.digital).toBe(capture.responses.digital);
+          expect(run!.coverage).toContainEqual(
+            expect.objectContaining({
+              status: "pending",
+              success: errorCode === "0",
+              comparable: errorCode === "0",
+            }),
+          );
+          expect(await db.listTransactions({ status: "pending" })).toHaveLength(
+            errorCode === "0" ? 2 : 0,
+          );
+        } finally {
+          await db.close();
+        }
+      }
     },
   );
 
@@ -2001,92 +2146,6 @@ describe("Isracard extraction", () => {
         : undefined;
       expect(rootCode?.value).toBe(lexeme);
       expect(extract(capture)).toEqual(expected);
-    },
-  );
-
-  it.each([1, 13, 91, "1", "13", "unknown", "00", " 0 ", false])(
-    "rejects imported failed DigitalV3 facts with root errorCode %s while retaining successful legacy siblings",
-    (errorCode) => {
-      for (const keepLegacy of [true, false]) {
-        const capture = baseline("card-month-approvals");
-        if (!keepLegacy) {
-          delete capture.responses.legacy;
-        }
-        const digital = JSON.parse(capture.responses.digital!) as Row;
-        digital.errorCode = errorCode;
-        capture.responses.digital = JSON.stringify(digital);
-        const withoutDigital = structuredClone(capture);
-        delete withoutDigital.responses.digital;
-        const result = extract(capture);
-        expect(result.transactions).toEqual(
-          extract(withoutDigital).transactions,
-        );
-        expect(
-          result.transactions
-            .flatMap((row) => row.details.sourceRefs)
-            .every(({ path }) => !path.startsWith("$.responses.digital")),
-        ).toBe(true);
-        expect(result.warnings).toContain("invalid_digital_response");
-        expect(result.partitions).toEqual([
-          expect.objectContaining({
-            status: "pending",
-            success: false,
-            comparable: false,
-          }),
-          expect.objectContaining({
-            status: "posted",
-            success: false,
-            comparable: false,
-          }),
-        ]);
-        if (!keepLegacy) {
-          expect(result.transactions).toEqual([]);
-        }
-      }
-    },
-  );
-
-  it.each(["0", 1, "1", 13, "13", 91, "unknown"])(
-    "retains imported approval archives verbatim with root errorCode %s",
-    async (errorCode) => {
-      const capture = baseline("card-month-approvals");
-      const digital = JSON.parse(capture.responses.digital!) as Row;
-      digital.errorCode = errorCode;
-      capture.responses.digital = ` \n${JSON.stringify(digital, null, 2)}\n`;
-      const source = serializeIsracardCapture(capture);
-      const db = await openDatabase(":memory:");
-      try {
-        await db.ensureConnection({
-          id: "synthetic-isracard",
-          provider: "isracard",
-        });
-        const result = await ingestCapture(db, capture, 1);
-        if (errorCode === "0") {
-          expect(result.status).toBe("completed");
-        } else {
-          expect(result.status).not.toBe("completed");
-        }
-        const [run] = await db.orm.select().from(syncRuns).all();
-        const [body] = await db.orm.select().from(syncRunBodies).all();
-        expect(run!.snapshot.responses[0]).not.toHaveProperty("responseText");
-        expect(body!.snapshot.responses[0]!.responseText).toBe(source);
-        const archived = JSON.parse(
-          body!.snapshot.responses[0]!.responseText,
-        ) as IsracardCapture;
-        expect(archived.responses.digital).toBe(capture.responses.digital);
-        expect(run!.coverage).toContainEqual(
-          expect.objectContaining({
-            status: "pending",
-            success: errorCode === "0",
-            comparable: errorCode === "0",
-          }),
-        );
-        expect(await db.listTransactions({ status: "pending" })).toHaveLength(
-          errorCode === "0" ? 2 : 0,
-        );
-      } finally {
-        await db.close();
-      }
     },
   );
 
