@@ -71,6 +71,7 @@ const optionalGroups = new Map([
   ["events.test.ts", "durable PostgreSQL event subscriptions"],
   ["hosted-bootstrap.test.ts", "hosted PostgreSQL bootstrap"],
   ["hosted-collection.test.ts", "hosted PostgreSQL collection targets"],
+  ["hosted-write-delivery.test.ts", "hosted delivery after owner writes"],
   ["neon-installation.test.ts", "Neon installation binding"],
   ["neon-login-link.test.mjs", "Neon setup login link"],
   ["operator-parity.test.ts", "one operator CLI behavior"],
