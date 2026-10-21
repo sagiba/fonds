@@ -13,15 +13,16 @@ on every sync run. The [synthetic fixtures](../../tests/providers/isracard/fixtu
 
 ## Setup
 
-Use an existing owner-only directory outside the repository for private data.
-These commands, with the [installed](../guides/local-development.md) `fonds`, are
-examples, not live-validation receipts:
+These commands use the [installed](../guides/local-setup.md) `fonds` and
+the default ledger, alongside any CAL connections. Use a distinct connection ID
+for each login ([multiple logins](../guides/local-setup.md#add-provider-logins)).
+They are examples, not live-validation receipts:
 
 ```sh
-fonds init --db /path/to/private/isracard.sqlite --connection isracard --provider isracard
-fonds connect --db /path/to/private/isracard.sqlite --connection isracard
-fonds refresh --db /path/to/private/isracard.sqlite --connection isracard
-fonds refresh --db /path/to/private/isracard.sqlite --connection isracard \
+fonds init --connection my-isracard --provider isracard
+fonds connect --connection my-isracard
+fonds refresh --connection my-isracard
+fonds refresh --connection my-isracard \
   --from 2026-09-01 --to 2026-09-30 --credentials-fd 3 3< /private/isracard.json
 ```
 
@@ -29,8 +30,8 @@ The credential JSON object contains `username` (the login identity number),
 `password` and the six-digit `cardSuffix`. `connect` prompts for each with hidden
 input, or reads `--credentials-fd`, and stores them encrypted for later `refresh`
 runs ([provider credentials table](../database.md#provider-credentials-table)).
-The npm/tsx launcher does not preserve descriptor 3; use the built CLI or
-`node --import tsx src/cli.ts`. The hosted target accepts the same object when
+`npm run cli` (the tsx launcher) does not preserve descriptor 3; use the installed
+`fonds`, built CLI or `node --import tsx src/cli.ts`. Hosted setup accepts this object when
 `FONDS_CONNECTION_PROVIDER=isracard`
 ([hosted-service guide](../guides/hosted-service.md#adding-providers),
 [Neon runbook](../guides/neon-deployment.md)), but hosted refresh is

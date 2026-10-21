@@ -18,6 +18,7 @@ import {
   openLocalLedger,
   openSqliteSession,
 } from "./runtime/local-ledger.js";
+import { localMcpSetup } from "./runtime/mcp-setup.js";
 import { CommandInputError } from "./runtime/operation-cli.js";
 import {
   type OperatorBackend,
@@ -132,7 +133,9 @@ export function sqliteBackend(
     name: "sqlite",
     title: "local SQLite CLI",
     invocation: "fonds",
-    description: `Run as node dist/cli.js from a checkout, or fonds in the Docker image. Every command takes
+    description: `Run fonds from the npm package or Docker image; from source, use node dist/cli.js.
+fonds serve starts HTTP/MCP (node dist/server.js from source); use serve --help for its flags.
+Every SQLite command takes
 [--db <path outside this repository>]; without it, commands use ${DEFAULT_DATABASE} in the
 private data directory: $FONDS_HOME, otherwise the platform's per-user data directory
 (~/.local/share/fonds on Linux, ~/Library/Application Support/Fonds on macOS), created
@@ -163,13 +166,28 @@ postgresql:// FONDS_DATABASE_URL makes fonds use PostgreSQL instead.`,
     },
     async demo(globals) {
       const path = databasePath(globals.db, DEMO_DATABASE);
-      const database = await openLocalLedger(path, await installation(true));
+      const current = await installation(true);
+      const database = await openLocalLedger(path, current);
       try {
         await loadDemo(database);
-        return await demoSummary(database, path, import.meta.url);
+        return await demoSummary(
+          database,
+          path,
+          import.meta.url,
+          stateDirectory(),
+        );
       } finally {
         await database.close();
       }
+    },
+    async mcpConfig(globals) {
+      const path = databasePath(globals.db);
+      requireExistingDatabase(path);
+      validatePrivateDatabase(path);
+      const current = await installation(false);
+      const database = await openLocalLedger(path, current);
+      await database.close();
+      return localMcpSetup(path, stateDirectory(), import.meta.url);
     },
     async backup(globals, out) {
       const path = databasePath(globals.db);

@@ -117,12 +117,13 @@ export interface OperatorBackend {
   readonly unavailable: Readonly<Partial<Record<OptionalCommand, string>>>;
   loginLink?(): Promise<string>;
   demo?(globals: Globals): Promise<string>;
+  mcpConfig?(globals: Globals): Promise<string>;
   backup?(globals: Globals, out: string): Promise<object>;
   /** The fixed message of a backend-specific error, safe to print. */
   describeError?(error: unknown): string | undefined;
 }
 
-type OptionalCommand = "login-link" | "demo" | "backup";
+type OptionalCommand = "login-link" | "demo" | "backup" | "mcp-config";
 
 type Values = Readonly<Record<string, string | boolean | undefined>>;
 
@@ -308,7 +309,7 @@ export const operatorCommands: readonly OperatorCommand[] = [
     name: "init",
     synopsis: `--connection <id> --provider <${supportedProviders.join("|")}>`,
     description:
-      "Create the database if needed and the connection; repeating it changes nothing.",
+      "Create the database if needed and add one provider login as a named connection. Repeat with a different ID for another login, including the same provider. Repeating an existing ID/provider changes nothing.",
     options: { connection: { type: "string" }, provider: { type: "string" } },
     async run(context) {
       const id = required(context.values, "connection");
@@ -634,6 +635,15 @@ export const operatorCommands: readonly OperatorCommand[] = [
     "Print a one-time owner sign-in link (10 minutes, single use) for the hosted service; open it, then add a passkey on the account page.",
     async ({ backend }) => {
       process.stdout.write(`${await backend.loginLink!()}\n`);
+      return EXIT_CODES.ok;
+    },
+  ),
+  optionalCommand(
+    "mcp-config",
+    "",
+    "Print local SQLite MCP setup for ChatGPT desktop/Codex and Claude, using absolute runtime, database and state paths. Does not change client configuration. Initialize the ledger first; use --db for a demo or another ledger.",
+    async ({ backend, globals }) => {
+      process.stdout.write(await backend.mcpConfig!(globals));
       return EXIT_CODES.ok;
     },
   ),

@@ -76,7 +76,7 @@ or an annotation, not necessarily another purchase. Notification timing depends
 on refresh and delivery schedules, not the time you used your card.
 
 Local stdio clients can read, annotate and refresh, but cannot create Events
-subscriptions. See [local refresh and Events](local-development.md#refresh-and-events-on-the-server)
+subscriptions. See [local refresh and Events](local-setup.md#refresh-and-events-on-the-server)
 and [hosted delivery](hosted-service.md#mcp-events-and-webhook-delivery), including
 how often each host delivers, for the actual requirements and limitations.
 

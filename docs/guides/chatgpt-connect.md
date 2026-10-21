@@ -1,6 +1,11 @@
 # Connect ChatGPT over MCP
 
-ChatGPT connects to a [hosted service](hosted-service.md) deployment at its
+For **ChatGPT desktop on a local Codex host**, use the
+[local MCP setup](local-setup.md#connect-an-mcp-client-locally): SQLite,
+stdio and no public endpoint. The desktop app and Codex CLI share that host's
+[MCP configuration](https://learn.chatgpt.com/docs/extend/mcp).
+
+For **ChatGPT web**, the procedure below connects to a [hosted service](hosted-service.md) deployment at its
 public origin (`FONDS_PUBLIC_ORIGIN`), which must be HTTPS and reachable from the
 internet. A [Docker](docker.md) stack on your own machine needs a TLS proxy or a
 [tunnel](docker.md#quick-tunnel) in front of it; on [Neon](neon-deployment.md)
@@ -16,7 +21,7 @@ https://YOUR_PUBLIC_ORIGIN/mcp
 2. Choose **Server URL** and enter the URL above. Use a distinct name such as Fonds.
 3. Choose **OAuth**. Leave static client ID and client secret empty; select **CIMD** when offered. Leave advanced authorization/token URL overrides empty.
 4. Create/connect. On Fonds's login page, sign in with a passkey or an owner-linked Google/GitHub account (on Neon, also **Continue with Google** with the configured owner Google account, which needs no Google app of your own), then approve the requested access. Without a passkey yet, first open a [login link](hosted-service.md#owner-login-and-authorization) in the same browser, add a passkey on `/account`, then connect.
-5. Install/enable the resulting plugin in the existing dot and call `list_connections`. Verify the expected connection and read synthetic data before enabling refreshes.
+5. Install/enable the resulting plugin and call `list_connections`. Verify the expected connections and read synthetic data before enabling refreshes.
 
 These UI and CIMD steps follow the
 [official custom-server guide](https://developers.openai.com/api/docs/guides/custom-mcp-server)
