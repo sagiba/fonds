@@ -419,10 +419,9 @@ purchase date and say nothing about billing dates.
 ## Perspectives
 
 `list_transactions` and `get_transaction_totals` take `perspective`. It selects
-which rows represent a plan, so that a purchase is counted once. A purchase with
-live billed lines is a plan purchase even when its count is unknown. Membership
-never depends on the other filters, which then apply within the perspective. The
-rule is `perspectiveRule` in [read-model.ts](../src/domain/read-model.ts).
+which rows represent a plan, so that a purchase is counted once. Membership never
+depends on the other filters, which then apply within the perspective. The rule is
+`perspectiveRule` in [read-model.ts](../src/domain/read-model.ts).
 
 | `perspective`        | Members                                                                                                               | Totals                                                |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
