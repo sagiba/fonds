@@ -411,4 +411,238 @@ describe.each(backends)("%s installment repair", (backend) => {
       ]);
     },
   );
+
+  it.each([true, false])(
+    "clears resolved child-count conflicts on refresh when the purchase is present=%s",
+    async (includeParent) => {
+      await capture(10, [purchase(5), line(1, 5), line(2, 6)]);
+      expect((await parent()).sourceIssues).toContain(
+        "conflicting_installment_plan",
+      );
+      const bad = (await db.listTransactions({ perspective: "all" })).find(
+        (item) => item.sourceKey === "line-2",
+      )!;
+      await db.confirmRemoval({
+        transactionId: bad.id,
+        expectedVersion: bad.version,
+        reason: "Synthetic incorrect child removed",
+      });
+      const next = includeParent ? [purchase()] : [row("unrelated")];
+      await capture(11, next);
+      expect((await parent()).installmentCount).toBe(5);
+      expect((await parent()).sourceIssues).not.toContain(
+        "conflicting_installment_plan",
+      );
+      const current = await parent();
+      const events = await db.listEvents();
+      expect(await capture(12, next)).toMatchObject({ created: 0, updated: 0 });
+      expect((await parent()).version).toBe(current.version);
+      expect(await db.listEvents()).toEqual(events);
+    },
+  );
+
+  it("clears derived count conflicts after the sole conflicting child is removed while the parent is absent", async () => {
+    await capture(10, [purchase(5), line(1, 6)]);
+    expect((await parent()).sourceIssues).toContain(
+      "conflicting_installment_plan",
+    );
+    expect((await parent()).sourceIssues).toContain(
+      "conflicting_installment_lines",
+    );
+    const child = (await db.listTransactions({ perspective: "all" })).find(
+      (item) => item.sourceKey === "line-1",
+    )!;
+    await db.confirmRemoval({
+      transactionId: child.id,
+      expectedVersion: child.version,
+      reason: "Synthetic sole incorrect child removed",
+    });
+    await capture(11, [row("unrelated")]);
+    const resolved = await parent();
+    expect(resolved).toMatchObject({
+      installmentCount: 5,
+      amountMinor: -12500,
+    });
+    expect(resolved.sourceIssues).not.toContain("conflicting_installment_plan");
+    expect(resolved.sourceIssues).not.toContain(
+      "conflicting_installment_lines",
+    );
+    const events = await db.listEvents();
+    expect(await capture(12, [row("unrelated")])).toMatchObject({
+      created: 0,
+      updated: 0,
+    });
+    expect((await parent()).version).toBe(resolved.version);
+    expect(await db.listEvents()).toEqual(events);
+  });
+
+  it("drops installment FX from linked purchases even when every count is unknown", async () => {
+    const withFx = {
+      ...purchase(),
+      fxFeeMinor: -100,
+      fxFeeCurrency: "ILS",
+      details: {
+        ...purchase().details,
+        currencyExchange: [
+          {
+            sourceCurrency: "USD",
+            targetCurrency: "ILS",
+            unitCurrency: "USD",
+            exchangeRate: "3.75",
+            quotationDate: "2040-07-01",
+          },
+        ],
+      },
+    };
+    await capture(10, [withFx, line(1, null)]);
+    expect(await parent()).toMatchObject({
+      installmentCount: null,
+      fxFeeMinor: null,
+      fxFeeCurrency: null,
+    });
+    expect((await parent()).details.currencyExchange).toBeUndefined();
+    expect((await db.getTotals()).fxFees).toEqual([]);
+    const before = await parent();
+    const events = await db.listEvents();
+    await capture(11, [withFx, line(1, null)]);
+    expect((await parent()).version).toBe(before.version);
+    expect(await db.listEvents()).toEqual(events);
+  });
+
+  it("normalizes linked-parent FX immediately even when ambiguous identity prevents count inference", async () => {
+    const input: TransactionInput[] = [
+      {
+        ...purchase(),
+        identityStrength: "ambiguous",
+        fxFeeMinor: -100,
+        fxFeeCurrency: "ILS",
+      },
+      line(1, null),
+    ];
+    await capture(10, input);
+    const before = await parent();
+    expect(before).toMatchObject({
+      identityStrength: "ambiguous",
+      installmentCount: null,
+      fxFeeMinor: null,
+      fxFeeCurrency: null,
+    });
+    const child = (await db.listTransactions({ perspective: "all" })).find(
+      (item) => item.sourceKey === "line-1",
+    )!;
+    expect(child.purchaseId).toBe(before.id);
+    const events = await db.listEvents();
+    expect(await capture(11, input)).toMatchObject({ created: 0, updated: 0 });
+    expect(await parent()).toMatchObject({
+      id: before.id,
+      version: before.version,
+      installmentCount: null,
+      fxFeeMinor: null,
+      fxFeeCurrency: null,
+    });
+    expect(await db.listEvents()).toEqual(events);
+  });
+
+  it("flags matching unknown-count linked purchases as possible duplicate plans without merging them", async () => {
+    const twin = (key: string, fields: Partial<TransactionInput> = {}) => [
+      { ...purchase(), sourceKey: key, ...fields },
+      {
+        ...line(1, null),
+        sourceKey: `${key}-line`,
+        purchaseKey: key,
+        ...fields,
+      },
+    ];
+    await capture(10, [
+      ...twin("plan"),
+      ...twin("twin"),
+      ...twin("different-merchant", {
+        merchantName: "Other synthetic merchant",
+      }),
+      ...twin("different-card", { cardKey: "other-card" }),
+    ]);
+    const rows = await db.listTransactions({ perspective: "all" });
+    for (const key of ["plan", "twin"]) {
+      const item = rows.find((entry) => entry.sourceKey === key)!;
+      expect(item.installmentCount).toBeNull();
+      expect(item.sourceIssues).toContain("possible_duplicate_plan");
+      expect(item.supersededById).toBeNull();
+    }
+    for (const key of ["different-merchant", "different-card"]) {
+      expect(
+        rows.find((item) => item.sourceKey === key)!.sourceIssues,
+      ).not.toContain("possible_duplicate_plan");
+    }
+    expect(rows).toHaveLength(8);
+  });
+
+  it("reports unresolved held billed lines instead of falling back to the unknown-count purchase amount", async () => {
+    await capture(10, [
+      purchase(),
+      line(1, null),
+      { ...line(1, null), sourceKey: "duplicate-line", amountMinor: -2400 },
+    ]);
+    const current = await parent();
+    expect(current).toMatchObject({
+      installmentCount: null,
+      amountMinor: -12500,
+    });
+    const page = await db.listTransactionPage({ perspective: "billing" });
+    expect(page.transactions.map((item) => item.sourceKey).sort()).toEqual([
+      "duplicate-line",
+      "line-1",
+    ]);
+    for (const item of page.transactions) {
+      expect(item.amountMinor).toBeNull();
+      expect(item.sourceIssues).toContain("duplicate_installment_ordinal");
+    }
+    expect(await db.getTotals({ perspective: "billing" })).toMatchObject({
+      totals: [],
+      includedCount: 0,
+      excluded: { unresolved: 2 },
+    });
+    expect((await db.getTotals()).totals).toEqual([
+      {
+        currency: "ILS",
+        amountBasis: "purchase_commitment",
+        amountMinor: -12500,
+      },
+    ]);
+  });
+
+  it("keeps unknown-count parent dates, versions and events stable across identical captures", async () => {
+    const input = [purchase(), line(1, null)];
+    await capture(10, input);
+    expect(await parent()).toMatchObject({
+      installmentCount: null,
+      billingDate: "2040-07-10",
+    });
+    const before = await parent();
+    const events = await db.listEvents();
+    expect(await capture(11, input)).toMatchObject({ created: 0, updated: 0 });
+    expect(await parent()).toMatchObject({
+      version: before.version,
+      billingDate: "2040-07-10",
+    });
+    expect(await db.listEvents()).toEqual(events);
+  });
+
+  it("holds accepted purchase money after an explicit single-payment contradiction until explicit plan resolution", async () => {
+    await capture(10, [purchase(5), line(1)]);
+    await capture(11, [{ ...purchase(1), amountMinor: -15000 }]);
+    expect((await parent()).amountMinor).toBe(-12500);
+    await capture(12, [{ ...purchase(), amountMinor: -17000 }]);
+    expect(await parent()).toMatchObject({
+      installmentCount: 5,
+      amountMinor: -12500,
+    });
+    expect((await parent()).sourceIssues).toContain(
+      "conflicting_installment_plan",
+    );
+    await capture(13, [{ ...purchase(5), amountMinor: -17000 }]);
+    expect((await parent()).amountMinor).toBe(-17000);
+    expect((await parent()).sourceIssues).not.toContain(
+      "conflicting_installment_plan",
+    );
+  });
 });

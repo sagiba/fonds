@@ -330,7 +330,7 @@ function syncRunAfter(cursor: string | undefined) {
 
 const transactionsDescription = [
   "Browse a bounded live page of compact transactions, newest transactionDate first (unknown dates last).",
-  "perspective selects rows from their own facts: spending (default) is every row without purchaseId, including fees and cancellations; billing is every row except installment-plan purchases, whose money appears through their billed lines; all is every row and counts a plan's money twice. A billed line has purchaseId (its purchase) and installmentNumber; filtering by purchaseId requires billing or all.",
+  "perspective selects rows using plan facts and live billed-line associations: spending (default) is every row without purchaseId, including fees and cancellations; billing excludes installment-plan purchases and purchases with live billed lines, including unknown-count plans; held or unknown billed amounts remain excluded, never replaced by the purchase commitment; all is every row and counts a plan's money twice. A billed line has purchaseId (its purchase) and installmentNumber; filtering by purchaseId requires billing or all.",
   "Money is exact decimal strings; keep each amount with its currency and amount basis.",
   "Pages may hold fewer rows to respect the response byte limit; follow nextCursor while hasMore is true. Reads are live: concurrent changes can shift later pages.",
   "cardId and billingAccountId must belong to connectionId when both are given; otherwise the input is invalid.",

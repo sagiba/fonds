@@ -13,7 +13,7 @@ import {
   retainObservations,
   retainProviderEvidence,
 } from "../observations.js";
-import { inPerspective } from "../read-model.js";
+import { billedLinesByPurchase, inPerspective } from "../read-model.js";
 import { nextVersion, type Transaction } from "../records.js";
 import { canonicalAnnotation, reviewBasis, reviewState } from "./annotation.js";
 import { FinancialPlan } from "./state.js";
@@ -169,11 +169,12 @@ function removeCandidateReferences(
  */
 export function refreshDuplicatePlans(plan: FinancialPlan): Transaction[] {
   const rows = plan.orderedRows();
+  const children = billedLinesByPurchase(rows);
   const lookalikeKey = (row: Transaction) =>
     row.status === "posted" &&
     row.presence !== "removed" &&
     !row.supersededById &&
-    !inPerspective(row, "billing") &&
+    !inPerspective(row, "billing", children.has(row.id)) &&
     row.cardId !== null &&
     row.merchantName !== null &&
     row.amountMinor !== null &&

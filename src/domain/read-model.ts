@@ -68,7 +68,11 @@ type MembershipFacts = Pick<
 export type PerspectiveRule =
   | { kind: "every_row" }
   | { kind: "without_purchase" }
-  | { kind: "without_plan_purchase"; minimumPayments: number };
+  | {
+      kind: "without_plan_purchase";
+      minimumPayments: number;
+      excludeWithLiveLines: boolean;
+    };
 
 export function perspectiveRule(perspective: Perspective): PerspectiveRule {
   switch (perspective) {
@@ -78,6 +82,7 @@ export function perspectiveRule(perspective: Perspective): PerspectiveRule {
       return {
         kind: "without_plan_purchase",
         minimumPayments: PLAN_MINIMUM_PAYMENTS,
+        excludeWithLiveLines: true,
       };
     case "all":
       return { kind: "every_row" };
@@ -87,7 +92,7 @@ export function perspectiveRule(perspective: Perspective): PerspectiveRule {
 export function inPerspective(
   row: MembershipFacts,
   perspective: Perspective,
-  hasBilledLines = false,
+  hasBilledLines: boolean,
 ): boolean {
   const rule = perspectiveRule(perspective);
   switch (rule.kind) {
@@ -97,12 +102,30 @@ export function inPerspective(
       return row.purchaseId === null;
     case "without_plan_purchase":
       return (
-        !hasBilledLines &&
+        !(rule.excludeWithLiveLines && hasBilledLines) &&
         (row.installmentCount === null ||
           row.installmentCount < rule.minimumPayments ||
           row.installmentNumber !== null)
       );
   }
+}
+
+/** The association survives absence, but not removal or retirement. */
+export function isLiveBilledLine(
+  row: Pick<Transaction, "purchaseId" | "presence" | "supersededById">,
+): boolean {
+  return (
+    row.purchaseId !== null && row.presence !== "removed" && !row.supersededById
+  );
+}
+
+export function billedLinesByPurchase(
+  rows: Iterable<Transaction>,
+): Map<string, Transaction[]> {
+  return Map.groupBy(
+    [...rows].filter(isLiveBilledLine),
+    (row) => row.purchaseId!,
+  );
 }
 
 export type TotalRow = Pick<

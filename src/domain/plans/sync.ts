@@ -24,7 +24,11 @@ import {
   currentSourceRows,
   sortedEvidence,
 } from "../provider-evidence.js";
-import { inPerspective } from "../read-model.js";
+import {
+  billedLinesByPurchase,
+  inPerspective,
+  isLiveBilledLine,
+} from "../read-model.js";
 import {
   type CollectionFailure,
   type CollectionScope,
@@ -310,8 +314,11 @@ function withFinancialState(
  * Installment-derived rows (plan purchases and billed lines) carry no FX
  * facts, whatever an adapter or a restatement supplies.
  */
-function withoutInstallmentFx(row: TransactionFacts): TransactionFacts {
-  if (!isBilledLine(row) && inPerspective(row, "billing")) {
+function withoutInstallmentFx(
+  row: TransactionFacts,
+  hasBilledLines = false,
+): TransactionFacts {
+  if (!isBilledLine(row) && inPerspective(row, "billing", hasBilledLines)) {
     return row;
   }
   const { currencyExchange: _dropped, ...details } = row.details;
@@ -323,6 +330,9 @@ function withoutInstallmentFx(row: TransactionFacts): TransactionFacts {
  * the two could bill one payment twice, so neither amount counts.
  */
 const DUPLICATE_ORDINAL = "duplicate_installment_ordinal";
+const INSTALLMENT_CONFLICT = "conflicting_installment_plan";
+const RESTATEMENT_CONFLICT = "conflicting_installment_restatement";
+const LINE_CONFLICT = "conflicting_installment_lines";
 
 const POSTING_MATCH_ISSUE = "possible_pending_posted_match";
 
@@ -368,10 +378,7 @@ function ordinalSlot(
     "purchaseId" | "installmentNumber" | "presence" | "supersededById"
   >,
 ): string | null {
-  return row.purchaseId !== null &&
-    row.installmentNumber !== null &&
-    row.presence !== "removed" &&
-    !row.supersededById
+  return isLiveBilledLine(row) && row.installmentNumber !== null
     ? JSON.stringify([row.purchaseId, row.installmentNumber])
     : null;
 }
@@ -1315,15 +1322,14 @@ function refreshInstallmentParents(
   scopes: Set<string>,
   contradicted: Set<string>,
 ): void {
-  const children = Map.groupBy(
-    [...plan.rows.values()].filter(
-      (row) =>
-        row.purchaseId !== null &&
-        row.presence !== "removed" &&
-        !row.supersededById,
-    ),
-    (row) => row.purchaseId!,
-  );
+  const children = billedLinesByPurchase(plan.rows.values());
+  // The final removed line can resolve a derived conflict without another
+  // observation of the purchase; keep that purchase in the repair set.
+  for (const row of plan.rows.values()) {
+    if (row.details.issues.includes(LINE_CONFLICT) && !children.has(row.id)) {
+      children.set(row.id, []);
+    }
+  }
   for (const [id, lines] of children) {
     const parent = plan.transaction(id);
     if (
@@ -1332,83 +1338,96 @@ function refreshInstallmentParents(
       parent.presence === "removed" ||
       parent.supersededById ||
       parent.purchaseId !== null ||
-      parent.amountBasis !== "purchase_commitment" ||
-      parent.kind !== "purchase" ||
-      parent.identityStrength === "ambiguous"
+      parent.amountBasis !== "purchase_commitment"
     ) {
       continue;
     }
-    const count = lines[0]!.installmentCount;
-    const consistent =
-      count !== null &&
-      count >= 2 &&
-      new Set(lines.map((line) => line.installmentNumber)).size ===
-        lines.length &&
-      lines.every(
-        (line) =>
-          line.sourceScope === parent.sourceScope &&
-          line.identityStrength !== "ambiguous" &&
-          line.installmentCount === count &&
-          line.installmentNumber !== null &&
-          line.installmentNumber >= 1 &&
-          line.installmentNumber <= count &&
-          !line.details.issues.some((issue) =>
-            [
-              "conflicting_installment_facts",
-              "invalid_installment_ordinal",
-              "duplicate_installment_ordinal",
-            ].includes(issue),
-          ),
-      );
-    const statedCounts = lines.flatMap((line) =>
-      line.installmentCount === null ? [] : [line.installmentCount],
-    );
-    const conflicting =
-      new Set(statedCounts).size > 1 ||
-      (parent.installmentCount !== null &&
-        statedCounts.some((value) => value !== parent.installmentCount)) ||
-      lines.some(
-        (line) =>
-          line.installmentCount !== null &&
-          line.installmentNumber !== null &&
-          (line.installmentNumber < 1 ||
-            line.installmentNumber > line.installmentCount),
-      );
-    if (conflicting || contradicted.has(id)) {
+    if (parent.kind !== "purchase" || parent.identityStrength === "ambiguous") {
+      const normalized = withoutInstallmentFx(parent, lines.length > 0);
       plan.updateTransaction(id, {
-        details: {
-          ...parent.details,
-          issues: withIssue(
-            parent.details.issues,
-            "conflicting_installment_plan",
-          ),
-        },
+        fxFeeMinor: normalized.fxFeeMinor,
+        fxFeeCurrency: normalized.fxFeeCurrency,
+        details: normalized.details,
       });
       continue;
     }
-    if (
-      consistent &&
-      parent.installmentCount === null &&
+    let statedCount: number | null = null;
+    let complete = true;
+    let conflicting = false;
+    const ordinals = new Set<number>();
+    for (const line of lines) {
+      const count = line.installmentCount;
+      const ordinal = line.installmentNumber;
+      if (count !== null) {
+        conflicting ||=
+          (statedCount !== null && statedCount !== count) ||
+          (parent.installmentCount !== null &&
+            parent.installmentCount !== count) ||
+          (ordinal !== null && (ordinal < 1 || ordinal > count));
+        statedCount ??= count;
+      }
+      complete &&=
+        count !== null &&
+        count >= 2 &&
+        ordinal !== null &&
+        ordinal >= 1 &&
+        ordinal <= count &&
+        !ordinals.has(ordinal) &&
+        line.sourceScope === parent.sourceScope &&
+        line.identityStrength !== "ambiguous" &&
+        !line.details.issues.some((issue) =>
+          [
+            "conflicting_installment_facts",
+            "invalid_installment_ordinal",
+            DUPLICATE_ORDINAL,
+          ].includes(issue),
+        );
+      if (ordinal !== null) {
+        ordinals.add(ordinal);
+      }
+    }
+    const explicitConflict =
+      contradicted.has(id) ||
+      parent.details.issues.includes(RESTATEMENT_CONFLICT);
+    const legacyConflict =
+      parent.installmentCount !== null &&
+      parent.details.issues.includes(INSTALLMENT_CONFLICT) &&
+      !parent.details.issues.includes(LINE_CONFLICT) &&
+      !explicitConflict;
+    const count =
+      complete &&
+      !conflicting &&
+      !explicitConflict &&
+      !legacyConflict &&
       !parent.details.issues.includes("conflicting_installment_facts")
-    ) {
-      const repaired = withoutInstallmentFx({
+        ? (parent.installmentCount ?? statedCount)
+        : parent.installmentCount;
+    const issues = parent.details.issues.filter(
+      (issue) => ![INSTALLMENT_CONFLICT, LINE_CONFLICT].includes(issue),
+    );
+    if (conflicting) {
+      issues.push(LINE_CONFLICT);
+    }
+    if (conflicting || explicitConflict || legacyConflict) {
+      issues.push(INSTALLMENT_CONFLICT);
+    }
+    const normalized = withoutInstallmentFx(
+      {
         ...parent,
         installmentCount: count,
-        billingDate: null,
-      });
-      plan.updateTransaction(id, {
-        installmentCount: count,
-        billingDate: null,
-        fxFeeMinor: repaired.fxFeeMinor,
-        fxFeeCurrency: repaired.fxFeeCurrency,
-        details: {
-          ...repaired.details,
-          issues: repaired.details.issues.filter(
-            (issue) => issue !== "conflicting_installment_plan",
-          ),
-        },
-      });
-    }
+        // An unknown plan's observed date stays evidence until a plan is established.
+        billingDate: count !== null && count >= 2 ? null : parent.billingDate,
+        details: { ...parent.details, issues },
+      },
+      lines.length > 0,
+    );
+    plan.updateTransaction(id, {
+      installmentCount: normalized.installmentCount,
+      billingDate: normalized.billingDate,
+      fxFeeMinor: normalized.fxFeeMinor,
+      fxFeeCurrency: normalized.fxFeeCurrency,
+      details: normalized.details,
+    });
   }
 }
 
@@ -1745,16 +1764,16 @@ export function planRun(
     const purchases = purchaseResolver(plan, current);
     // Purchases with live billed lines: a capture that restates one as
     // anything but a plan contradicts its lines.
-    const planParents = new Set(
-      current.flatMap((row) =>
-        row.purchaseId !== null &&
-        row.presence !== "removed" &&
-        !row.supersededById
-          ? [row.purchaseId]
+    const planParents = new Set(billedLinesByPurchase(current).keys());
+    const incomingPurchases = new Set(
+      result.transactions.flatMap((input) =>
+        input.purchaseKey
+          ? [JSON.stringify([input.sourceScope, input.purchaseKey])]
           : [],
       ),
     );
-    // Each input keeps the purchase key it names, if it is a billed line.
+    // Normalize association-based facts before identity fingerprints as well as
+    // after writes; otherwise a repeated ambiguous capture changes its own key.
     const prepared = result.transactions.map((input) => {
       const resolved = resolveTransaction(plan, input, now, newId);
       const purchaseKey = input.purchaseKey ?? null;
@@ -1765,7 +1784,21 @@ export function planRun(
         );
       }
       return {
-        facts: withoutInstallmentFx(resolved),
+        facts: withoutInstallmentFx(
+          resolved,
+          purchaseKey === null &&
+            resolved.amountBasis === "purchase_commitment" &&
+            !isBilledLine(resolved) &&
+            ([resolved.sourceKey, ...resolved.sourceAliases].some((key) =>
+              incomingPurchases.has(
+                JSON.stringify([resolved.sourceScope, key]),
+              ),
+            ) ||
+              planParents.has(
+                purchases.resolve(resolved.sourceScope, resolved.sourceKey) ??
+                  "",
+              )),
+        ),
         purchaseKey,
         counterpartyAbsent: input.counterpartyName === undefined,
         cardKey: input.cardKey,
@@ -2151,7 +2184,7 @@ export function planRun(
         const restated =
           planParents.has(previous.id) &&
           purchaseKey === null &&
-          inPerspective(input, "billing");
+          inPerspective(input, "billing", false);
         const unknownPlan =
           restated &&
           input.installmentCount === null &&
@@ -2159,12 +2192,21 @@ export function planRun(
           previous.kind === "purchase" &&
           input.amountBasis === "purchase_commitment" &&
           input.installmentNumber === null;
+        const priorRestatement =
+          previous.details.issues.includes(RESTATEMENT_CONFLICT) ||
+          (previous.installmentCount !== null &&
+            previous.details.issues.includes(INSTALLMENT_CONFLICT) &&
+            !previous.details.issues.includes(LINE_CONFLICT));
         const accepted = withoutInstallmentFx(
-          unknownPlan
+          unknownPlan && !priorRestatement
             ? {
                 ...input,
                 installmentCount: previous.installmentCount,
-                billingDate: null,
+                billingDate:
+                  previous.installmentCount !== null &&
+                  previous.installmentCount >= 2
+                    ? null
+                    : input.billingDate,
               }
             : restated
               ? withFinancialState(input, {
@@ -2173,17 +2215,13 @@ export function planRun(
                     previous.installmentCount ?? input.installmentCount,
                 })
               : input,
+          planParents.has(previous.id),
         );
-        if (
-          restated &&
-          (!unknownPlan ||
-            (previous.installmentCount !== null &&
-              previous.details.issues.includes("conflicting_installment_plan")))
-        ) {
+        if (restated && (!unknownPlan || priorRestatement)) {
           contradictedPlans.add(id);
           accepted.details.issues = withIssue(
-            accepted.details.issues,
-            "conflicting_installment_plan",
+            withIssue(accepted.details.issues, INSTALLMENT_CONFLICT),
+            RESTATEMENT_CONFLICT,
           );
         }
         retainEvidence(plan.transaction(id)!, accepted, adapter);

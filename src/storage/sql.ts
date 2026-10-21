@@ -55,13 +55,15 @@ function perspectiveFilter(
           lt(table.installmentCount, rule.minimumPayments),
           isNotNull(table.installmentNumber),
         ),
-        sql`not exists (
+        rule.excludeWithLiveLines
+          ? sql`not exists (
           select 1 from ${table.id.table} as billed_line
           where billed_line.connection_id = ${table.connectionId}
             and billed_line.purchase_id = ${table.id}
             and billed_line.presence <> 'removed'
             and billed_line.superseded_by_id is null
-        )`,
+        )`
+          : undefined,
       );
   }
 }
