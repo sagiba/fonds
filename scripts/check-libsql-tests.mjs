@@ -7,6 +7,13 @@ import { checkStorageCoverage } from "./storage-coverage.mjs";
 // Minimum existing coverage, not an exact total: additions need no CI edit.
 // Update these floors only when deliberately removing/reorganizing coverage.
 export const requiredGroups = [
+  ["service.test.ts", "service integration: libsql-http", 32],
+  [
+    "collection.test.ts",
+    "streamed collection application boundary: libsql-http",
+    25,
+  ],
+  ["notifications.test.ts", "durable change delivery: libsql-http", 11],
   [
     "lifecycle.test.ts",
     "owner-confirmed transaction lifecycle: libsql-http",
