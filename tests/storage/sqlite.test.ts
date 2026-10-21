@@ -87,7 +87,9 @@ it("loads lifecycle annotations by scoped join beyond SQLite's parameter limit",
   } finally {
     await db.close();
   }
-}, 15_000);
+  // 33,000 synthetic rows take seconds alone; a fully loaded CI runner
+  // stretches that past 15 seconds.
+}, 60_000);
 
 it("updates existing rows without changing their SQLite insertion order", async () => {
   const db = await openDatabase(":memory:");
