@@ -85,9 +85,11 @@ export function postingHarness(db: InternalStore) {
     );
   }
 
+  // Every synthetic key comes from this harness's connection; scoping the
+  // listing to it also keeps PostgreSQL's planner off an unbounded estimate.
   async function byKey(key: string) {
     const transaction = (
-      await db.listTransactions({ includeSuperseded: true })
+      await db.listTransactions({ connectionId, includeSuperseded: true })
     ).find((row) => row.sourceKey === key && !row.supersededById);
     if (!transaction) {
       throw new Error(`Missing synthetic key ${key}`);
