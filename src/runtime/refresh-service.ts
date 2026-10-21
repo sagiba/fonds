@@ -293,7 +293,6 @@ export function createRefreshService(options: RefreshServiceOptions) {
       return "done";
     }
     let counts = current.counts;
-    let failureCodes = current.failureCodes;
     let requiresAttention: boolean = current.requiresAttention;
     let providerStopped = Boolean(current.providerStopReason);
     const reloadProgress = async () => {
@@ -302,7 +301,6 @@ export function createRefreshService(options: RefreshServiceOptions) {
         throw new Error("Refresh progress disappeared");
       }
       counts = persisted.counts;
-      failureCodes = persisted.failureCodes;
       requiresAttention = persisted.requiresAttention;
       hasAcceptedEvidence = Boolean(persisted.hasAcceptedEvidence);
       providerStopped = Boolean(persisted.providerStopReason);
@@ -354,7 +352,6 @@ export function createRefreshService(options: RefreshServiceOptions) {
           ...(window && { window }),
           finishedAt: new Date().toISOString(),
           counts,
-          failureCodes,
           requiresAttention,
         });
         return "done";
@@ -423,7 +420,6 @@ export function createRefreshService(options: RefreshServiceOptions) {
         // so no resume requests the provider again.
         await locked.updateRefresh(id, {
           counts,
-          failureCodes,
           requiresAttention,
           ...(window && {
             window: { from: window.from, status: unitStatus },
@@ -488,7 +484,6 @@ export function createRefreshService(options: RefreshServiceOptions) {
       ...(failedWindow && { window: failedWindow }),
       finishedAt: new Date().toISOString(),
       counts,
-      failureCodes,
       requiresAttention,
     });
     return "done";

@@ -20,6 +20,7 @@ import {
 } from "../application/sync-diagnostics.js";
 import { FONDS_VERSION } from "../application/version.js";
 import { CredentialInputError } from "../domain/credentials.js";
+import { refreshFailureCodeSchema } from "../domain/model.js";
 import { ProviderConfigurationError } from "../domain/source-adapter.js";
 import { NewerSchemaError } from "../storage/migrations.js";
 import { collectionControls } from "./collection-controls.js";
@@ -150,7 +151,7 @@ export const collectionSummarySchema = z
     unchangedTransactions: z.number().int().nonnegative(),
     unlisted: z.number().int().nonnegative(),
     failures: z.number().int().nonnegative(),
-    failureCodes: z.array(z.string()).optional(),
+    failureCodes: z.array(refreshFailureCodeSchema).optional(),
     created: z.number().int().nonnegative(),
     updated: z.number().int().nonnegative(),
     requestedRange: z.object({ from: z.string(), to: z.string() }).optional(),

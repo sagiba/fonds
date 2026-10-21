@@ -9,12 +9,15 @@ import {
   pageSchema,
   totalsSchema,
 } from "../../src/application/query-inputs.js";
+import { emptyCounts } from "../../src/application/refreshes.js";
 import {
   OUTPUT_MAX_BYTES,
   outputByteLength,
+  presentRefresh,
   presentWireEvent,
   presentWireTotals,
   presentWireTransaction,
+  refreshSummaryOutputSchema,
   transactionDetailOutputSchema,
   transactionOutputSchema,
   transactionReadOutputSchema,
@@ -22,6 +25,7 @@ import {
 import {
   annotationSchema,
   emptyDetails,
+  refreshFailureCodeSchema,
   unknownLedgerFacts,
 } from "../../src/domain/model.js";
 import {
@@ -855,4 +859,58 @@ describe("opaque list cursors", () => {
       expect(() => decodeCursor("event", cursor)).toThrow();
     }
   });
+});
+
+describe("refresh failure codes", () => {
+  const refresh = {
+    id: "synthetic-refresh",
+    connectionId: "synthetic-connection",
+    trigger: "manual" as const,
+    status: "failed" as const,
+    skipReason: null,
+    range: null,
+    occurrence: null,
+    scheduledAt: null,
+    createdAt: "2040-01-01T00:00:00.000Z",
+    startedAt: "2040-01-01T00:00:00.000Z",
+    finishedAt: "2040-01-01T00:01:00.000Z",
+    requiresAttention: true,
+    providerStopReason: "authentication_challenge" as const,
+    hasAcceptedEvidence: false,
+    counts: { ...emptyCounts(), failures: 2 },
+    failureCodes: [
+      "authentication_challenge" as const,
+      "network_error" as const,
+    ],
+    failureReason: null,
+    missed: null,
+    windows: [],
+  };
+
+  it("publishes the codes in their one field and keeps the stop reason internal", () => {
+    const wire = refreshSummaryOutputSchema.parse(presentRefresh(refresh));
+    expect(wire.failureCodes).toEqual([
+      "authentication_challenge",
+      "network_error",
+    ]);
+    expect(wire).not.toHaveProperty("providerStopReason");
+    expect(
+      refreshSummaryOutputSchema.parse({
+        ...wire,
+        failureCodes: [...refreshFailureCodeSchema.options].sort(),
+      }).failureCodes,
+    ).toHaveLength(7);
+  });
+
+  it.each(["expired", "collection", "persistence", "Synthetic reason", ""])(
+    "rejects %j, which is not a refresh failure code",
+    (code) => {
+      expect(
+        refreshSummaryOutputSchema.safeParse({
+          ...presentRefresh(refresh),
+          failureCodes: [code],
+        }).success,
+      ).toBe(false);
+    },
+  );
 });

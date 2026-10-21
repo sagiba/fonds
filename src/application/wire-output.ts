@@ -13,6 +13,7 @@ import {
   kindSchema,
   merchantCategoryCodeSchema,
   presenceSchema,
+  refreshFailureCodeSchema,
   RESOURCE_ID_MAX_LENGTH,
   transactionDateTimeSchema,
   transactionStatusSchema,
@@ -511,7 +512,9 @@ export const refreshSummaryOutputSchema = z
         updated: versionSchema,
       })
       .strict(),
-    failureCodes: z.array(z.enum(["implausible_empty"])).max(10),
+    failureCodes: z
+      .array(refreshFailureCodeSchema)
+      .max(refreshFailureCodeSchema.options.length),
     failureReason: z.enum(FAILURE_REASONS).nullable(),
     missed: z
       .object({ through: textSchema, count: versionSchema })

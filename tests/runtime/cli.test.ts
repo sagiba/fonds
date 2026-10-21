@@ -1337,6 +1337,7 @@ describe("offline CLI", () => {
         unchangedTransactions: 0,
         unlisted: 0,
         failures: partial ? 1 : 0,
+        ...(partial && { failureCodes: ["invalid_response"] }),
         created: 21,
         updated: 0,
       });
@@ -1360,6 +1361,7 @@ describe("offline CLI", () => {
           created: 21,
           updated: 0,
         },
+        failureCodes: partial ? ["invalid_response"] : [],
       });
       expect(typeof connection.latestRefresh.finishedAt).toBe("string");
     },

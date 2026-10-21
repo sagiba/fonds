@@ -16,7 +16,7 @@ import type { Account } from "../../domain/accounts.js";
 import type { Card } from "../../domain/cards.js";
 import type {
   AnnotationData,
-  ReconciliationFailureCode,
+  RefreshFailureCode,
   TransactionInput,
 } from "../../domain/model.js";
 import type {
@@ -404,7 +404,7 @@ export const refreshes = pgTable("refreshes", {
   unlisted: bigint("unlisted", { mode: "number" }).notNull(),
 
   failureCodes:
-    jsonText<ReconciliationFailureCode[]>()("failure_codes_json").notNull(),
+    jsonText<RefreshFailureCode[]>()("failure_codes_json").notNull(),
   failureReason: text("failure_reason", { enum: FAILURE_REASONS }),
   missedThrough: text("missed_through"),
   missedCount: bigint("missed_count", { mode: "number" }),
