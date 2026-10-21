@@ -5,7 +5,7 @@ MCP, manual and scheduled refreshes and MCP Events. It is the same code on every
 host; a host supplies only its environment and database, and on Neon its native
 scheduler. Run it with
 [Docker](docker.md) on your own machine or server, or on [Neon](neon-deployment.md).
-The local-first SQLite service needs none of this; see [local development](local-development.md).
+The local-first SQLite service needs none of this; see [local setup](local-setup.md).
 
 ## Configuration
 
@@ -135,7 +135,7 @@ each month or recent window is bounded at ten minutes.
 failure categories. `observed` counts accepted identities per capture;
 `extracted` counts parser inputs. Logs exclude source values, credentials and
 private provider identifiers. For a bounded report or temporary raw archives, use
-the [operator CLI](local-development.md#operator-commands).
+the [operator CLI](local-setup.md#operator-commands).
 
 The [API reference](../api.md#operations) lists the refresh tools and routes and
 their grants. The SQLite server and the PostgreSQL loopback launcher offer the

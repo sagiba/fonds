@@ -13,9 +13,9 @@ on every sync run. The [synthetic fixtures](../../tests/providers/isracard/fixtu
 
 ## Setup
 
-These commands use the [installed](../guides/local-development.md) `fonds` and
+These commands use the [installed](../guides/local-setup.md) `fonds` and
 the default ledger, alongside any CAL connections. Use a distinct connection ID
-for each login ([multiple logins](../guides/local-development.md#add-provider-logins)).
+for each login ([multiple logins](../guides/local-setup.md#add-provider-logins)).
 They are examples, not live-validation receipts:
 
 ```sh

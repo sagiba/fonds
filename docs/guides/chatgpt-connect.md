@@ -1,7 +1,7 @@
 # Connect ChatGPT over MCP
 
 For **ChatGPT desktop on a local Codex host**, use the
-[local MCP setup](local-development.md#connect-an-mcp-client-locally): SQLite,
+[local MCP setup](local-setup.md#connect-an-mcp-client-locally): SQLite,
 stdio and no public endpoint. The desktop app and Codex CLI share that host's
 [MCP configuration](https://learn.chatgpt.com/docs/extend/mcp).
 

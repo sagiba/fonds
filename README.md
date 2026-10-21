@@ -68,7 +68,7 @@ what to run next, including setup for ChatGPT desktop, Claude Code and Claude
 Desktop. Follow your client's snippet, restart the client,
 and check its MCP connection status. Ask "What are my totals by currency in
 fonds-demo?". The client starts Fonds over stdio; no HTTP server is needed.
-The [local guide](docs/guides/local-development.md) covers source installation,
+The [local guide](docs/guides/local-setup.md) covers source installation,
 client setup and troubleshooting. ChatGPT desktop uses the same local Codex host's
 MCP configuration; ChatGPT web has a separate hosted path.
 
@@ -85,7 +85,7 @@ fonds mcp-config
 ```
 
 These use your private default ledger. Copy your client's setup from
-`mcp-config`. The [local guide](docs/guides/local-development.md#add-provider-logins)
+`mcp-config`. The [local guide](docs/guides/local-setup.md#add-provider-logins)
 covers adding more CAL or Isracard logins to that ledger; provider guides cover
 credentials and collection windows. Back up the database and its
 [state directory](docs/database.md#state-directory-and-backup) together.

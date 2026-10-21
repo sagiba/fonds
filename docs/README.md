@@ -4,15 +4,15 @@
 
 ## Start here
 
-| I want to…                                        | Start here                                                                                                                                |
-| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Try it without connecting a card                  | [README quick start](../README.md#quick-start-about-10-minutes)                                                                           |
-| Add provider logins locally                       | [Add provider logins](guides/local-development.md#add-provider-logins), then [CAL](providers/cal.md) or [Isracard](providers/isracard.md) |
-| Review, categorize and tag transactions           | [Using Fonds with an assistant](guides/using-with-an-assistant.md)                                                                        |
-| Connect ChatGPT desktop or Claude                 | [Local MCP setup](guides/local-development.md#connect-an-mcp-client-locally)                                                              |
-| Connect ChatGPT web                               | [Hosted setup](guides/hosted-service.md), then [ChatGPT connection](guides/chatgpt-connect.md)                                            |
-| Keep records current and understand notifications | [Refresh and notifications](guides/using-with-an-assistant.md#refresh-and-notifications)                                                  |
-| Understand privacy and my responsibilities        | [Your data stays yours](../README.md#your-data-stays-yours) and [security model](security-model.md)                                       |
+| I want to…                                        | Start here                                                                                                                          |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Try it without connecting a card                  | [README quick start](../README.md#quick-start-about-10-minutes)                                                                     |
+| Add provider logins locally                       | [Add provider logins](guides/local-setup.md#add-provider-logins), then [CAL](providers/cal.md) or [Isracard](providers/isracard.md) |
+| Review, categorize and tag transactions           | [Using Fonds with an assistant](guides/using-with-an-assistant.md)                                                                  |
+| Connect ChatGPT desktop or Claude                 | [Local MCP setup](guides/local-setup.md#connect-an-mcp-client-locally)                                                              |
+| Connect ChatGPT web                               | [Hosted setup](guides/hosted-service.md), then [ChatGPT connection](guides/chatgpt-connect.md)                                      |
+| Keep records current and understand notifications | [Refresh and notifications](guides/using-with-an-assistant.md#refresh-and-notifications)                                            |
+| Understand privacy and my responsibilities        | [Your data stays yours](../README.md#your-data-stays-yours) and [security model](security-model.md)                                 |
 
 ## Reference
 
@@ -26,7 +26,7 @@
 
 ## Guides
 
-- [Local setup](guides/local-development.md): npm/source installation, provider logins, desktop clients and CLI use.
+- [Local setup](guides/local-setup.md): npm/source installation, provider logins, desktop clients and CLI use.
 - [Storage backends](guides/storage-backends.md): choose and run SQLite, PostgreSQL or Turso.
 - [Hosted service](guides/hosted-service.md): host-neutral configuration, owner login, refresh, scheduling and Events.
 - [Docker](guides/docker.md): the SQLite and PostgreSQL images, the compose stack and a quick tunnel.

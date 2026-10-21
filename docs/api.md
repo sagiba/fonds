@@ -3,7 +3,7 @@
 This guide owns HTTP routes, MCP tools, inputs and the JSON records they return,
 including money roles and installment perspectives. The
 [database reference](database.md) owns persistence,
-[local development](guides/local-development.md) running and connecting a
+[local setup](guides/local-setup.md) running and connecting a
 service, and [reference models](reference-models.md) the choices behind names and
 shapes. HTTP and MCP call the same application operations, defined in
 [operations.ts](../src/application/operations.ts),
@@ -42,7 +42,7 @@ which runtimes offer refreshes.
 initialization. There are no public operations to create connections or export
 raw source responses; a backfill is a [refresh](#refreshes) with `{from, to}`.
 
-The [command-line client](guides/local-development.md#use-the-command-line) runs
+The [command-line client](guides/local-setup.md#use-the-command-line) runs
 the same operations as kebab-case commands and flags and prints each operation's
 JSON output, embedded on a local database or against this API with `--remote`.
 
@@ -624,7 +624,7 @@ perspective semantics and that totals groups are never added together. Tools
 carry the MCP behavior hints set in [mcp.ts](../src/transport/mcp.ts); refresh
 and `get_refresh` declare external-world access, and `get_refresh` is not
 read-only. These hints do not replace authorization. See
-[local development](guides/local-development.md#connect-an-mcp-client-locally)
+[local setup](guides/local-setup.md#connect-an-mcp-client-locally)
 for configuration.
 
 When the runtime supplies Events (HTTP on the SQLite server, the PostgreSQL
