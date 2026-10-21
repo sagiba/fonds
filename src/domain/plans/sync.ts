@@ -1629,22 +1629,15 @@ export function planRun(
     // Purchases with live billed lines: a capture that restates one as
     // anything but a plan contradicts its lines.
     const planParents = new Set(billedLinesByPurchase(current).keys());
-    // Source keys of stored purchases with billed lines, and of purchases
-    // that incoming lines name.
-    const storedParentKeys = new Set(
+    // Source keys of stored purchases with billed lines. A purchase that only
+    // incoming lines name is normalized once a line attaches to it.
+    const parentKeys = new Set(
       [...planParents].flatMap((id) => {
         const parent = plan.transaction(id)!;
         return [parent.sourceKey, ...parent.sourceAliases].map((key) =>
           JSON.stringify([parent.sourceScope, key]),
         );
       }),
-    );
-    const namedPurchaseKeys = new Set(
-      result.transactions.flatMap((input) =>
-        input.purchaseKey
-          ? [JSON.stringify([input.sourceScope, input.purchaseKey])]
-          : [],
-      ),
     );
     // Normalize association-based facts before identity fingerprints as well as
     // after writes; otherwise a repeated ambiguous capture changes its own key.
@@ -1661,15 +1654,9 @@ export function planRun(
         facts: withoutInstallmentFx(
           resolved,
           purchaseKey === null &&
-            [resolved.sourceKey, ...resolved.sourceAliases].some((key) => {
-              const scoped = JSON.stringify([resolved.sourceScope, key]);
-              // Only a purchase commitment can become a named line's purchase.
-              return (
-                storedParentKeys.has(scoped) ||
-                (resolved.amountBasis === "purchase_commitment" &&
-                  namedPurchaseKeys.has(scoped))
-              );
-            }),
+            [resolved.sourceKey, ...resolved.sourceAliases].some((key) =>
+              parentKeys.has(JSON.stringify([resolved.sourceScope, key])),
+            ),
         ),
         purchaseKey,
         counterpartyAbsent: input.counterpartyName === undefined,

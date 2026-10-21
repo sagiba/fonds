@@ -762,6 +762,31 @@ describe.each(backends)("%s installment repair", (backend) => {
     });
   });
 
+  it("keeps FX on purchases that share the key a line names", async () => {
+    const withFx = (key: string, aliases: string[] = []) => ({
+      ...purchase(),
+      sourceKey: key,
+      sourceAliases: aliases,
+      fxFeeMinor: -100,
+      fxFeeCurrency: "ILS",
+    });
+    await capture(10, [
+      withFx("a", ["b"]),
+      withFx("b"),
+      { ...line(1, null), purchaseKey: "b" },
+    ]);
+    const rows = await db.listTransactions({ perspective: "all" });
+    for (const key of ["a", "b"]) {
+      expect(rows.find((item) => item.sourceKey === key)).toMatchObject({
+        fxFeeMinor: -100,
+        fxFeeCurrency: "ILS",
+      });
+    }
+    expect(
+      rows.find((item) => item.sourceKey === "line-1")!.sourceIssues,
+    ).toContain("unresolved_purchase");
+  });
+
   it("clears a restatement conflict when the owner removes the purchase's last line", async () => {
     await capture(10, [purchase(5), line(1)]);
     await capture(11, [purchase(1)]);
