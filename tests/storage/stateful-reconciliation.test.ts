@@ -471,6 +471,15 @@ describe.each(backends)("%s stateful reconciliation scenarios", (backend) => {
       (state) => {
         expect(only(state, "duplicate").presence).toBe("removed");
         expect(only(state, "purchase").installmentCount).toBeNull();
+        expect(only(state, "line-1").amountMinor).toBeNull();
+        expect(only(state, "line-1").sourceIssues).toContain(
+          "duplicate_installment_ordinal",
+        );
+        expect(state.billing).toMatchObject({
+          totals: [],
+          includedCount: 0,
+          excluded: { unresolved: 1 },
+        });
       },
     );
     await run.capture(
@@ -563,6 +572,12 @@ describe.each(backends)("%s stateful reconciliation scenarios", (backend) => {
       },
       (state) => {
         expect(only(state, "purchase").id).toBe(posted.id);
+        for (const key of ["authorization", "purchase"]) {
+          expect(only(state, key).pendingPostingCandidates).toEqual([]);
+          expect(only(state, key).sourceIssues).not.toContain(
+            "possible_pending_posted_match",
+          );
+        }
         for (const key of ["line-1", "line-2", "line-3"]) {
           expect(only(state, key).purchaseId).toBe(posted.id);
         }
