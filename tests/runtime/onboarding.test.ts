@@ -54,6 +54,12 @@ function credentialFile(credentials: object | undefined) {
 /** Exercise the real parser, storage and vault without paying for a cold CLI per assertion. */
 async function run(args: string[], credentials?: object) {
   const fd = credentialFile(credentials);
+  const tty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+  // Match the subprocess's piped stdin even when Vitest itself has a terminal.
+  Object.defineProperty(process.stdin, "isTTY", {
+    value: false,
+    configurable: true,
+  });
   let stdout = "";
   let stderr = "";
   const out = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
@@ -73,6 +79,11 @@ async function run(args: string[], credentials?: object) {
   } finally {
     out.mockRestore();
     err.mockRestore();
+    if (tty) {
+      Object.defineProperty(process.stdin, "isTTY", tty);
+    } else {
+      delete (process.stdin as { isTTY?: boolean }).isTTY;
+    }
     if (fd !== undefined) {
       closeSync(fd);
     }
@@ -214,19 +225,33 @@ it("initializes only storage, then adds default and named logins without overwri
 
 it("leaves no new login after missing or invalid credentials and refuses mixed targeting flags", async () => {
   expect((await run(["init"])).status).toBe(0);
-  expect((await run(["connect", "cal"])).stderr).toContain(
-    "interactive terminal",
-  );
-  expect((await run(["connect", "isracard"], credentials)).status).toBe(1);
-  for (const args of [
-    ["connect", "cal", "--connection", "cal"],
-    ["connect", "cal", "extra"],
-    ["connect", "--name", "cal"],
-    ["connect", "cal", "--name", "..", "--offline"],
-    ["connect", "cal", "--offline", "--credentials-fd", "3"],
-    ["init", "--provider", "cal"],
-  ]) {
-    expect((await run(args)).status).toBe(1);
+  expect(await run(["connect", "cal"])).toMatchObject({
+    status: 1,
+    stderr: expect.stringContaining("interactive terminal"),
+  });
+  expect(await run(["connect", "isracard"], credentials)).toMatchObject({
+    status: 1,
+    stderr: expect.stringContaining("cardSuffix"),
+  });
+  for (const [args, message] of [
+    [["connect", "cal", "--connection", "cal"], "Use connect <provider>"],
+    [["connect", "cal", "extra"], "Invalid arguments"],
+    [["connect", "--name", "cal"], "Use connect <provider>"],
+    [
+      ["connect", "cal", "--name", "..", "--offline"],
+      "Invalid connection name",
+    ],
+    [
+      ["connect", "cal", "--offline", "--credentials-fd", "3"],
+      "--offline cannot be combined with --credentials-fd",
+    ],
+    [["init", "--provider", "cal"], "Invalid arguments"],
+  ] as const) {
+    expect(await run([...args])).toMatchObject({
+      status: 1,
+      stdout: "",
+      stderr: expect.stringContaining(message),
+    });
   }
   expect(await connections()).toEqual([]);
   expect((await run(["connect", "cal", "--offline"])).status).toBe(0);
@@ -242,9 +267,12 @@ it("accepts the connection filter alias and exposes choices and global flags in 
     await json(["totals", "--connection-id", "cal"]),
   );
   expect(
-    (await run(["list", "--connection", "cal", "--connection-id", "cal"]))
-      .stderr,
-  ).toContain("not both");
+    await run(["list", "--connection", "cal", "--connection-id", "cal"]),
+  ).toMatchObject({
+    status: 1,
+    stdout: "",
+    stderr: expect.stringContaining("not both"),
+  });
   const help = await run(["help", "list"]);
   expect(help.status).toBe(0);
   expect(help.stdout).toContain("--status <posted|pending>");
@@ -260,7 +288,7 @@ it("does not regenerate lost state for an existing SQLite ledger", async () => {
   expect(existsSync(join(state, "fonds.env"))).toBe(false);
 });
 
-// Cold starts on a loaded runner need more time than the in-process behavior cases.
+// Allow four bounded 15s process starts plus storage verification on a loaded runner.
 it("persists a login across executable invocations using a private inherited descriptor", async () => {
   const initialized = executable(["init"]);
   expect(initialized.status, initialized.stderr).toBe(0);
@@ -281,4 +309,4 @@ it("persists a login across executable invocations using a private inherited des
   expect(duplicate.status).toBe(1);
   expect(duplicate.stderr).toContain("already exists");
   expect(await savedCredentials("cal")).toEqual(credentials);
-}, 30_000);
+}, 75_000);
