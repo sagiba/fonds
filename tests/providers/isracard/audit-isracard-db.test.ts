@@ -980,7 +980,7 @@ describe("value-free read-only Isracard archive profile", () => {
       applied: { applied: 3 },
       versions: {
         "collector|offline-v1": 3,
-        "parser|isracard-v14": 3,
+        "parser|isracard-v15": 3,
       },
     });
     expect(profile.archives[0].schema.unlistedTables).toBe(0);
