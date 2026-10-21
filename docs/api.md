@@ -304,7 +304,7 @@ for a client is:
 | `conflicting_payment_context`                                                                                                                                                                                                                                                                                                                                                              | A typed [payment-context](#payment-context) field is null.                                                                          |
 | `fx_unreconciled`, `conflicting_fx_comments`, `unverified_converted_installments`                                                                                                                                                                                                                                                                                                          | FX facts are withheld; see [foreign exchange](#foreign-exchange).                                                                   |
 | `conflicting_installment_total`, `conflicting_installment_facts`                                                                                                                                                                                                                                                                                                                           | The rows of one plan in one capture disagree on the total or a plan-level fact.                                                     |
-| `conflicting_installment_plan`                                                                                                                                                                                                                                                                                                                                                             | A later capture restates a purchase that has live billed lines as a non-plan; the plan's facts are kept.                            |
+| `conflicting_installment_plan`, `conflicting_installment_restatement`, `conflicting_installment_lines`                                                                                                                                                                                                                                                                                     | Plan facts disagree. Restatements await source resolution; line conflicts are reevaluated against live lines.                       |
 | `unresolved_purchase`                                                                                                                                                                                                                                                                                                                                                                      | A billed line's purchase cannot be resolved, so its `purchaseId` is null.                                                           |
 | `duplicate_installment_ordinal`                                                                                                                                                                                                                                                                                                                                                            | Another live billed line of the purchase states this ordinal; the amount is null until the owner removes one of them.               |
 | `invalid_installment_ordinal`, `unknown_installment_count`, `unverified_installment_amount_basis`, `invalid_installment_plan_voucher`                                                                                                                                                                                                                                                      | An installment ordinal, count, voucher or money role is missing, malformed, inconsistent or unproven; no plan or amount is guessed. |
@@ -419,20 +419,19 @@ purchase date and say nothing about billing dates.
 ## Perspectives
 
 `list_transactions` and `get_transaction_totals` take `perspective`. It selects
-which rows represent a plan, so that a purchase is counted once. Membership depends
-only on the row's own facts, never on whether child rows exist or on the other
-filters, which then apply within the perspective. The rule is `perspectiveRule` in
-[read-model.ts](../src/domain/read-model.ts).
+which rows represent a plan, so that a purchase is counted once. Membership never
+depends on the other filters, which then apply within the perspective. The rule is
+`perspectiveRule` in [read-model.ts](../src/domain/read-model.ts).
 
-| `perspective`        | Members                                                                                                                                       | Totals                                                |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| `spending` (default) | Every row with `purchaseId` null: purchases, single charges, standalone billed rows, fees and cancellations.                                  | Grouped by currency and `amountBasis`.                |
-| `billing`            | Every row except purchase rows with `installmentCount` of 2 or more and no `installmentNumber`. Those are counted through their billed lines. | One group per currency.                               |
-| `all`                | Every row.                                                                                                                                    | Rejected with `invalid_input`: it would double-count. |
+| `perspective`        | Members                                                                                                               | Totals                                                |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `spending` (default) | Every row with `purchaseId` null: purchases, single charges, standalone billed rows, fees and cancellations.          | Grouped by currency and `amountBasis`.                |
+| `billing`            | Every row except purchases with live billed lines or with `installmentCount` of 2 or more and no `installmentNumber`. | One group per currency.                               |
+| `all`                | Every row.                                                                                                            | Rejected with `invalid_input`: it would double-count. |
 
 Standalone rows appear in both `spending` and `billing` without double-counting,
-because no purchase row exists for them; a row whose `installmentCount` is null is
-never a plan purchase.
+because they have no purchase. Held lines stay unresolved; the purchase
+commitment is never substituted.
 
 Worked example, one currency: a −300.00 purchase in three installments of −100.00,
 with two billed lines observed so far, plus a −50.00 single charge (outflows are

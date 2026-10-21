@@ -5,6 +5,7 @@ import { presentWireEvent } from "../../src/application/wire-output.js";
 import { ConflictError } from "../../src/domain/errors.js";
 import type { TransactionInput } from "../../src/domain/model.js";
 import {
+  billedLinesByPurchase,
   inPerspective,
   PERSPECTIVES,
   type TransactionView,
@@ -171,7 +172,13 @@ describe.each(backends)("%s continuation and perspectives", (backend) => {
       });
       expect(page.transactions.map((item) => item.sourceKey).sort()).toEqual(
         every
-          .filter((item) => inPerspective(item, perspective))
+          .filter((item) =>
+            inPerspective(
+              item,
+              perspective,
+              billedLinesByPurchase(every).has(item.id),
+            ),
+          )
           .map((item) => item.sourceKey)
           .sort(),
       );

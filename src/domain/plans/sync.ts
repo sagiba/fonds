@@ -24,7 +24,11 @@ import {
   currentSourceRows,
   sortedEvidence,
 } from "../provider-evidence.js";
-import { inPerspective } from "../read-model.js";
+import {
+  billedLinesByPurchase,
+  inPerspective,
+  isLiveBilledLine,
+} from "../read-model.js";
 import {
   type CollectionFailure,
   type CollectionScope,
@@ -44,6 +48,14 @@ import {
 import { reviewState } from "./annotation.js";
 import { automaticPostingPairs, postingComponents } from "./auto-posting.js";
 import { purchaseResolver, resolveTransaction } from "./catalog.js";
+import {
+  awaitsRestatement,
+  DUPLICATE_ORDINAL,
+  INSTALLMENT_CONFLICT,
+  refreshInstallmentParents,
+  RESTATEMENT_CONFLICT,
+  withoutInstallmentFx,
+} from "./installments.js";
 import {
   planPosting,
   postingRejected,
@@ -172,7 +184,7 @@ export interface SyncResult {
 }
 
 /** Bump when shared reconciliation rules change, independently of archived parser versions. */
-export const RECONCILIATION_POLICY_VERSION = "auto-posting-v10";
+export const RECONCILIATION_POLICY_VERSION = "auto-posting-v11";
 
 export function reconciliationFailure(warnings: readonly string[]) {
   const failureCode = reconciliationFailureCodeSchema.options.find((code) =>
@@ -306,24 +318,6 @@ function withFinancialState(
   };
 }
 
-/**
- * Installment-derived rows (plan purchases and billed lines) carry no FX
- * facts, whatever an adapter or a restatement supplies.
- */
-function withoutInstallmentFx(row: TransactionFacts): TransactionFacts {
-  if (!isBilledLine(row) && inPerspective(row, "billing")) {
-    return row;
-  }
-  const { currencyExchange: _dropped, ...details } = row.details;
-  return { ...row, fxFeeMinor: null, fxFeeCurrency: null, details };
-}
-
-/**
- * A billed line held because another identity states its purchase's ordinal:
- * the two could bill one payment twice, so neither amount counts.
- */
-const DUPLICATE_ORDINAL = "duplicate_installment_ordinal";
-
 const POSTING_MATCH_ISSUE = "possible_pending_posted_match";
 
 const DAY_MILLISECONDS = 86_400_000;
@@ -368,10 +362,7 @@ function ordinalSlot(
     "purchaseId" | "installmentNumber" | "presence" | "supersededById"
   >,
 ): string | null {
-  return row.purchaseId !== null &&
-    row.installmentNumber !== null &&
-    row.presence !== "removed" &&
-    !row.supersededById
+  return isLiveBilledLine(row) && row.installmentNumber !== null
     ? JSON.stringify([row.purchaseId, row.installmentNumber])
     : null;
 }
@@ -1637,15 +1628,7 @@ export function planRun(
     const purchases = purchaseResolver(plan, current);
     // Purchases with live billed lines: a capture that restates one as
     // anything but a plan contradicts its lines.
-    const planParents = new Set(
-      current.flatMap((row) =>
-        row.purchaseId !== null &&
-        row.presence !== "removed" &&
-        !row.supersededById
-          ? [row.purchaseId]
-          : [],
-      ),
-    );
+    const planParents = new Set(billedLinesByPurchase(current).keys());
     // Each input keeps the purchase key it names, if it is a billed line.
     const prepared = result.transactions.map((input) => {
       const resolved = resolveTransaction(plan, input, now, newId);
@@ -2037,23 +2020,47 @@ export function planRun(
         ) {
           input.counterpartyName = previous.counterpartyName;
         }
-        // A capture that restates a purchase with live billed lines as
-        // anything but a plan contradicts them. The accepted facts keep the
-        // plan's own facts, so the purchase and its lines are never both
-        // counted, and flag the purchase until the source restates the plan
-        // or the owner removes the lines (absence alone never removes them).
-        // The observed input is left as captured.
+        // Missing plan metadata is not a single-payment assertion. Keep the
+        // known plan while accepting fresh purchase facts; explicit conflicts
+        // keep accepted money and remain reviewable until the source restates
+        // a plan or the owner removes the lines. Repeating accepted non-plan
+        // facts restates nothing new, though their lines can conflict with them.
+        const priorRestatement = awaitsRestatement(previous);
         const restated =
           planParents.has(previous.id) &&
           purchaseKey === null &&
-          inPerspective(input, "billing");
+          inPerspective(input, "billing", false) &&
+          (priorRestatement ||
+            !inPerspective(previous, "billing", false) ||
+            previous.installmentCount !== input.installmentCount ||
+            previous.installmentNumber !== input.installmentNumber ||
+            previous.kind !== input.kind ||
+            previous.amountBasis !== input.amountBasis);
+        const unknownPlan =
+          restated &&
+          input.installmentCount === null &&
+          input.kind === "purchase" &&
+          previous.kind === "purchase" &&
+          input.amountBasis === "purchase_commitment" &&
+          input.installmentNumber === null;
         const accepted = withoutInstallmentFx(
-          restated ? withFinancialState(input, previous) : input,
+          unknownPlan && !priorRestatement
+            ? {
+                ...input,
+                installmentCount: previous.installmentCount,
+                // A plan's billing date is its own; an unknown plan's is observed.
+                billingDate: inPerspective(previous, "billing", false)
+                  ? input.billingDate
+                  : previous.billingDate,
+              }
+            : restated
+              ? withFinancialState(input, previous)
+              : input,
         );
-        if (restated) {
+        if (restated && (!unknownPlan || priorRestatement)) {
           accepted.details.issues = withIssue(
-            accepted.details.issues,
-            "conflicting_installment_plan",
+            withIssue(accepted.details.issues, INSTALLMENT_CONFLICT),
+            RESTATEMENT_CONFLICT,
           );
         }
         retainEvidence(plan.transaction(id)!, accepted, adapter);
@@ -2190,6 +2197,8 @@ export function planRun(
       recentCutoff,
     );
   }
+  // Accepted rows of a failed partition still change lines, so every parent is reevaluated.
+  refreshInstallmentParents(plan);
   refreshDuplicatePlans(plan);
   const afterRows = plan.orderedRows();
   const reviewRequiredIds: string[] = [];

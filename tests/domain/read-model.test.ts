@@ -118,9 +118,15 @@ describe("perspectives", () => {
     ["billedLine", false, true],
     ["standaloneLine", true, true],
   ] as const)("places a %s row by its own facts", (role, spending, billing) => {
-    expect(inPerspective(roles[role], "spending")).toBe(spending);
-    expect(inPerspective(roles[role], "billing")).toBe(billing);
-    expect(inPerspective(roles[role], "all")).toBe(true);
+    expect(inPerspective(roles[role], "spending", false)).toBe(spending);
+    expect(inPerspective(roles[role], "billing", false)).toBe(billing);
+    expect(inPerspective(roles[role], "all", false)).toBe(true);
+  });
+
+  it("excludes a purchase with live billed lines even when its count is unknown", () => {
+    expect(inPerspective(roles.unknownCount, "billing", true)).toBe(false);
+    expect(inPerspective(roles.unknownCount, "spending", true)).toBe(true);
+    expect(inPerspective(roles.unknownCount, "all", true)).toBe(true);
   });
 
   const row: TotalRow = {

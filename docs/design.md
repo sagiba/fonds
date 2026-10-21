@@ -142,8 +142,9 @@ and leave values unknown rather than split a plan. A total is never computed by
 multiplying a payment and no schedule is generated. A purchase restated as a
 non-plan keeps the plan's facts, so a purchase and its lines are never both
 counted. The [API](api.md#purchases-and-billed-lines) owns the fields, issue codes
-and [perspectives](api.md#perspectives); perspective membership depends only on a
-row's own facts, so selection and paging stay in SQL without database views.
+and [perspectives](api.md#perspectives). Billed-line associations prevent
+double-counting even when purchase metadata is unknown; selection and paging
+stay in SQL without database views.
 
 ## Pending-to-posted matching
 
