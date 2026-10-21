@@ -55,24 +55,21 @@ count.
 
 ### Quick start (about 10 minutes)
 
-You need Git and Node.js 24.11 or newer. The demo uses invented data only; no
-provider account is needed.
+You need Node.js 24.11 or newer. The demo uses invented data only; no provider
+account is needed.
 
 ```sh
-git clone https://github.com/sagiba/fonds.git
-cd fonds
-npm ci && npm run build
-node dist/cli.js demo
+npm install --global fonds-finance
+fonds demo
 ```
 
 `demo` creates a separate private ledger of synthetic CAL transactions and prints
-what to run next, such as
-`node dist/cli.js totals --db <the demo database it printed>`. It also prints the
-exact Claude Code command, with absolute paths, and a Claude Desktop
-configuration snippet. The Claude Code command looks like this:
+what to run next, such as `fonds totals --db <the demo database it printed>`. It
+also prints the exact Claude Code command, with absolute paths, and a Claude
+Desktop configuration snippet. The Claude Code command looks like this:
 
 ```sh
-claude mcp add fonds-demo -- node /path/to/fonds/dist/server.js --transport stdio --db <the demo database>
+claude mcp add fonds-demo -- /path/to/bin/fonds serve --transport stdio --db <the demo database>
 ```
 
 Start Claude Code and ask, for example, "What are my totals by currency in
@@ -85,17 +82,17 @@ For the local CAL path, read [Your data stays yours](#your-data-stays-yours) and
 the [provider guide](docs/providers/cal.md) first. Then:
 
 ```sh
-node dist/cli.js init --connection my-cal --provider cal
-node dist/cli.js connect --connection my-cal
-node dist/cli.js refresh --connection my-cal
-claude mcp add fonds -- node "$PWD/dist/server.js" --transport stdio
+fonds init --connection my-cal --provider cal
+fonds connect --connection my-cal
+fonds refresh --connection my-cal
+claude mcp add fonds -- "$(command -v fonds)" serve --transport stdio
 ```
 
 Without `--db`, these use your private default ledger. `connect` asks for your
 login with hidden input and stores it encrypted, so later refreshes need no
 prompt; back up the [state directory](docs/database.md#state-directory-and-backup)
 holding its key together with the database. `refresh` reads the provider's recent
-window; the provider guide covers history. `node dist/cli.js --help` lists every
+window; the provider guide covers history. `fonds --help` lists every
 command; the [local guide](docs/guides/local-development.md) covers the data
 directory, HTTP and other clients.
 

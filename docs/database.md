@@ -312,9 +312,9 @@ in the data directory) and `STATE` its state directory:
    events, must read back:
 
    ```sh
-   node dist/cli.js list-connections --db "$DB"
-   node dist/cli.js list-transactions --db "$DB" --limit 5
-   node dist/cli.js list-events --db "$DB" --connection-id cal-main --limit 5
+   fonds list-connections --db "$DB"
+   fonds list-transactions --db "$DB" --limit 5
+   fonds list-events --db "$DB" --connection-id cal-main --limit 5
    ```
 
    Consumer cursors are as of the backup, so `consume` delivers any later events

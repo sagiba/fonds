@@ -37,16 +37,16 @@ one target from the table below:
 
 ```sh
 npm ci
-npm run build:targets -- postgres # or sqlite, turso, turso-web, d1-web
+npm run build:targets -- turso # or sqlite, postgres, turso-web, d1-web
 ```
 
 Each command builds only the named target under `dist/targets/<target>/`. With no
 target argument, the script builds all targets except the experimental `d1-web`.
-Deploy only the chosen target directory and install from its included manifest and
-lockfile:
+SQLite and PostgreSQL ship as the `fonds-finance` package and image. For an experimental
+target, install its directory's manifest and lockfile:
 
 ```sh
-cd dist/targets/postgres
+cd dist/targets/turso
 npm ci --omit=dev --omit=optional
 node server.js
 ```
@@ -72,7 +72,7 @@ not a verified hosting limit. The Neon Function is bundled by `neon deploy` from
 ## Configure the selected Node process
 
 The SQLite target keeps its launcher arguments and private-file checks
-(`node server.js --db /absolute/private/path/service.sqlite`); see the
+(`fonds serve --db /absolute/private/path/service.sqlite`); see the
 [local service guide](local-development.md) for synthetic initialization, token
 files and stdio. Runtime files stay outside the source tree and deployed
 application directory.

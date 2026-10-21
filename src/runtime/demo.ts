@@ -1,6 +1,13 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { relative, sep } from "node:path";
+import {
+  basename,
+  delimiter,
+  dirname,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -88,6 +95,18 @@ function shellWord(value: string): string {
     : `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
+/**
+ * The installed `fonds` command when this process runs through it, as an
+ * absolute path: an MCP host may start it without the shell's PATH.
+ */
+export function installedLauncher(
+  entry: string | undefined = process.argv[1],
+): string | undefined {
+  return entry && /^fonds(?:\.mjs)?$/.test(basename(entry))
+    ? resolve(entry)
+    : undefined;
+}
+
 /** The command a person types to run a sibling entry point from here. */
 function entryCommand(path: string): string {
   const shown = relative(process.cwd(), path);
@@ -101,6 +120,7 @@ export async function demoSummary(
   database: Database,
   databasePath: string,
   moduleUrl: string,
+  launcher: string | undefined = installedLauncher(),
 ): Promise<string> {
   const invoker = inProcessInvoker(createApplication(database));
   let count = 0;
@@ -122,17 +142,24 @@ export async function demoSummary(
   const server = fileURLToPath(
     new URL(source ? "../dist/server.js" : "./server.js", moduleUrl),
   );
-  const run = source
-    ? `npx tsx ${entryCommand(cli)}`
-    : `node ${entryCommand(cli)}`;
   const db = shellWord(databasePath);
+  const onPath =
+    launcher !== undefined &&
+    basename(launcher) === "fonds" &&
+    (process.env.PATH ?? "").split(delimiter).includes(dirname(launcher));
+  const run = launcher
+    ? onPath
+      ? "fonds"
+      : shellWord(launcher)
+    : source
+      ? `npx tsx ${entryCommand(cli)}`
+      : `node ${entryCommand(cli)}`;
+  // The installed command serves through `fonds serve`; a checkout or build
+  // runs its server entry point with Node.
+  const [command, ...serve] = launcher ? [launcher, "serve"] : ["node", server];
+  const mcpArgs = [...serve, "--transport", "stdio", "--db", databasePath];
   const desktop = JSON.stringify({
-    mcpServers: {
-      "fonds-demo": {
-        command: "node",
-        args: [server, "--transport", "stdio", "--db", databasePath],
-      },
-    },
+    mcpServers: { "fonds-demo": { command, args: mcpArgs } },
   });
   return [
     "Demo ledger ready: synthetic CAL data, not real transactions.",
@@ -151,7 +178,7 @@ export async function demoSummary(
     `  ${run} totals --db ${db}`,
     "",
     "Ask an agent. Claude Code:",
-    `  claude mcp add fonds-demo -- node ${shellWord(server)} --transport stdio --db ${db}`,
+    `  claude mcp add fonds-demo -- ${[command, ...mcpArgs].map(shellWord).join(" ")}`,
     "Claude Desktop (add to claude_desktop_config.json):",
     `  ${desktop}`,
     "",

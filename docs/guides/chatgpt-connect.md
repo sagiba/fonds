@@ -42,7 +42,7 @@ Use the connection ID `list_connections` returns. `refresh_connection` starts a
 progress with `financial:read`. After an interrupted request, read refreshes
 before retrying. Normal read tools never refresh. Only an
 [operator retry](hosted-service.md#refresh-and-scheduling)
-(`node server.js refresh`, or `neon:smoke --refresh` on Neon) that succeeds
+(`fonds refresh`, or `neon:smoke --refresh` on Neon) that succeeds
 clears an authentication block. [Scheduled refresh](hosted-service.md#scheduling) is
 off until the deployment sets `FONDS_REFRESH_SCHEDULE`; verify one scheduled
 run on each new deployment.
