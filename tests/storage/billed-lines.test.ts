@@ -340,17 +340,12 @@ describe.each(backends)("%s billed lines", (backend) => {
         reason: "Billed once",
       });
     }
-    expect((await db.getTransaction(purchase.id))!).toMatchObject({
-      installmentCount: 3,
-      version: 3,
-      reviewRequired: false,
-    });
     await capture(single, 3);
     const resolved = (await db.getTransaction(purchase.id))!;
     expect(resolved).toMatchObject({
       installmentCount: 1,
       billingDate: "2040-06-10",
-      version: 4,
+      version: 3,
     });
     expect(resolved.sourceIssues).not.toContain("conflicting_installment_plan");
     expect(await totals()).toEqual(once);

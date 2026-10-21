@@ -787,12 +787,54 @@ describe.each(backends)("%s installment repair", (backend) => {
     ).toContain("unresolved_purchase");
   });
 
-  it("clears a restatement conflict when the owner removes the purchase's last line", async () => {
+  it("keeps FX on a purchase that shares an alias with a linked purchase", async () => {
+    const input: TransactionInput[] = [
+      { ...purchase(), sourceAliases: ["shared"] },
+      {
+        ...row("other"),
+        sourceAliases: ["shared"],
+        fxFeeMinor: -100,
+        fxFeeCurrency: "ILS",
+      },
+      line(1, null),
+    ];
+    await capture(10, input);
+    await capture(11, input);
+    expect(
+      (await db.listTransactions({ perspective: "all" })).find(
+        (item) => item.sourceKey === "other",
+      ),
+    ).toMatchObject({ version: 1, fxFeeMinor: -100, fxFeeCurrency: "ILS" });
+  });
+
+  it("matches a weak linked purchase stored with FX before normalization", async () => {
+    const input: TransactionInput[] = [
+      {
+        ...purchase(),
+        identityStrength: "weak",
+        fxFeeMinor: -100,
+        fxFeeCurrency: "ILS",
+      },
+      line(1, null),
+    ];
+    await capture(10, input);
+    const stored = await parent();
+    await insertTransactionFixture(
+      db,
+      [{ ...stored, fxFeeMinor: -100, fxFeeCurrency: "ILS" }],
+      "update",
+    );
+    expect(await capture(11, input)).toMatchObject({ created: 0 });
+    expect(await parent()).toMatchObject({
+      id: stored.id,
+      fxFeeMinor: null,
+      fxFeeCurrency: null,
+    });
+  });
+
+  it("keeps a restatement flagged after the owner removes the lines until the next capture", async () => {
     await capture(10, [purchase(5), line(1)]);
     await capture(11, [purchase(1)]);
-    expect((await parent()).sourceIssues).toContain(
-      "conflicting_installment_restatement",
-    );
     const child = (await db.listTransactions({ perspective: "all" })).find(
       (item) => item.sourceKey === "line-1",
     )!;
@@ -801,7 +843,15 @@ describe.each(backends)("%s installment repair", (backend) => {
       expectedVersion: child.version,
       reason: "Synthetic plan lines removed",
     });
-    expect((await parent()).sourceIssues).toEqual([]);
+    expect(await parent()).toMatchObject({
+      installmentCount: 5,
+      reviewRequired: true,
+    });
+    await capture(12, [purchase(1)]);
+    expect(await parent()).toMatchObject({
+      installmentCount: 1,
+      sourceIssues: [],
+    });
   });
 
   it("refreshes only the purchases an owner operation touches", async () => {

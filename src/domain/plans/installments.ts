@@ -41,9 +41,9 @@ export function withoutInstallmentFx(
 }
 
 /**
- * A source restatement awaiting source resolution. A conflict stored before
- * provenance was recorded is one unless the capture it came from stated no
- * count, which a plan no longer treats as a contradiction.
+ * A source restatement awaiting source resolution. A plan conflict without a
+ * restatement or line code is one too, unless its capture stated no count,
+ * which never contradicts a plan.
  */
 export function awaitsRestatement(row: Pick<Transaction, "details">): boolean {
   const { issues } = row.details;
@@ -148,14 +148,14 @@ function refreshedFacts(row: TransactionFacts) {
     row.fxFeeMinor,
     row.fxFeeCurrency,
     row.details.currencyExchange ?? null,
-    row.details.issues,
+    sortedEvidence(row.details.issues),
   ]);
 }
 
 /**
  * Billed lines can fill unknown plan metadata without replacing newer purchase
  * money. Their explicit counts, not the number or sum of observed payments,
- * establish the plan size. This also repairs ledgers written by older policies.
+ * establish the plan size, including for purchases stored without them.
  * Only `parents`, when given, are refreshed. Returns each row it changed, as it
  * was before.
  */
@@ -164,8 +164,8 @@ export function refreshInstallmentParents(
   parents?: ReadonlySet<string>,
 ): Transaction[] {
   const children = billedLinesByPurchase(plan.rows.values());
-  // Removing the final line resolves a conflict without another observation
-  // of the purchase; keep that purchase in the repair set.
+  // Removing the final line resolves a line conflict without another
+  // observation of the purchase; keep that purchase in the repair set.
   for (const row of plan.rows.values()) {
     if (
       !children.has(row.id) &&
@@ -186,13 +186,8 @@ export function refreshInstallmentParents(
     ) {
       continue;
     }
-    // Without lines, nothing remains for a restatement to contradict.
     const next = withoutInstallmentFx(
-      withLineEvidence(
-        parent,
-        lines,
-        lines.length > 0 && awaitsRestatement(parent),
-      ),
+      withLineEvidence(parent, lines, awaitsRestatement(parent)),
       lines.length > 0,
     );
     if (refreshedFacts(next) !== refreshedFacts(parent)) {
