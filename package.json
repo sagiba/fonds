@@ -1,6 +1,6 @@
 {
   "name": "fonds",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.1",
   "description": "A personal financial evidence ledger: collects card transactions from supported card providers, retains transaction evidence, and serves it over HTTP and MCP.",
   "license": "Apache-2.0",
   "repository": {
