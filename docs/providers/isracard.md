@@ -13,15 +13,16 @@ on every sync run. The [synthetic fixtures](../../tests/providers/isracard/fixtu
 
 ## Setup
 
-Use an existing owner-only directory outside the repository for private data.
-These commands, with the [installed](../guides/local-development.md) `fonds`, are
-examples, not live-validation receipts:
+These commands use the [installed](../guides/local-development.md) `fonds` and
+the default ledger, alongside any CAL connections. Use a distinct connection ID
+for each login ([multiple logins](../guides/local-development.md#add-provider-logins)).
+They are examples, not live-validation receipts:
 
 ```sh
-fonds init --db /path/to/private/isracard.sqlite --connection isracard --provider isracard
-fonds connect --db /path/to/private/isracard.sqlite --connection isracard
-fonds refresh --db /path/to/private/isracard.sqlite --connection isracard
-fonds refresh --db /path/to/private/isracard.sqlite --connection isracard \
+fonds init --connection my-isracard --provider isracard
+fonds connect --connection my-isracard
+fonds refresh --connection my-isracard
+fonds refresh --connection my-isracard \
   --from 2026-09-01 --to 2026-09-30 --credentials-fd 3 3< /private/isracard.json
 ```
 

@@ -10,6 +10,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { buildTarget, root } from "../../scripts/build-targets.mjs";
@@ -18,14 +20,24 @@ const outsideRepository =
   "Database and backup files must be outside the repository.\n";
 
 /** A bundled cli.js in a temporary tree; packages resolve through a link. */
-async function bundle(directory) {
+async function bundle(directory, data) {
   const output = join(directory, "app");
+  mkdirSync(join(data, "owner's state"), { mode: 0o700 });
   await buildTarget("sqlite", { output });
   symlinkSync(join(root, "node_modules"), join(directory, "node_modules"));
   return (...args) =>
     spawnSync(process.execPath, [join(output, "cli.js"), ...args], {
       encoding: "utf8",
       timeout: 15_000,
+      env: {
+        ...Object.fromEntries(
+          Object.entries(process.env).filter(
+            ([key]) => !key.startsWith("FONDS_"),
+          ),
+        ),
+        FONDS_HOME: data,
+        FONDS_STATE_DIR: join(data, "owner's state"),
+      },
     });
 }
 
@@ -46,7 +58,7 @@ describe("bundled SQLite CLI", () => {
   it("protects the enclosing checkout from its bundled depth", async () => {
     mkdirSync(join(directory, ".git"));
     writeFileSync(join(directory, ".git/HEAD"), "ref: refs/heads/main\n");
-    const cli = await bundle(directory);
+    const cli = await bundle(directory, data);
     for (const args of [
       ["list", "--db", join(directory, "inside.sqlite")],
       [
@@ -66,7 +78,7 @@ describe("bundled SQLite CLI", () => {
   });
 
   it("protects only its own application directory when installed", async () => {
-    const cli = await bundle(directory);
+    const cli = await bundle(directory, data);
     expect(
       cli(
         "init",
@@ -95,5 +107,63 @@ describe("bundled SQLite CLI", () => {
       connectionId: "synthetic",
       provider: "cal",
     });
+  });
+
+  it("launches the emitted MCP configuration without the shell environment and sees every login", async () => {
+    const cli = await bundle(directory, data);
+    expect(cli("mcp-config")).toMatchObject({ status: 1, stdout: "" });
+    const demo = cli("demo");
+    expect(demo.status, demo.stderr).toBe(0);
+    const parseConfig = (output, name) =>
+      JSON.parse(
+        output
+          .split("\n")
+          .find((line) => line.trimStart().startsWith('{"mcpServers"')),
+      ).mcpServers[name];
+    const check = async (config, expected) => {
+      expect(config.command).toBe(process.execPath);
+      expect(config.env).toEqual({
+        FONDS_STATE_DIR: join(data, "owner's state"),
+      });
+      const client = new Client({ name: "setup-check", version: "1" });
+      try {
+        await client.connect(
+          new StdioClientTransport({
+            ...config,
+            cwd: data,
+            env: { PATH: "", ...config.env },
+            stderr: "pipe",
+          }),
+        );
+        const result = await client.callTool({
+          name: "list_connections",
+          arguments: {},
+        });
+        expect(
+          result.structuredContent.data.map(({ id, provider }) => ({
+            id,
+            provider,
+          })),
+        ).toEqual(expected);
+      } finally {
+        await client.close();
+      }
+    };
+    await check(parseConfig(demo.stdout, "fonds-demo"), [
+      { id: "demo", provider: "cal" },
+    ]);
+    const connections = [
+      { id: "cal-one", provider: "cal" },
+      { id: "cal-two", provider: "cal" },
+      { id: "isracard-one", provider: "isracard" },
+    ];
+    for (const { id, provider } of connections) {
+      expect(
+        cli("init", "--connection", id, "--provider", provider).status,
+      ).toBe(0);
+    }
+    const setup = cli("mcp-config");
+    expect(setup.status, setup.stderr).toBe(0);
+    await check(parseConfig(setup.stdout, "fonds"), connections);
   });
 });

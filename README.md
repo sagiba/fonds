@@ -45,8 +45,8 @@ count.
 
 ## Get started
 
-- **Claude Code or Claude Desktop with sample data:** the quick start below.
-- **ChatGPT:** a separate setup. Run a hosted instance with
+- **ChatGPT desktop, Claude Code or Claude Desktop with sample data:** the quick start below.
+- **ChatGPT web:** run a hosted instance with
   [Docker](docs/guides/docker.md) or [Neon](docs/guides/neon-deployment.md), then
   follow the [ChatGPT connection guide](docs/guides/chatgpt-connect.md).
 - **Containers:** the [local Docker image](docs/guides/docker.md#sqlite)
@@ -64,17 +64,13 @@ fonds demo
 ```
 
 `demo` creates a separate private ledger of synthetic CAL transactions and prints
-what to run next, such as `fonds totals --db <the demo database it printed>`. It
-also prints the exact Claude Code command, with absolute paths, and a Claude
-Desktop configuration snippet. The Claude Code command looks like this:
-
-```sh
-claude mcp add fonds-demo -- /path/to/bin/fonds serve --transport stdio --db <the demo database>
-```
-
-Start Claude Code and ask, for example, "What are my totals by currency in
-fonds-demo?" or "Which transactions are still pending?". The client starts Fonds
-and reads the ledger through MCP over stdio, so no HTTP server is needed.
+what to run next, including commands for Claude Code and ChatGPT desktop/Codex,
+and JSON for Claude Desktop. Follow your client's snippet, restart the client,
+and check its MCP connection status. Ask "What are my totals by currency in
+fonds-demo?". The client starts Fonds over stdio; no HTTP server is needed.
+The [local guide](docs/guides/local-development.md) covers source installation,
+client setup and troubleshooting. ChatGPT desktop uses the same local Codex host's
+MCP configuration; ChatGPT web has a separate hosted path.
 
 ### Use your own data
 
@@ -85,16 +81,18 @@ the [provider guide](docs/providers/cal.md) first. Then:
 fonds init --connection my-cal --provider cal
 fonds connect --connection my-cal
 fonds refresh --connection my-cal
-claude mcp add fonds -- "$(command -v fonds)" serve --transport stdio
+fonds mcp-config
 ```
 
 Without `--db`, these use your private default ledger. `connect` asks for your
 login with hidden input and stores it encrypted, so later refreshes need no
 prompt; back up the [state directory](docs/database.md#state-directory-and-backup)
-holding its key together with the database. `refresh` reads the provider's recent
-window; the provider guide covers history. `fonds --help` lists every
-command; the [local guide](docs/guides/local-development.md) covers the data
-directory, HTTP and other clients.
+holding its key together with the database. `mcp-config` prints the setup for
+your existing ledger; copy the snippet for your client. For another CAL login or
+Isracard, [add another named connection](docs/guides/local-development.md#add-provider-logins)
+to the same ledger. One MCP server exposes all its connections.
+`refresh` reads the provider's recent window; provider guides cover history.
+`fonds --help` lists commands.
 
 ## Your data stays yours
 
