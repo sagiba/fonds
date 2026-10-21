@@ -832,6 +832,38 @@ describe.each(backends)("%s installment repair", (backend) => {
     });
   });
 
+  it("keeps ambiguous purchases that differ only by FX matched to their own identities", async () => {
+    const ambiguous = (key: string, fxFeeMinor: number): TransactionInput => ({
+      ...purchase(),
+      sourceKey: key,
+      identityStrength: "ambiguous",
+      fxFeeMinor,
+      fxFeeCurrency: "ILS",
+      details: {
+        ...purchase().details,
+        provider: { cal: { identity: { baseKey: "shared" } } },
+      },
+    });
+    const input = [
+      ambiguous("b", -200),
+      ambiguous("a", -100),
+      { ...line(1, null), purchaseKey: "b" },
+    ];
+    await capture(10, input);
+    const ids = async () =>
+      Object.fromEntries(
+        (await db.listTransactions({ perspective: "all" })).map((item) => [
+          item.sourceKey,
+          [item.id, item.fxFeeMinor],
+        ]),
+      );
+    const before = await ids();
+    const events = await db.listEvents();
+    await capture(11, input);
+    expect(await ids()).toEqual(before);
+    expect(await db.listEvents()).toEqual(events);
+  });
+
   it("keeps a restatement flagged after the owner removes the lines until the next capture", async () => {
     await capture(10, [purchase(5), line(1)]);
     await capture(11, [purchase(1)]);

@@ -295,9 +295,9 @@ function identityFingerprint(
   return canonicalJson({ financial, source });
 }
 
-function groupSignature(
-  rows: TransactionFacts[],
-  fingerprint: (row: TransactionFacts) => string,
+function groupSignature<Row extends TransactionFacts>(
+  rows: Row[],
+  fingerprint: (row: Row) => string,
 ): string {
   return JSON.stringify(rows.map(fingerprint).sort());
 }
@@ -774,13 +774,28 @@ function indexAccountRows(
         [...oldGroup, ...newGroup].some(
           (row) => row.identityStrength === "ambiguous",
         );
-      // A linked purchase loses its FX only once matched, so a group holding
-      // one compares stored and incoming facts without FX.
-      const withoutFx = oldGroup.some((row) => linkedPurchases.has(row.id));
-      const fingerprint = (row: TransactionFacts) =>
-        identityFingerprint(row, includeSource, adapter, withoutFx);
+      // A linked purchase loses its FX only once matched, so it compares
+      // without FX, and so does an input whose source key only it owns.
+      const storedFingerprint = (row: Transaction) =>
+        identityFingerprint(
+          row,
+          includeSource,
+          adapter,
+          linkedPurchases.has(row.id),
+        );
+      const fingerprint = (row: TransactionFacts) => {
+        const bucket = sourceMatches.get(row.sourceKey);
+        const owners = [...(bucket?.active ?? []), ...(bucket?.inactive ?? [])];
+        return identityFingerprint(
+          row,
+          includeSource,
+          adapter,
+          owners.length > 0 &&
+            owners.every((owner) => linkedPurchases.has(owner.id)),
+        );
+      };
       const fingerprints = new Map(
-        [...Map.groupBy(uncertain ? oldGroup : [], fingerprint)].map(
+        [...Map.groupBy(uncertain ? oldGroup : [], storedFingerprint)].map(
           ([key, rows]) => [key, { rows, next: 0 }],
         ),
       );
@@ -809,7 +824,7 @@ function indexAccountRows(
             uncertain &&
             oldGroup.length > 0 &&
             (oldGroup.length !== newGroup.length ||
-              groupSignature(oldGroup, fingerprint) !==
+              groupSignature(oldGroup, storedFingerprint) !==
                 groupSignature(newGroup, fingerprint)),
           hasNewerCurrent: knownGroup.some(
             (row) => !history.historical(row) && row.lastSeenAt > capturedAt,
