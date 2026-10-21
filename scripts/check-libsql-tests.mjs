@@ -20,7 +20,7 @@ export const requiredGroups = [
   [
     "query-review.test.ts",
     "public review state and scalar totals: libsql-http",
-    24,
+    23,
   ],
   [
     "reconciliation-index.test.ts",

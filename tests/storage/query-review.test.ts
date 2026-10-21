@@ -760,69 +760,72 @@ for (const backend of backends) {
       },
     );
 
-    it("computes totals without decoding transaction or annotation JSON", async () => {
-      const row = await insert();
-      await db.editAnnotation({ transactionId: row.id, expectedVersion: 0 });
-      // Deliberately corrupt only this synthetic database: any JSON projection must fail.
-      const corruptions = [
-        {
-          sql: "UPDATE transactions SET provider_json = ?, source_aliases_json = ?",
-          args: ["invalid details JSON", "invalid aliases JSON"],
-        },
-        {
-          sql: "UPDATE annotations SET data_json = ?",
-          args: ["invalid annotation JSON"],
-        },
-      ];
-      if (db.driver.kind === "postgres") {
-        // PostgreSQL stores these JSON documents as text without json_valid checks.
-        for (const { sql, args } of corruptions) {
-          await db.raw(sql, args);
-        }
-      } else if (db.driver.kind === "libsql") {
-        // HTTP requests need one transaction stream to share the pragma setting.
-        const tx = await db.driver.client.transaction("write");
-        try {
-          await tx.execute("PRAGMA ignore_check_constraints = ON");
-          for (const statement of corruptions) {
-            await tx.execute(statement);
-          }
-          await tx.execute("PRAGMA ignore_check_constraints = OFF");
-          await tx.commit();
-        } finally {
-          tx.close();
-        }
-      } else {
-        const binding = db.driver.binding;
-        await binding.batch([
-          binding.prepare("PRAGMA ignore_check_constraints = ON"),
-          ...corruptions.map(({ sql, args }) =>
-            binding.prepare(sql).bind(...args),
-          ),
-          binding.prepare("PRAGMA ignore_check_constraints = OFF"),
-        ]);
-      }
-      await expect(db.getTransaction(row.id)).rejects.toThrow();
-      expect(await db.getTotals()).toEqual({
-        totals: [
+    // The libSQL HTTP server refuses PRAGMA, so it cannot store corrupt JSON;
+    // local libSQL runs the same statements.
+    if (backend !== "libsql-http") {
+      it("computes totals without decoding transaction or annotation JSON", async () => {
+        const row = await insert();
+        await db.editAnnotation({ transactionId: row.id, expectedVersion: 0 });
+        // Deliberately corrupt only this synthetic database: any JSON projection must fail.
+        const corruptions = [
           {
-            currency: "ILS",
-            amountBasis: "purchase_commitment",
-            amountMinor: -12345,
+            sql: "UPDATE transactions SET provider_json = ?, source_aliases_json = ?",
+            args: ["invalid details JSON", "invalid aliases JSON"],
           },
-        ],
-        fxFees: [],
-        fxFeeUnknownCount: 0,
-        includedCount: 1,
-        excludedCount: 0,
-        excluded: {
-          pending: 0,
-          authorization: 0,
-          transferOrIncome: 0,
-          retiredOrRemoved: 0,
-          unresolved: 0,
-        },
+          {
+            sql: "UPDATE annotations SET data_json = ?",
+            args: ["invalid annotation JSON"],
+          },
+        ];
+        if (db.driver.kind === "postgres") {
+          // PostgreSQL stores these JSON documents as text without json_valid checks.
+          for (const { sql, args } of corruptions) {
+            await db.raw(sql, args);
+          }
+        } else if (db.driver.kind === "libsql") {
+          const tx = await db.driver.client.transaction("write");
+          try {
+            await tx.execute("PRAGMA ignore_check_constraints = ON");
+            for (const statement of corruptions) {
+              await tx.execute(statement);
+            }
+            await tx.execute("PRAGMA ignore_check_constraints = OFF");
+            await tx.commit();
+          } finally {
+            tx.close();
+          }
+        } else {
+          const binding = db.driver.binding;
+          await binding.batch([
+            binding.prepare("PRAGMA ignore_check_constraints = ON"),
+            ...corruptions.map(({ sql, args }) =>
+              binding.prepare(sql).bind(...args),
+            ),
+            binding.prepare("PRAGMA ignore_check_constraints = OFF"),
+          ]);
+        }
+        await expect(db.getTransaction(row.id)).rejects.toThrow();
+        expect(await db.getTotals()).toEqual({
+          totals: [
+            {
+              currency: "ILS",
+              amountBasis: "purchase_commitment",
+              amountMinor: -12345,
+            },
+          ],
+          fxFees: [],
+          fxFeeUnknownCount: 0,
+          includedCount: 1,
+          excludedCount: 0,
+          excluded: {
+            pending: 0,
+            authorization: 0,
+            transferOrIncome: 0,
+            retiredOrRemoved: 0,
+            unresolved: 0,
+          },
+        });
       });
-    });
+    }
   });
 }
