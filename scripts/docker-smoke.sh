@@ -43,7 +43,9 @@ docker volume create "$project-sqlite" >/dev/null
 # No --db: FONDS_HOME=/data puts the default ledger in the volume, so a second
 # container finds it.
 docker run --rm -v "$project-sqlite:/data" fonds \
-  init --connection smoke --provider cal >/dev/null
+  init >/dev/null
+docker run --rm -v "$project-sqlite:/data" fonds \
+  connect cal --name smoke --offline >/dev/null
 # One request at a time: the server shuts down at end of input.
 coproc MCP { docker run -i --rm --name "$project-mcp" -v "$project-sqlite:/data" fonds \
   serve --transport stdio; }

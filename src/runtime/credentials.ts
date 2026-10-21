@@ -167,6 +167,7 @@ export async function loadCredentials(
     fd?: number;
     forbiddenDirectory?: string;
     input?: CredentialInput;
+    connection?: { id: string; provider: string };
   } = {},
 ): Promise<ProviderCredentials> {
   const input = options.input ?? usernamePasswordInput;
@@ -178,6 +179,11 @@ export async function loadCredentials(
     );
   }
   const values: ProviderCredentials = {};
+  if (options.connection && process.stdin.isTTY && process.stderr.isTTY) {
+    process.stderr.write(
+      `Credentials for ${JSON.stringify(options.connection.id)} (${JSON.stringify(options.connection.provider)}).\n`,
+    );
+  }
   for (const [name, label] of Object.entries(input.fields)) {
     values[name] = await hiddenField(label);
   }

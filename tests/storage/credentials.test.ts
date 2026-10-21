@@ -187,18 +187,14 @@ describe.skipIf(!postgresUrl)("PostgreSQL provider credentials", () => {
     mkdirSync(otherState, { mode: 0o700 });
     await resolveInstallation(otherState, { create: true });
     try {
-      expect(
-        await runPostgresCommand(
-          ["init", "--connection", "isracard-pg", "--provider", "isracard"],
-          env,
-        ),
-      ).toBe(0);
+      expect(await runPostgresCommand(["init"], env)).toBe(0);
       output.length = 0;
       expect(
         await runPostgresCommand(
           [
             "connect",
-            "--connection",
+            "isracard",
+            "--name",
             "isracard-pg",
             "--credentials-fd",
             String(fd),
@@ -244,7 +240,7 @@ describe.skipIf(!postgresUrl)("PostgreSQL provider credentials", () => {
       // Only the successful connect explains how scheduled collection starts.
       "Scheduled refresh runs only when the service sets FONDS_REFRESH_SCHEDULE=daily (or hourly, or hours such as 9,13,18).\n",
       "Could not read credentials: use a private current-owner file outside the repository through a descriptor of at least 3.\n",
-      "Connection not found; initialize it first.\n",
+      "Connection not found; add it with connect <provider> first.\n",
       "These secrets do not match the database's installation; restore the state directory (fonds.env) backed up with this database\n",
     ]);
     expect(

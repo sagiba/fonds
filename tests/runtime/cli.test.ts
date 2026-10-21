@@ -204,9 +204,16 @@ const scheduleNote =
 
 async function success<T>(...args: string[]): Promise<T> {
   const result = await run(...args);
-  expect(result.stderr).toBe(args[0] === "connect" ? scheduleNote : "");
+  expect(result.stderr).toBe(
+    args[0] === "connect" && !args.includes("--offline") ? scheduleNote : "",
+  );
   expect(result.status).toBe(0);
   return JSON.parse(result.stdout) as T;
+}
+
+async function seedConnection(db: string, id: string, provider: string) {
+  await success("init", "--db", db);
+  return success("connect", provider, "--name", id, "--offline", "--db", db);
 }
 
 /** Every row of every perspective, as list_transactions returns it. */
@@ -312,43 +319,36 @@ describe("offline CLI", () => {
 
   // Each spawned CLI may take seconds on a busy runner; spawnCli allows 15 s.
   it("runs as an executable with JSON stdout and a failing exit status", () => {
-    const created = spawnCli([
-      "init",
-      "--provider",
-      "cal",
-      "--db",
-      dbPath,
-      "--connection",
-      "synthetic-cli",
-    ]);
+    const created = spawnCli(["init", "--db", dbPath]);
     expect(created).toMatchObject({ status: 0, stderr: "" });
     expect(JSON.parse(created.stdout)).toEqual({
-      connectionId: "synthetic-cli",
-      provider: "cal",
+      initialized: true,
     });
     // Without --db, the isolated test FONDS_HOME has no default ledger yet.
     expect(spawnCli(["list"])).toMatchObject({ status: 1, stdout: "" });
     expect(spawnCli(["list"]).stderr).toMatch(
-      /^No Fonds database at .*fonds\.sqlite; create it with init, or try demo\.\n$/,
+      /^No Fonds database at .*fonds\.sqlite; run fonds init first, or try fonds demo\.\n$/,
     );
   }, 60_000);
 
-  it("requires an explicit provider before creating a database", async () => {
-    const result = await run("init", "--db", dbPath, "--connection", "primary");
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("--provider");
-    expect(existsSync(dbPath)).toBe(false);
+  it("initializes storage without adding a provider connection", async () => {
+    const result = await run("init", "--db", dbPath);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(existsSync(dbPath)).toBe(true);
+    expect(await success("list-connections", "--db", dbPath)).toMatchObject({
+      data: [],
+    });
   });
 
   it("rejects an unsupported provider before creating a connection", async () => {
     const result = await run(
-      "init",
-      "--provider",
+      "connect",
       "unsupported",
+      "--name",
+      "primary",
       "--db",
       dbPath,
-      "--connection",
-      "primary",
     );
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("No source adapter or live collector");
@@ -356,19 +356,10 @@ describe("offline CLI", () => {
   });
 
   it("ingests fixtures, keeps edits through replay/correction, queries, and backs up", async () => {
-    expect(
-      await success(
-        "init",
-        "--provider",
-        "cal",
-        "--db",
-        dbPath,
-        "--connection",
-        "synthetic-cli",
-      ),
-    ).toEqual({
+    expect(await seedConnection(dbPath, "synthetic-cli", "cal")).toEqual({
       connectionId: "synthetic-cli",
       provider: "cal",
+      credentials: "none",
     });
     const ingest = async (runId: string, filename: string) =>
       await success(
@@ -480,15 +471,7 @@ describe("offline CLI", () => {
   });
 
   it("filters seeded transactions by the --merchant-name card acceptor name", async () => {
-    await success(
-      "init",
-      "--provider",
-      "cal",
-      "--db",
-      dbPath,
-      "--connection",
-      "synthetic-cli",
-    );
+    await seedConnection(dbPath, "synthetic-cli", "cal");
     await ingest(dbPath, "merchant-filter-baseline", "recent-01.json");
     const list = (...args: string[]) =>
       success<Page<WireTransaction>>(
@@ -518,15 +501,7 @@ describe("offline CLI", () => {
   });
 
   it("keeps ingest --account as the private scope and filters list by --billing-account-id", async () => {
-    await success(
-      "init",
-      "--provider",
-      "cal",
-      "--db",
-      dbPath,
-      "--connection",
-      "synthetic-cli",
-    );
+    await seedConnection(dbPath, "synthetic-cli", "cal");
     await ingest(dbPath, "billing-account-baseline", "recent-01.json");
     const list = (...args: string[]) =>
       success<Page<WireTransaction>>(
@@ -744,7 +719,7 @@ describe("offline CLI", () => {
         "Example",
       ],
       ["update-annotation", "--transaction-id", "x", "--tags", "[unquoted]"],
-      ["init", "--connection", "synthetic-cli", "--note", "unsupported"],
+      ["init", "--note", "unsupported"],
       [
         "ingest",
         "--connection",
@@ -769,15 +744,7 @@ describe("offline CLI", () => {
   });
 
   it("keeps live collection private and unavailable to unsupported providers", async () => {
-    await success(
-      "init",
-      "--provider",
-      "cal",
-      "--db",
-      dbPath,
-      "--connection",
-      "synthetic-cli",
-    );
+    await seedConnection(dbPath, "synthetic-cli", "cal");
     expect(statSync(dbPath).mode & 0o077).toBe(0);
     // refresh is always live, so --live is not one of its options.
     const liveFlag = await run(
@@ -869,15 +836,7 @@ describe("offline CLI", () => {
   });
 
   it("rejects CAL-only history controls for Isracard before prompting for credentials", async () => {
-    await success(
-      "init",
-      "--db",
-      dbPath,
-      "--connection",
-      "isracard-cli",
-      "--provider",
-      "isracard",
-    );
+    await seedConnection(dbPath, "isracard-cli", "isracard");
     for (const options of [
       ["--history-mode", "monthly"],
       ["--search-window-months", "3"],
@@ -901,24 +860,8 @@ describe("offline CLI", () => {
   });
 
   it("validates Isracard operator budgets and passes detail opt-in to the collector", async () => {
-    await success(
-      "init",
-      "--provider",
-      "cal",
-      "--db",
-      dbPath,
-      "--connection",
-      "synthetic-cli",
-    );
-    await success(
-      "init",
-      "--db",
-      dbPath,
-      "--connection",
-      "isracard-cli",
-      "--provider",
-      "isracard",
-    );
+    await seedConnection(dbPath, "synthetic-cli", "cal");
+    await seedConnection(dbPath, "isracard-cli", "isracard");
     for (const [connection, flag, value, message] of [
       ["isracard-cli", "--call-budget", "101", "at most 100"],
       ["isracard-cli", "--call-budget", "0", "at least 1"],
@@ -983,15 +926,7 @@ describe("offline CLI", () => {
   });
 
   it("requires an Isracard suffix through the private credential channel before collection", async () => {
-    await success(
-      "init",
-      "--db",
-      dbPath,
-      "--connection",
-      "isracard-cli",
-      "--provider",
-      "isracard",
-    );
+    await seedConnection(dbPath, "isracard-cli", "isracard");
     const credentialPath = join(directory, "invented-credentials.json");
     writeFileSync(
       credentialPath,
@@ -1022,15 +957,7 @@ describe("offline CLI", () => {
   });
 
   it("selects the Isracard adapter for offline ingest and same-run replay", async () => {
-    await success(
-      "init",
-      "--db",
-      dbPath,
-      "--connection",
-      "isracard-cli",
-      "--provider",
-      "isracard",
-    );
+    await seedConnection(dbPath, "isracard-cli", "isracard");
     const args = [
       "ingest",
       "--db",
@@ -1087,15 +1014,7 @@ describe("offline CLI", () => {
   });
 
   it("rejects an Isracard account mismatch before retaining source evidence", async () => {
-    await success(
-      "init",
-      "--db",
-      dbPath,
-      "--connection",
-      "isracard-cli",
-      "--provider",
-      "isracard",
-    );
+    await seedConnection(dbPath, "isracard-cli", "isracard");
     const result = await run(
       "ingest",
       "--db",
@@ -1126,15 +1045,7 @@ describe("offline CLI", () => {
   });
 
   it("derives offline Isracard history scope and preserves newer current facts", async () => {
-    await success(
-      "init",
-      "--db",
-      dbPath,
-      "--connection",
-      "isracard-cli",
-      "--provider",
-      "isracard",
-    );
+    await seedConnection(dbPath, "isracard-cli", "isracard");
     const original = JSON.parse(
       readFileSync(
         join(
@@ -1221,15 +1132,7 @@ describe("offline CLI", () => {
     "dispatches Isracard collection with private suffix and bounded summaries (partial=%s)",
     async (partial) => {
       collectorState.partial = partial;
-      await success(
-        "init",
-        "--db",
-        dbPath,
-        "--connection",
-        "isracard-cli",
-        "--provider",
-        "isracard",
-      );
+      await seedConnection(dbPath, "isracard-cli", "isracard");
       const credentialPath = join(directory, "invented-credentials.json");
       writeFileSync(
         credentialPath,
@@ -1301,15 +1204,7 @@ describe("offline CLI", () => {
     "reports collection counts with a distinct partial exit code (partial=%s)",
     async (partial) => {
       collectorState.partial = partial;
-      await success(
-        "init",
-        "--provider",
-        "cal",
-        "--db",
-        dbPath,
-        "--connection",
-        "synthetic-cli",
-      );
+      await seedConnection(dbPath, "synthetic-cli", "cal");
       const credentialPath = join(directory, "invented-credentials.json");
       writeFileSync(
         credentialPath,
@@ -1368,15 +1263,7 @@ describe("offline CLI", () => {
   );
 
   it("accepts the inherited descriptor channel and sanitizes malformed secret input", async () => {
-    await success(
-      "init",
-      "--provider",
-      "cal",
-      "--db",
-      dbPath,
-      "--connection",
-      "synthetic-cli",
-    );
+    await seedConnection(dbPath, "synthetic-cli", "cal");
     const credentialPath = join(
       directory,
       "invented-malformed-credentials.json",
@@ -1415,15 +1302,7 @@ describe("offline CLI", () => {
   ])(
     "forwards explicit history mode/window while preserving the default (%s)",
     async ({ mode, months }) => {
-      await success(
-        "init",
-        "--provider",
-        "cal",
-        "--db",
-        dbPath,
-        "--connection",
-        "synthetic-cli",
-      );
+      await seedConnection(dbPath, "synthetic-cli", "cal");
       const credentialPath = join(directory, "invented-credentials.txt");
       writeFileSync(credentialPath, "invented-user:invented-password", {
         mode: 0o600,
@@ -1470,15 +1349,7 @@ describe("offline CLI", () => {
   );
 
   it("confirms posting under the pending ID, preserves annotations, and records removal evidence", async () => {
-    await success(
-      "init",
-      "--provider",
-      "cal",
-      "--db",
-      dbPath,
-      "--connection",
-      "synthetic-cli",
-    );
+    await seedConnection(dbPath, "synthetic-cli", "cal");
     await ingest(dbPath, "synthetic-run-1", "recent-01.json");
     const pendingId = await idForSource(
       dbPath,
@@ -1568,25 +1439,9 @@ describe("offline CLI", () => {
   });
 
   it("delivers scoped JSON lines to stdout once across CLI invocations", async () => {
-    await success(
-      "init",
-      "--provider",
-      "cal",
-      "--db",
-      dbPath,
-      "--connection",
-      "synthetic-cli",
-    );
+    await seedConnection(dbPath, "synthetic-cli", "cal");
     await ingest(dbPath, "synthetic-run-1", "recent-01.json");
-    await success(
-      "init",
-      "--provider",
-      "cal",
-      "--db",
-      dbPath,
-      "--connection",
-      "other-connection",
-    );
+    await seedConnection(dbPath, "other-connection", "cal");
     await ingest(dbPath, "other-run", "recent-01.json", "other-connection");
     const changes = await storedEvents(dbPath, "synthetic-cli");
     const otherChanges = await storedEvents(dbPath, "other-connection");
@@ -1658,15 +1513,7 @@ describe("offline CLI", () => {
       join(repositoryRoot, "runtime.sqlite"),
       join(indirectRoot, "runtime.sqlite"),
     ]) {
-      const result = await run(
-        "init",
-        "--provider",
-        "cal",
-        "--db",
-        path,
-        "--connection",
-        "synthetic-cli",
-      );
+      const result = await run("init", "--db", path);
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("outside the repository");
       expect(existsSync(path)).toBe(false);
@@ -1725,15 +1572,7 @@ describe("stored provider credentials", () => {
   }
 
   async function init(connection: string, provider: string) {
-    await success(
-      "init",
-      "--db",
-      dbPath,
-      "--connection",
-      connection,
-      "--provider",
-      provider,
-    );
+    await seedConnection(dbPath, connection, provider);
   }
 
   it("stores CAL credentials encrypted under the state's key and collects with them", async () => {
@@ -1948,17 +1787,7 @@ describe("stored provider credentials", () => {
     expect(existsSync(join(replacement, "fonds.env"))).toBe(false);
     // A replaced one, with other secrets, is refused by the database.
     expect(
-      (
-        await run(
-          "init",
-          "--db",
-          join(directory, "other.sqlite"),
-          "--connection",
-          "other",
-          "--provider",
-          "cal",
-        )
-      ).status,
+      (await run("init", "--db", join(directory, "other.sqlite"))).status,
     ).toBe(0);
     expect(
       await run("refresh", "--db", dbPath, "--connection", "cal-cli"),
@@ -1996,7 +1825,10 @@ describe("stored provider credentials", () => {
     expect(
       await success("disconnect", "--db", dbPath, "--connection", "cal-cli"),
     ).toMatchObject({ credentials: "none" });
-    expect(await success("refresh", "--db", dbPath)).toMatchObject({
+    const empty = await run("refresh", "--db", dbPath);
+    expect(empty.status).toBe(0);
+    expect(empty.stderr).toContain("No connections have saved credentials");
+    expect(JSON.parse(empty.stdout)).toMatchObject({
       status: "completed",
       captures: 0,
     });
@@ -2020,7 +1852,7 @@ describe("stored provider credentials", () => {
       await run("connect", "--db", dbPath, "--connection", "missing"),
     ).toMatchObject({
       status: 1,
-      stderr: "Connection not found; initialize it first.\n",
+      stderr: "Connection not found; add it with connect <provider> first.\n",
     });
     expect(
       await run("connect", "--db", dbPath, "--connection", "cal-cli"),
@@ -2083,16 +1915,7 @@ describe("state directory and installation", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
-  const init = (connection = "state-cal") =>
-    run(
-      "init",
-      "--db",
-      dbPath,
-      "--connection",
-      connection,
-      "--provider",
-      "cal",
-    );
+  const init = () => run("init", "--db", dbPath);
 
   async function recorded(path = dbPath) {
     const database = await openDatabase(path);
@@ -2116,7 +1939,7 @@ describe("state directory and installation", () => {
       ownerId: /FONDS_OWNER_ID=(\S+)/.exec(state)![1],
       credentialsKeyId: parseCredentialsKey(key).id,
     });
-    expect(await init("second")).toMatchObject({ status: 0, stderr: "" });
+    expect(await init()).toMatchObject({ status: 0, stderr: "" });
     expect(await run("list-connections", "--db", dbPath)).toMatchObject({
       status: 0,
       stderr: "",
@@ -2125,22 +1948,11 @@ describe("state directory and installation", () => {
   });
 
   it("starts concurrently from two processes with one state", async () => {
-    const start = (connection: string) =>
+    const start = () =>
       new Promise<number | null>((resolveExit) => {
         const child = spawn(
           process.execPath,
-          [
-            "--import",
-            "tsx",
-            cliPath,
-            "init",
-            "--db",
-            dbPath,
-            "--connection",
-            connection,
-            "--provider",
-            "cal",
-          ],
+          ["--import", "tsx", cliPath, "init", "--db", dbPath],
           {
             cwd: repositoryRoot,
             env: { ...process.env, FONDS_STATE_DIR: stateDir },
@@ -2149,9 +1961,7 @@ describe("state directory and installation", () => {
         );
         child.once("exit", resolveExit);
       });
-    expect(await Promise.all([start("first"), start("second")])).toEqual([
-      0, 0,
-    ]);
+    expect(await Promise.all([start(), start()])).toEqual([0, 0]);
     const key = /FONDS_CREDENTIALS_KEY=(\S+)/.exec(
       readFileSync(join(stateDir, "fonds.env"), "utf8"),
     )![1]!;
@@ -2160,7 +1970,7 @@ describe("state directory and installation", () => {
     );
     expect(
       JSON.parse((await run("list-connections", "--db", dbPath)).stdout).data,
-    ).toHaveLength(2);
+    ).toHaveLength(0);
   }, 30_000);
 
   it("refuses a database with another installation's state", async () => {
@@ -2169,17 +1979,7 @@ describe("state directory and installation", () => {
     mkdirSync(other, { mode: 0o700 });
     vi.stubEnv("FONDS_STATE_DIR", other);
     const otherDb = join(directory, "other.sqlite");
-    expect(
-      await run(
-        "init",
-        "--db",
-        otherDb,
-        "--connection",
-        "other",
-        "--provider",
-        "cal",
-      ),
-    ).toMatchObject({ status: 0 });
+    expect(await run("init", "--db", otherDb)).toMatchObject({ status: 0 });
     const mismatch = {
       status: 1,
       stdout: "",
@@ -2187,7 +1987,7 @@ describe("state directory and installation", () => {
         "These secrets do not match the database's installation; restore the state directory (fonds.env) backed up with this database\n",
     };
     expect(await run("list-connections", "--db", dbPath)).toEqual(mismatch);
-    expect(await init("more")).toEqual(mismatch);
+    expect(await init()).toEqual(mismatch);
     vi.stubEnv("FONDS_STATE_DIR", stateDir);
     expect(await run("list-connections", "--db", otherDb)).toEqual(mismatch);
     expect(await run("list-connections", "--db", dbPath)).toMatchObject({
@@ -2196,16 +1996,13 @@ describe("state directory and installation", () => {
   });
 
   it("refuses an existing database that was never bound", async () => {
-    expect((await init("elsewhere")).status).toBe(0);
+    expect((await init()).status).toBe(0);
     rmSync(dbPath);
     const unbound = await openDatabase(dbPath);
     await unbound.ensureConnection({ id: "unbound", provider: "cal" });
     await unbound.close();
     chmodSync(dbPath, 0o600);
-    for (const args of [
-      ["list-connections"],
-      ["init", "--connection", "x", "--provider", "cal"],
-    ]) {
+    for (const args of [["list-connections"], ["init"]]) {
       expect(await run(...args, "--db", dbPath)).toEqual({
         status: 1,
         stdout: "",
@@ -2217,6 +2014,15 @@ describe("state directory and installation", () => {
 
   it("restores a backup together with its state directory", async () => {
     expect(await init()).toMatchObject({ status: 0 });
+    await success(
+      "connect",
+      "cal",
+      "--name",
+      "state-cal",
+      "--offline",
+      "--db",
+      dbPath,
+    );
     const backupPath = join(directory, "backup.sqlite");
     expect(
       JSON.parse(

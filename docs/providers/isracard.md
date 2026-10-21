@@ -19,10 +19,10 @@ for each login ([multiple logins](../guides/local-setup.md#add-provider-logins))
 They are examples, not live-validation receipts:
 
 ```sh
-fonds init --connection my-isracard --provider isracard
-fonds connect --connection my-isracard
-fonds refresh --connection my-isracard
-fonds refresh --connection my-isracard \
+fonds init
+fonds connect isracard
+fonds refresh --connection isracard
+fonds refresh --connection isracard \
   --from 2026-09-01 --to 2026-09-30 --credentials-fd 3 3< /private/isracard.json
 ```
 
@@ -132,7 +132,7 @@ another login, as do three consecutive financial failures and an exhausted
 budget (`budget_exhausted`). Failed and unattempted months stay incomplete, a
 later success elsewhere does not clear them, and there is no automatic resume,
 completion acknowledgement or detail cache. Resolve a challenge or password
-change on Isracard's own site, run `connect` again if the credentials changed,
+change on Isracard's own site, run `connect --connection ID` if the credentials changed,
 wait out a rate limit, then rerun the refresh or the reported history range.
 
 Unsupported approval shapes leave pending coverage incomplete; inspect the run's

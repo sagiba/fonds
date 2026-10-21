@@ -80,32 +80,15 @@ describe("bundled SQLite CLI", () => {
   it("protects only its own application directory when installed", async () => {
     const cli = await bundle(directory, data);
     expect(
-      cli(
-        "init",
-        "--db",
-        join(directory, "app", "service.sqlite"),
-        "--connection",
-        "synthetic",
-        "--provider",
-        "cal",
-      ),
+      cli("init", "--db", join(directory, "app", "service.sqlite")),
     ).toMatchObject({ status: 1, stderr: outsideRepository });
     // A sibling of the installed application, inside its parent, stays usable.
     const sibling = join(directory, "data");
     mkdirSync(sibling, { mode: 0o700 });
-    const created = cli(
-      "init",
-      "--db",
-      join(sibling, "service.sqlite"),
-      "--connection",
-      "synthetic",
-      "--provider",
-      "cal",
-    );
+    const created = cli("init", "--db", join(sibling, "service.sqlite"));
     expect(created).toMatchObject({ status: 0, stderr: "" });
     expect(JSON.parse(created.stdout)).toEqual({
-      connectionId: "synthetic",
-      provider: "cal",
+      initialized: true,
     });
   });
 
@@ -157,10 +140,11 @@ describe("bundled SQLite CLI", () => {
       { id: "cal-two", provider: "cal" },
       { id: "isracard-one", provider: "isracard" },
     ];
+    expect(cli("init").status).toBe(0);
     for (const { id, provider } of connections) {
-      expect(
-        cli("init", "--connection", id, "--provider", provider).status,
-      ).toBe(0);
+      expect(cli("connect", provider, "--name", id, "--offline").status).toBe(
+        0,
+      );
     }
     const setup = cli("mcp-config");
     expect(setup.status, setup.stderr).toBe(0);

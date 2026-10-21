@@ -141,11 +141,14 @@ export interface InternalStore
   ): Promise<void>;
   /** Unpaged rows for internal callers; every perspective unless one is named. */
   listTransactions(input?: TransactionFilters): Promise<TransactionView[]>;
-  ensureConnection(input: {
-    id: string;
-    provider: string;
-    displayName?: string;
-  }): Promise<Connection>;
+  ensureConnection(
+    input: {
+      id: string;
+      provider: string;
+      displayName?: string;
+    },
+    options?: { requireNew?: boolean },
+  ): Promise<Connection>;
   getStoredConnection(id: string): Promise<Connection | undefined>;
   ingestRun(
     input: RunInput,

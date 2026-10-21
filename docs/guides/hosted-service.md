@@ -105,11 +105,10 @@ stops are in the [security model](../security-model.md#revocation).
 
 ## Adding providers
 
-Create a connection, then store its credentials encrypted with hidden input:
+After the service initializes storage, add a login with hidden credential input:
 
 ```sh
-fonds init --connection cal-main --provider cal
-fonds connect --connection cal-main
+fonds connect cal --name cal-main
 ```
 
 `connect` prompts for the provider's fields (see the [provider guides](../README.md#providers)),

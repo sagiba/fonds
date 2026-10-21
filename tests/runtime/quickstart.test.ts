@@ -101,14 +101,7 @@ describe("default database path", () => {
     try {
       mkdirSync(home, { mode: 0o700 });
       symlinkSync(target, join(home, "fonds.sqlite"));
-      const result = cli(
-        home,
-        "init",
-        "--connection",
-        "my-cal",
-        "--provider",
-        "cal",
-      );
+      const result = cli(home, "init");
       expect(result.status).toBe(1);
       expect(result.stderr).toMatch(/must not be symlinks/);
       expect(existsSync(target)).toBe(false);
@@ -302,10 +295,11 @@ describe("quickstart", () => {
       // Own data: the default ledger, no --db anywhere.
       const missing = cli(home, "list-connections");
       expect(missing.stderr).toMatch(/No Fonds database at .*fonds\.sqlite/);
-      expect(
-        cli(home, "init", "--connection", "my-cal", "--provider", "cal").status,
-      ).toBe(0);
+      expect(cli(home, "init").status).toBe(0);
       expect(statSync(join(home, "fonds.sqlite")).mode & 0o777).toBe(0o600);
+      expect(
+        cli(home, "connect", "cal", "--name", "my-cal", "--offline").status,
+      ).toBe(0);
       expect(
         JSON.parse(cli(home, "list-connections").stdout).data,
       ).toMatchObject([{ id: "my-cal" }]);

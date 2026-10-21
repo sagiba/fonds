@@ -104,8 +104,9 @@ describe.skipIf(!postgresUrl)("PostgreSQL operator CLI", () => {
     mkdirSync(stateDir, { mode: 0o700 });
     await resolveInstallation(stateDir, { create: true });
     env = { FONDS_DATABASE_URL: url.href, FONDS_STATE_DIR: stateDir };
+    expect(await command("init")).toMatchObject({ status: 0 });
     expect(
-      await command("init", "--connection", "cal-pg", "--provider", "cal"),
+      await command("connect", "cal", "--name", "cal-pg", "--offline"),
     ).toMatchObject({ status: 0 });
     const path = join(directory, "invented.json");
     writeFileSync(
@@ -215,7 +216,7 @@ describe.skipIf(!postgresUrl)("PostgreSQL operator CLI", () => {
     env = { ...original, FONDS_STATE_DIR: otherState };
     for (const args of [
       ["list-connections"],
-      ["init", "--connection", "other", "--provider", "cal"],
+      ["init"],
       ["refresh", "--connection", "cal-pg"],
     ]) {
       expect(await command(...args)).toEqual({
@@ -248,9 +249,7 @@ describe.skipIf(!postgresUrl)("PostgreSQL operator CLI", () => {
       // An existing schema is never bound again, even with no rows left.
       await pool.query("DELETE FROM operations.provider_credentials");
       await pool.query("DELETE FROM financial.connections");
-      expect(
-        await command("init", "--connection", "again", "--provider", "cal"),
-      ).toEqual({
+      expect(await command("init")).toEqual({
         status: 1,
         stdout: "",
         stderr:
@@ -264,15 +263,8 @@ describe.skipIf(!postgresUrl)("PostgreSQL operator CLI", () => {
 
   it("collects every connection with stored credentials without --connection", async () => {
     expect(
-      (
-        await command(
-          "init",
-          "--connection",
-          "no-credentials",
-          "--provider",
-          "cal",
-        )
-      ).status,
+      (await command("connect", "cal", "--name", "no-credentials", "--offline"))
+        .status,
     ).toBe(0);
     const all = await command("refresh");
     expect(all.status).toBe(0);

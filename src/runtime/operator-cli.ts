@@ -30,6 +30,7 @@ import type {
 } from "./collection-routes.js";
 import { collectionTargets } from "./collection-service.js";
 import {
+  addConnection,
   connectCredentials,
   ConnectError,
   disconnectCredentials,
@@ -43,6 +44,7 @@ import { loadCredentials } from "./credentials.js";
 import { jsonOutput } from "./json-output.js";
 import {
   CommandInputError,
+  globalHelp,
   operationForCommand,
   operationUsage,
   remoteInvoker,
@@ -131,6 +133,7 @@ interface CommandContext {
   backend: OperatorBackend;
   values: Values;
   globals: Globals;
+  positionals: string[];
 }
 
 interface OperatorCommand {
@@ -307,44 +310,63 @@ const optionalCommand = (
 export const operatorCommands: readonly OperatorCommand[] = [
   {
     name: "init",
-    synopsis: `--connection <id> --provider <${supportedProviders.join("|")}>`,
+    synopsis: "",
     description:
-      "Create the database if needed and add one provider login as a named connection. Repeat with a different ID for another login, including the same provider. Repeating an existing ID/provider changes nothing.",
-    options: { connection: { type: "string" }, provider: { type: "string" } },
+      "Initialize the ledger and its private state without adding provider logins. Safe to repeat. Next, use connect <provider>.",
+    options: {},
     async run(context) {
-      const id = required(context.values, "connection");
-      const provider = required(context.values, "provider");
-      runtimeProvider(provider);
       await withSession(
         context,
         { create: true, credentials: false },
-        (session) => session.store.ensureConnection({ id, provider }),
+        async () => {},
       );
-      print({ connectionId: id, provider });
+      print({ initialized: true });
       return EXIT_CODES.ok;
     },
   },
   {
     name: "connect",
     synopsis:
-      "--connection <existing connection id> [--credentials-fd <number>]",
+      `<${supportedProviders.join("|")}> [--name <id>] [--offline] [--credentials-fd <number>]\n` +
+      `${SYNOPSIS_CONTINUATION}--connection <existing id> [--credentials-fd <number>]`,
     description:
-      "Store the connection's provider credentials encrypted in the database, from hidden terminal input or an open fd. The key is the state's FONDS_CREDENTIALS_KEY. Values are never printed.",
+      "Add a provider login to an initialized ledger; --name defaults to the provider. Prompts privately and saves credentials encrypted without testing the login. Use --offline to register an import-only connection without credentials. Existing names are refused; --connection explicitly updates credentials for an existing login. Run init first.",
     options: {
+      name: { type: "string" },
+      offline: { type: "boolean" },
       connection: { type: "string" },
       "credentials-fd": { type: "string" },
     },
     async run(context) {
-      const connectionId = required(context.values, "connection");
+      const provider = context.positionals[0];
+      const existing = optionalNonEmpty(context.values, "connection");
+      const name = optionalNonEmpty(context.values, "name");
+      const offline = context.values.offline === true;
+      if (
+        (provider && existing !== undefined) ||
+        (!provider && existing === undefined) ||
+        (existing !== undefined && (name !== undefined || offline))
+      ) {
+        throw new CommandInputError(
+          "Use connect <provider> [--name <id>] to add a login, or connect --connection <id> to update one.",
+        );
+      }
+      if (offline && context.values["credentials-fd"] !== undefined) {
+        throw new CommandInputError(
+          "--offline cannot be combined with --credentials-fd.",
+        );
+      }
+      if (provider) {
+        runtimeProvider(provider);
+      }
       const { credentialFd } = collectionControls({
         "credentials-fd": text(context.values, "credentials-fd"),
       });
       const stored = await withSession(
         context,
-        { create: false, credentials: true },
+        { create: false, credentials: !offline },
         async (session) => {
-          const result = await connectCredentials({
-            connectionId,
+          const options = {
             connections: session.store,
             openVault: () =>
               createCredentialVault(
@@ -355,13 +377,25 @@ export const operatorCommands: readonly OperatorCommand[] = [
             ...(context.backend.forbiddenDirectory && {
               forbiddenDirectory: context.backend.forbiddenDirectory,
             }),
-          });
-          session.verify?.();
+          };
+          const result = provider
+            ? await addConnection({
+                ...options,
+                connectionId: name ?? provider,
+                provider,
+                offline,
+              })
+            : await connectCredentials({ ...options, connectionId: existing! });
+          if (!offline) {
+            session.verify?.();
+          }
           return result;
         },
       );
       // The schedule may live where this command cannot see it (Neon's env file).
-      process.stderr.write(SCHEDULE_NOTE);
+      if (!offline) {
+        process.stderr.write(SCHEDULE_NOTE);
+      }
       print(stored);
       return EXIT_CODES.ok;
     },
@@ -478,6 +512,11 @@ export const operatorCommands: readonly OperatorCommand[] = [
           }
           // Discovered once: connections that could not be discovered fail the run.
           const discovery = await targets();
+          if (!discovery.targets.length && !discovery.failures) {
+            process.stderr.write(
+              "No connections have saved credentials; run fonds connect <provider> first.\n",
+            );
+          }
           const results = await runOperatorRefresh({
             store: session.store,
             targets: async () => discovery,
@@ -585,12 +624,12 @@ export const operatorCommands: readonly OperatorCommand[] = [
       }
       const result = await withSession(
         context,
-        { create: true, credentials: false },
+        { create: false, credentials: false },
         async (session) => {
           const connection = await session.store.getConnection(connectionId);
           if (!connection) {
             throw new CommandInputError(
-              "Connection not found; initialize it first.",
+              "Connection not found; add it with connect <provider> --offline first.",
             );
           }
           const provider = runtimeProvider(connection.provider);
@@ -670,7 +709,9 @@ async function connectionTarget(
 ): Promise<CollectionTarget> {
   const connection = await session.store.getConnection(connectionId);
   if (!connection) {
-    throw new ConnectError("Connection not found; initialize it first.");
+    throw new ConnectError(
+      "Connection not found; add it with connect <provider> first.",
+    );
   }
   const provider = runtimeProvider(connection.provider);
   provider.validateCollectionOptions(input.options);
@@ -690,6 +731,7 @@ async function connectionTarget(
       forbiddenDirectory: context.backend.forbiddenDirectory,
     }),
     input: provider.credentials,
+    connection,
   });
   const loaded = credentials;
   return {
@@ -735,8 +777,8 @@ this backend.
 `;
 }
 
-function commandHelp(command: OperatorCommand) {
-  return `${commandUsage(command).trimStart()}\n${command.description}\n`;
+function commandHelp(command: OperatorCommand, backend: OperatorBackend) {
+  return `${commandUsage(command).trimStart()}\n${command.description}\n${globalHelp(backend.globalOptions)}`;
 }
 
 /** The commands and their flags, as the parity test compares them. */
@@ -773,10 +815,18 @@ function parseValues(
   args: string[],
   options: Readonly<Record<string, { type: "string" | "boolean" }>>,
   command: string,
-): Values {
+): { values: Values; positionals: string[] } {
   try {
-    return parseArgs({ args, strict: true, allowPositionals: false, options })
-      .values;
+    const result = parseArgs({
+      args,
+      strict: true,
+      allowPositionals: command === "connect",
+      options,
+    });
+    if (result.positionals.length > 1) {
+      throw new Error();
+    }
+    return result;
   } catch {
     throw new CommandInputError(
       `Invalid arguments. Use ${command} --help for its flags.`,
@@ -852,6 +902,9 @@ export async function runOperatorCli(
   argv: string[],
 ): Promise<number> {
   const [name, ...args] = argv;
+  if (name === "help" && args.length === 1) {
+    return runOperatorCli(backend, [args[0]!, "--help"]);
+  }
   if (name === "--help" || name === "help") {
     process.stdout.write(operatorUsage(backend));
     return EXIT_CODES.ok;
@@ -878,7 +931,7 @@ export async function runOperatorCli(
         "Operator commands use a local database only; --remote runs operation commands.",
       );
     }
-    const values = parseValues(
+    const { values, positionals } = parseValues(
       args,
       {
         ...command.options,
@@ -888,7 +941,7 @@ export async function runOperatorCli(
       command.name,
     );
     if (values.help) {
-      process.stdout.write(commandHelp(command));
+      process.stdout.write(commandHelp(command, backend));
       return EXIT_CODES.ok;
     }
     const reason = backend.unavailable[command.name as OptionalCommand];
@@ -900,6 +953,7 @@ export async function runOperatorCli(
       backend,
       values,
       globals: globalsOf(backend, values),
+      positionals,
     });
   } catch (error) {
     process.stderr.write(`${errorMessage(error, backend)}\n`);
