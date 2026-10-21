@@ -65,7 +65,7 @@
   "devDependencies": {
     "@babel/core": "8.0.7",
     "@babel/eslint-parser": "8.0.7",
-    "@cloudflare/workers-types": "5.20261016.1",
+    "@cloudflare/workers-types": "5.20261018.1",
     "@modelcontextprotocol/client": "2.3.1",
     "@neon/config": "1.9.2",
     "@neon/functions": "0.11.0",
