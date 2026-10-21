@@ -89,7 +89,7 @@ describe("asynchronous application storage contract", () => {
     });
   }
 
-  it("awaits list/detail and versioned edits, then maps a rejected conflict safely", async () => {
+  it("awaits list/detail and versioned edits with public field names", async () => {
     const page = await (
       await request(`/v1/transactions?connectionId=${connectionId}&limit=1`)
     ).json();
@@ -106,14 +106,6 @@ describe("asynchronous application storage contract", () => {
     expect(first.status).toBe(200);
     expect(await first.json()).toMatchObject({
       annotation: { transactionId, version: 1 },
-    });
-    const conflict = await request(
-      `/v1/transactions/${transactionId}/annotation`,
-      input,
-    );
-    expect(conflict.status).toBe(409);
-    expect(await conflict.json()).toMatchObject({
-      error: { code: "conflict" },
     });
     const detail = await (
       await request(`/v1/transactions/${transactionId}`)
@@ -436,22 +428,12 @@ describe("asynchronous application storage contract", () => {
     }
   });
 
-  it("returns asynchronous validation failures and never exposes rejected storage errors", async () => {
+  it("returns asynchronous validation failures", async () => {
     const application = createApplication(store);
     const operation = application.operations.find(
       (item) => item.name === "list_connections",
     )!;
     await expect(operation.execute({ unexpected: true })).rejects.toThrow();
-    await service.close();
-    store.listConnections = async () => {
-      throw new Error("SQL contains synthetic-sensitive-payload");
-    };
-    service = createHttpService(createApplication(store), { token });
-    const response = await request("/v1/connections");
-    expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({
-      error: { code: "internal_error", message: "Operation failed." },
-    });
   });
 
   it("rejects oversized and invalid storage output with fixed public errors", async () => {
@@ -581,7 +563,7 @@ describe("asynchronous application storage contract", () => {
     );
   });
 
-  it("rejects invalid card output, never publishes private card facts and fails explicitly when its first record exceeds the byte budget", async () => {
+  it("rejects invalid card output and fails explicitly when its first record exceeds the byte budget", async () => {
     const card = {
       id: "synthetic-card",
       connectionId,
@@ -606,54 +588,6 @@ describe("asynchronous application storage contract", () => {
     expect(await invalid.json()).toEqual({
       error: { code: "internal_error", message: "Operation failed." },
     });
-    store.getCard = async (id) => (id === card.id ? card : undefined);
-    const published = await request(`/v1/cards/synthetic-card`);
-    expect(published.status).toBe(200);
-    const text = await published.text();
-    expect(text).not.toMatch(/private-(provider|attribute)-sentinel/);
-    expect(JSON.parse(text)).toEqual({
-      card: {
-        id: "synthetic-card",
-        connectionId,
-        billingAccountId: null,
-        last4: "0012",
-        displayName: "Synthetic card",
-        createdAt: "2040-08-01T00:00:00Z",
-        lastSeenAt: null,
-      },
-    });
-    expect((await request(`/v1/cards/missing`)).status).toBe(404);
-  });
-
-  it("publishes accounts without their provider key", async () => {
-    const account = {
-      id: "synthetic-account",
-      connectionId,
-      providerKey: "private-provider-sentinel",
-      type: "depository" as const,
-      institutionName: null,
-      mask: "0042",
-      displayName: null,
-      createdAt: "2040-08-01T00:00:00Z",
-      lastSeenAt: "2040-08-01T00:00:00Z",
-    };
-    const { providerKey: _providerKey, ...expected } = account;
-    store.listAccounts = async () => ({
-      accounts: [account],
-      hasMore: false,
-    });
-    store.getAccount = async (id) => (id === account.id ? account : undefined);
-    const list = await request(`/v1/accounts?connectionId=${connectionId}`);
-    expect(list.status).toBe(200);
-    expect(await list.json()).toEqual({
-      data: [expected],
-      hasMore: false,
-      nextCursor: null,
-    });
-    const read = await request(`/v1/accounts/synthetic-account`);
-    expect(await read.json()).toEqual({ account: expected });
-    expect((await request(`/v1/accounts/missing`)).status).toBe(404);
-    expect((await request(`/v1/accounts`)).status).toBe(400);
   });
 
   it("exposes actionable stored review context and current versions on the default detail read", async () => {

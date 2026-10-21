@@ -637,46 +637,81 @@ describe("refresh service", () => {
     expect(JSON.stringify(report.report())).not.toContain("private-");
   });
 
-  it.each([
-    { code: "authentication_failed", attention: true },
-    { code: "authentication_challenge", attention: true },
-    { code: "rate_limited", attention: false },
-    { code: "budget_exhausted", attention: false },
-  ] as const)(
-    "finishes a recovered $code stop before constructing a collector",
-    async ({ code, attention }) => {
-      await db.client.execute(
-        "CREATE TRIGGER stage_provider_stop BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT, 'synthetic-stage-provider-stop'); END",
+  it.each(
+    (
+      [
+        { code: "authentication_failed", attention: true },
+        { code: "authentication_challenge", attention: true },
+        { code: "rate_limited", attention: false },
+        { code: "budget_exhausted", attention: false },
+      ] as const
+    ).flatMap(({ code, attention }) => [
+      { state: "staged", code, attention },
+      { state: "persisted", code, attention },
+    ]),
+  )(
+    "finishes a $state $code stop without restarting collection",
+    async ({ state, code, attention }) => {
+      const persisted = state === "persisted";
+      if (persisted) {
+        await abandoned(new Date().toISOString(), {
+          windows: [
+            { from: "2040-02-01", to: "2040-02-29", status: "completed" },
+            { from: "2040-01-01", to: "2040-01-31", status: "running" },
+          ],
+        });
+      }
+      if (!persisted) {
+        await db.client.execute(
+          "CREATE TRIGGER stage_provider_stop BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT, 'synthetic-stage-provider-stop'); END",
+        );
+      }
+      const ingestion = db.ingestRun(
+        {
+          runId: crypto.randomUUID(),
+          connectionId,
+          ...(persisted && { refreshId: "abandoned" }),
+          responses: [],
+          failures: [{ accountKey: null, endpoint: "collection", code }],
+        },
+        synthetic,
       );
-      await expect(
-        db.ingestRun(
-          {
-            runId: crypto.randomUUID(),
-            connectionId,
-            responses: [],
-            failures: [{ accountKey: null, endpoint: "collection", code }],
-          },
-          synthetic,
-        ),
-      ).rejects.toThrow();
-      await db.client.execute("DROP TRIGGER stage_provider_stop");
+      if (persisted) {
+        await ingestion;
+      } else {
+        await expect(ingestion).rejects.toThrow();
+        await db.client.execute("DROP TRIGGER stage_provider_stop");
+      }
       const collect = vi.fn(async function* () {
         yield capture("must-not-request-after-provider-stop");
       });
       const collector = vi.fn(async () => source(collect));
       const refreshes = service(collector);
-      const [result] = await refreshes.wait([
-        await refreshes.start(connectionId, {
-          trigger: "manual",
-          operator: true,
-        }),
-      ]);
-      expect(result!.refresh).toMatchObject({
-        status: "failed",
-        providerStopReason: code,
-        requiresAttention: attention,
-        counts: { failures: 1, captures: 0, created: 0, observed: 0 },
-      });
+      if (persisted) {
+        await refreshes.resumeStalled();
+        await refreshes.settled();
+        expect(await db.getRefresh("abandoned")).toMatchObject({
+          status: "partial",
+          providerStopReason: code,
+          requiresAttention: attention,
+          finishedAt: expect.any(String),
+          windows: [{ status: "completed" }, { status: "failed" }],
+          counts: { failures: 1 },
+        });
+      } else {
+        const [result] = await refreshes.wait([
+          await refreshes.start(connectionId, {
+            trigger: "manual",
+            operator: true,
+          }),
+        ]);
+        expect(result!.refresh).toMatchObject({
+          status: "failed",
+          providerStopReason: code,
+          requiresAttention: attention,
+          counts: { failures: 1, captures: 0, created: 0, observed: 0 },
+        });
+      }
       expect(collector).not.toHaveBeenCalled();
       expect(collect).not.toHaveBeenCalled();
       expect(
@@ -686,18 +721,30 @@ describe("refresh service", () => {
   );
 
   it.each([
-    { empty: false, stagedStop: false },
-    { empty: true, stagedStop: false },
-    { empty: false, stagedStop: true },
-    { empty: true, stagedStop: true },
-  ])(
-    "preserves recent acceptance across a stopped execution crash (empty=$empty, stagedStop=$stagedStop)",
-    async ({ empty, stagedStop }) => {
-      await abandoned(new Date().toISOString(), { range: null, windows: [] });
-      const accepted = capture("recent-accepted-before-stop") as Extract<
-        CollectionEvent,
-        { type: "capture" }
-      >;
+    ["recent", false, false],
+    ["recent", true, false],
+    ["recent", false, true],
+    ["recent", true, true],
+    ["window", false, false],
+    ["window", true, false],
+    ["window", false, true],
+    ["window", true, true],
+  ] as const)(
+    "preserves %s acceptance across a stopped crash (empty=%s, stagedStop=%s)",
+    async (scope, empty, stagedStop) => {
+      const requestedRange =
+        scope === "window" ? { from: "2040-01-01", to: "2040-01-31" } : null;
+      await abandoned(new Date().toISOString(), {
+        range: requestedRange,
+        windows: requestedRange
+          ? [{ ...requestedRange, status: "running" }]
+          : [],
+      });
+      const accepted = capture(
+        scope === "recent"
+          ? "recent-accepted-before-stop"
+          : "accepted-before-stop",
+      ) as Extract<CollectionEvent, { type: "capture" }>;
       if (empty) {
         accepted.capture.responseText = "[]";
       }
@@ -710,9 +757,12 @@ describe("refresh service", () => {
         },
         synthetic,
       );
-      expect((await db.getRefresh("abandoned"))!.hasAcceptedEvidence).toBe(
-        true,
-      );
+      const ingested = (await db.getRefresh("abandoned"))!;
+      expect(
+        scope === "recent"
+          ? ingested.hasAcceptedEvidence
+          : ingested.windows[0]!.hasAcceptedEvidence,
+      ).toBe(true);
       const stopped: CollectionEvent = {
         type: "failure",
         failure: {
@@ -745,8 +795,11 @@ describe("refresh service", () => {
       const resumedRefresh = (await db.getRefresh("abandoned"))!;
       expect(resumedRefresh).toMatchObject({
         status: "partial",
-        hasAcceptedEvidence: true,
-        windows: [],
+        ...(scope === "recent" ? { hasAcceptedEvidence: true } : {}),
+        windows:
+          scope === "recent"
+            ? []
+            : [{ status: "partial", hasAcceptedEvidence: true }],
         counts: {
           captures: 1,
           created: empty ? 0 : 1,
@@ -765,20 +818,39 @@ describe("refresh service", () => {
         await uninterrupted.start(connectionId, {
           trigger: "manual",
           operator: true,
+          ...(requestedRange && { range: requestedRange }),
         }),
       ]);
       expect(resumedRefresh.status).toBe(normal!.refresh!.status);
+      if (scope === "window") {
+        expect(resumedRefresh.windows[0]!.status).toBe(
+          normal!.refresh!.windows[0]!.status,
+        );
+      }
     },
   );
 
-  it.each([false, true])(
-    "keeps earlier recent acceptance when a resumed attempt only fails (empty=%s)",
-    async (empty) => {
-      await abandoned(new Date().toISOString(), { range: null, windows: [] });
-      const accepted = capture("recent-accepted-before-retry") as Extract<
-        CollectionEvent,
-        { type: "capture" }
-      >;
+  it.each([
+    ["recent", false],
+    ["recent", true],
+    ["window", false],
+    ["window", true],
+  ] as const)(
+    "keeps earlier %s acceptance when a resumed attempt only fails (empty=%s)",
+    async (scope, empty) => {
+      const requestedRange =
+        scope === "window" ? { from: "2040-01-01", to: "2040-01-31" } : null;
+      await abandoned(new Date().toISOString(), {
+        range: requestedRange,
+        windows: requestedRange
+          ? [{ ...requestedRange, status: "running" }]
+          : [],
+      });
+      const accepted = capture(
+        scope === "recent"
+          ? "recent-accepted-before-retry"
+          : "accepted-before-retry",
+      ) as Extract<CollectionEvent, { type: "capture" }>;
       if (empty) {
         accepted.capture.responseText = "[]";
       }
@@ -808,7 +880,9 @@ describe("refresh service", () => {
       await resumed.settled();
       expect(await db.getRefresh("abandoned")).toMatchObject({
         status: "partial",
-        hasAcceptedEvidence: true,
+        ...(scope === "recent"
+          ? { hasAcceptedEvidence: true }
+          : { windows: [{ status: "partial", hasAcceptedEvidence: true }] }),
         counts: {
           captures: 1,
           created: empty ? 0 : 1,
@@ -866,194 +940,6 @@ describe("refresh service", () => {
     });
     expect(collector).not.toHaveBeenCalled();
   });
-
-  it.each([
-    { empty: false, stagedStop: false },
-    { empty: true, stagedStop: false },
-    { empty: false, stagedStop: true },
-    { empty: true, stagedStop: true },
-  ])(
-    "preserves partial window acceptance across a stopped checkpoint crash (empty=$empty, stagedStop=$stagedStop)",
-    async ({ empty, stagedStop }) => {
-      const requestedRange = { from: "2040-01-01", to: "2040-01-31" };
-      await abandoned(new Date().toISOString(), {
-        range: requestedRange,
-        windows: [{ ...requestedRange, status: "running" }],
-      });
-      const accepted = capture("accepted-before-stop") as Extract<
-        CollectionEvent,
-        { type: "capture" }
-      >;
-      if (empty) {
-        accepted.capture.responseText = "[]";
-      }
-      await db.ingestRun(
-        {
-          runId: crypto.randomUUID(),
-          connectionId,
-          refreshId: "abandoned",
-          responses: [accepted.capture],
-        },
-        synthetic,
-      );
-      expect(
-        (await db.getRefresh("abandoned"))!.windows[0]!.hasAcceptedEvidence,
-      ).toBe(true);
-      const stopped: CollectionEvent = {
-        type: "failure",
-        failure: {
-          accountKey: null,
-          endpoint: "collection",
-          code: "rate_limited",
-        },
-        fatal: true,
-      };
-      const stopInput = {
-        runId: crypto.randomUUID(),
-        connectionId,
-        refreshId: "abandoned",
-        responses: [],
-        failures: [stopped.failure],
-      };
-      if (stagedStop) {
-        await db.client.execute(
-          "CREATE TRIGGER stage_window_stop BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT, 'synthetic-stage-window-stop'); END",
-        );
-        await expect(db.ingestRun(stopInput, synthetic)).rejects.toThrow();
-        await db.client.execute("DROP TRIGGER stage_window_stop");
-      } else {
-        await db.ingestRun(stopInput, synthetic);
-      }
-      const collector = vi.fn(async () => source(async function* () {}));
-      const resumed = service(collector);
-      await resumed.resumeStalled();
-      await resumed.settled();
-      const resumedRefresh = (await db.getRefresh("abandoned"))!;
-      expect(resumedRefresh).toMatchObject({
-        status: "partial",
-        windows: [{ status: "partial", hasAcceptedEvidence: true }],
-        counts: {
-          captures: 1,
-          created: empty ? 0 : 1,
-          observed: empty ? 0 : 1,
-          failures: 1,
-        },
-      });
-      expect(collector).not.toHaveBeenCalled();
-      const uninterrupted = service(async () =>
-        source(async function* () {
-          yield accepted;
-          yield stopped;
-        }),
-      );
-      const [normal] = await uninterrupted.wait([
-        await uninterrupted.start(connectionId, {
-          trigger: "manual",
-          operator: true,
-          range: requestedRange,
-        }),
-      ]);
-      expect(resumedRefresh.status).toBe(normal!.refresh!.status);
-      expect(resumedRefresh.windows[0]!.status).toBe(
-        normal!.refresh!.windows[0]!.status,
-      );
-    },
-  );
-
-  it.each([false, true])(
-    "keeps earlier accepted evidence when the resumed window attempt only fails (empty=%s)",
-    async (empty) => {
-      const requestedRange = { from: "2040-01-01", to: "2040-01-31" };
-      await abandoned(new Date().toISOString(), {
-        range: requestedRange,
-        windows: [{ ...requestedRange, status: "running" }],
-      });
-      const accepted = capture("accepted-before-retry") as Extract<
-        CollectionEvent,
-        { type: "capture" }
-      >;
-      if (empty) {
-        accepted.capture.responseText = "[]";
-      }
-      await db.ingestRun(
-        {
-          runId: crypto.randomUUID(),
-          connectionId,
-          refreshId: "abandoned",
-          responses: [accepted.capture],
-        },
-        synthetic,
-      );
-      const resumed = service(async () =>
-        source(async function* () {
-          yield {
-            type: "failure",
-            failure: {
-              accountKey: null,
-              endpoint: "collection",
-              code: "network_error",
-            },
-            fatal: false,
-          };
-        }),
-      );
-      await resumed.resumeStalled();
-      await resumed.settled();
-      expect(await db.getRefresh("abandoned")).toMatchObject({
-        status: "partial",
-        windows: [{ status: "partial", hasAcceptedEvidence: true }],
-        counts: {
-          captures: 1,
-          created: empty ? 0 : 1,
-          observed: empty ? 0 : 1,
-          failures: 1,
-        },
-      });
-    },
-  );
-
-  it.each([
-    { code: "authentication_failed", attention: true },
-    { code: "authentication_challenge", attention: true },
-    { code: "rate_limited", attention: false },
-    { code: "budget_exhausted", attention: false },
-  ] as const)(
-    "resumes a persisted $code stop without restarting the provider or leaving a running month",
-    async ({ code, attention }) => {
-      await abandoned(new Date().toISOString(), {
-        windows: [
-          { from: "2040-02-01", to: "2040-02-29", status: "completed" },
-          { from: "2040-01-01", to: "2040-01-31", status: "running" },
-        ],
-      });
-      await db.ingestRun(
-        {
-          runId: crypto.randomUUID(),
-          connectionId,
-          refreshId: "abandoned",
-          responses: [],
-          failures: [{ accountKey: null, endpoint: "collection", code }],
-        },
-        synthetic,
-      );
-      const collector = vi.fn(async () => source(async function* () {}));
-      const refreshes = service(collector);
-      await refreshes.resumeStalled();
-      await refreshes.settled();
-      expect(await db.getRefresh("abandoned")).toMatchObject({
-        status: "partial",
-        providerStopReason: code,
-        requiresAttention: attention,
-        finishedAt: expect.any(String),
-        windows: [{ status: "completed" }, { status: "failed" }],
-        counts: { failures: 1 },
-      });
-      expect(collector).not.toHaveBeenCalled();
-      expect(
-        (await refreshes.start(connectionId, { trigger: "manual" })).reason,
-      ).toBe(attention ? "requires_attention" : "cooldown");
-    },
-  );
 
   it("blocks deterministic extraction failures during recovery and reports their phase without retrying automatically", async () => {
     await db.client.execute(
@@ -1207,14 +1093,18 @@ describe("refresh service", () => {
       operator: true,
     });
     await ready;
-    const started = performance.now();
-    expect(await owner.start(connectionId)).toMatchObject({
-      reason: "busy",
-      refresh: { id: operator.refresh!.id },
-    });
-    expect(performance.now() - started).toBeLessThan(1_000);
-    release();
-    await refreshes.settled();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      // The busy response must resolve while the operator is gated and no timer advances.
+      expect(await owner.start(connectionId)).toMatchObject({
+        reason: "busy",
+        refresh: { id: operator.refresh!.id },
+      });
+    } finally {
+      vi.useRealTimers();
+      release();
+      await refreshes.settled();
+    }
   });
 
   it("leaves an operator's run unstarted, and another process's refresh alone, while one is active", async () => {
@@ -1562,7 +1452,11 @@ describe("refresh service", () => {
       status: "failed",
       finishedAt: expect.any(String),
     });
-    expect(writes.at(-1)).toBe(checkpoint);
+    expect(writes.at(-1)).toMatchObject({
+      window: { status: "failed" },
+      status: "failed",
+      finishedAt: expect.any(String),
+    });
 
     await db.client.execute("DELETE FROM refresh_windows");
     await db.client.execute("DELETE FROM refreshes");

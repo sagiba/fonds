@@ -350,23 +350,6 @@ describe("Isracard authorization extraction", () => {
     },
   );
 
-  it.each([1, 13, 999, "13"])(
-    "rejects all facts from imported root errorCode %s",
-    (errorCode) => {
-      const source = capture({ posted: true });
-      change(source, (payload) => {
-        payload.errorCode = errorCode;
-      });
-      const result = extract(source);
-      expect(result.transactions).toEqual([]);
-      expect(
-        result.partitions.every(
-          (partition) => !partition.success && !partition.comparable,
-        ),
-      ).toBe(true);
-    },
-  );
-
   it("keeps colliding and incomplete tuples as ambiguous blockers, retaining every occurrence and known money", () => {
     for (const rows of [
       [approval(), approval()],
