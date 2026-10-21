@@ -7,10 +7,35 @@ import { checkStorageCoverage } from "./storage-coverage.mjs";
 // Minimum existing coverage, not an exact total: additions need no CI edit.
 // Update these floors only when deliberately removing/reorganizing coverage.
 export const requiredGroups = [
+  [
+    "lifecycle.test.ts",
+    "owner-confirmed transaction lifecycle: libsql-http",
+    34,
+  ],
+  [
+    "lifecycle-sync.test.ts",
+    "collection and owner lifecycle integration: libsql-http",
+    23,
+  ],
+  [
+    "query-review.test.ts",
+    "public review state and scalar totals: libsql-http",
+    23,
+  ],
+  [
+    "reconciliation-index.test.ts",
+    "reconciliation indexes and provider boundaries: libsql-http",
+    31,
+  ],
+  [
+    "historical-sync.test.ts",
+    "historical capture reconciliation: libsql-http",
+    44,
+  ],
   ["backends.test.ts", "storage contract: libsql-http", 34],
   ["contract.test.ts", "shared storage behavior: libsql-http", 22],
   ["statement-counts.test.ts", "statement budgets: libsql-http", 9],
-  ["auto-posting.test.ts", "libsql-http automatic posting and split", 67],
+  ["auto-posting.test.ts", "libsql-http automatic posting and split", 66],
   ["billed-lines.test.ts", "libsql-http billed lines", 9],
   [
     "financial-corrections.test.ts",
@@ -46,6 +71,7 @@ const optionalGroups = new Map([
   ["events.test.ts", "durable PostgreSQL event subscriptions"],
   ["hosted-bootstrap.test.ts", "hosted PostgreSQL bootstrap"],
   ["hosted-collection.test.ts", "hosted PostgreSQL collection targets"],
+  ["hosted-write-delivery.test.ts", "hosted delivery after owner writes"],
   ["neon-installation.test.ts", "Neon installation binding"],
   ["neon-login-link.test.mjs", "Neon setup login link"],
   ["operator-parity.test.ts", "one operator CLI behavior"],

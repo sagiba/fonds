@@ -64,7 +64,7 @@ jobs:
       - run: npx vitest run tests/storage/d1.test.ts tests/tooling/d1-worker.test.mjs
         env:
           FONDS_TEST_D1: "1"
-      - run: npx vitest run tests/storage/backends.test.ts tests/storage/contract.test.ts tests/storage/statement-counts.test.ts -t d1-local
+      - run: npx vitest run tests/storage -t d1-local
         env:
           FONDS_TEST_D1: "1"
       - run: npm run check:targets -- d1-web

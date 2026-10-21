@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 
 import type { D1Database } from "@cloudflare/workers-types";
 import { createClient } from "@libsql/client/node";
+import { type Column, getTableColumns, getTableName } from "drizzle-orm";
 import type { Pool } from "pg";
 
 import type {
@@ -20,13 +21,21 @@ import {
   evidenceObject,
   scalarFields,
 } from "../../src/domain/provider-evidence.js";
+import type { Transaction } from "../../src/domain/records.js";
 import type { SourceAdapter } from "../../src/domain/source-adapter.js";
 import { createPostgresEventStore } from "../../src/storage/postgres/events.js";
+import * as postgresSchema from "../../src/storage/postgres/schema.js";
 import {
   initializePostgresDatabase,
   openPostgresDatabase,
 } from "../../src/storage/postgres/store.js";
 import { openDatabase } from "../../src/storage/sqlite/database.js";
+import * as sqliteSchema from "../../src/storage/sqlite/schema.js";
+import {
+  encodeObservation,
+  encodeReconciliation,
+  encodeTransaction,
+} from "../../src/storage/transaction-codec.js";
 import {
   databaseForClient,
   initializeTursoDatabase,
@@ -71,6 +80,63 @@ export type Harness = InternalStore &
     ): Promise<Record<string, unknown>[]>;
     close(): Promise<void>;
   };
+
+/** Inserts synthetic ledger fixtures; update mode replaces the same four stored records. */
+export async function insertTransactionFixture(
+  db: Harness,
+  rows: Transaction[],
+  mode: "insert" | "update" = "insert",
+): Promise<void> {
+  // Columns and driver encodings come from the dialect's schema, so a new column
+  // cannot be silently left out of fixtures.
+  const schema = db.driver.kind === "postgres" ? postgresSchema : sqliteSchema;
+  const tables = [
+    [schema.transactions, encodeTransaction],
+    [schema.transactionObservations, encodeObservation],
+    [schema.transactionReconciliation, encodeReconciliation],
+    [
+      schema.transactionPostingLinks,
+      (row: Transaction) => ({
+        transactionId: row.id,
+        postingLink: row.details.postingLink ?? null,
+      }),
+    ],
+  ] as const;
+  // Parent rows precede their joined records (and any later billed-line fixtures).
+  for (const [table, encode] of tables) {
+    const name = getTableName(table);
+    for (const row of rows) {
+      const encoded = encode(row) as unknown as Record<string, unknown>;
+      const entries = Object.entries(
+        getTableColumns(table) as Record<string, Column>,
+      ).filter(([key, column]) => {
+        if (encoded[key] !== undefined) {
+          return true;
+        }
+        // Only database-supplied values may be left to the database.
+        if (column.hasDefault || column.generated || column.generatedIdentity) {
+          return false;
+        }
+        throw new Error(`Fixture leaves ${name}.${column.name} unset`);
+      });
+      const args = entries.map(([key, column]) =>
+        encoded[key] === null ? null : column.mapToDriverValue(encoded[key]),
+      );
+      if (mode === "update") {
+        const [primary, ...fields] = entries;
+        await db.raw(
+          `UPDATE ${name} SET ${fields.map(([, column]) => `"${column.name}" = ?`).join(", ")} WHERE "${primary![1].name}" = ?`,
+          [...args.slice(1), args[0]],
+        );
+      } else {
+        await db.raw(
+          `INSERT INTO ${name} (${entries.map(([, column]) => `"${column.name}"`).join(", ")}) VALUES (${entries.map(() => "?").join(", ")})`,
+          args,
+        );
+      }
+    }
+  }
+}
 
 /** Synthetic ID-ordering fixtures must move the joined records with their parent. */
 export async function renameTransactionFixture(
