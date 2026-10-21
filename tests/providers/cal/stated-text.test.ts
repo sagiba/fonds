@@ -134,6 +134,33 @@ describe("CAL stated text", () => {
     ).toBe(4);
   });
 
+  it("still bills a payment whose count texts conflict, at its payment amount", () => {
+    const rows = extract(
+      summary({ curPaymentNum: 2, onGoingTransactionsComment: ongoing(5) }),
+    );
+    const line = rows.find((row) => row.purchaseKey !== undefined)!;
+    expect(line).toMatchObject({
+      installmentNumber: 2,
+      installmentCount: null,
+      amountMinor: -10000,
+    });
+    const purchase = rows.find((row) => row.purchaseKey === undefined)!;
+    expect(purchase.installmentCount).toBeNull();
+    expect(purchase.details.issues).toContain("conflicting_installment_facts");
+  });
+
+  it("treats a payment's null structured count as no statement", () => {
+    const rows = extract(
+      summary({ curPaymentNum: 1, numOfPayments: 4 }),
+      summary({ curPaymentNum: 2, debCrdDate: "2040-08-10T00:00:00" }),
+    );
+    const purchase = rows.find((row) => row.purchaseKey === undefined)!;
+    expect(purchase.installmentCount).toBe(4);
+    expect(purchase.details.issues).not.toContain(
+      "conflicting_installment_facts",
+    );
+  });
+
   it("leaves a plan's count unknown when a later payment states another", () => {
     const rows = extract(
       summary({ curPaymentNum: 1, numOfPayments: 4 }),

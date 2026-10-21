@@ -347,26 +347,26 @@ function cancellation(row: SourceRow): boolean {
 
 /** One billed payment of an installment plan (type 8, two or more payments). */
 function installmentPayment(row: SourceRow): boolean {
-  // Grouping needs a stated plan; the group resolves conflicting counts.
-  const texts = unique(
-    stated([row]).flatMap((item) =>
+  // Any stated multi-payment plan makes the row a payment; the group then
+  // resolves conflicting counts.
+  const counts = [
+    ordinal(row.numOfPayments),
+    ...stated([row]).flatMap((item) =>
       item.parsed?.template === "installment_count" ? [item.parsed.count] : [],
     ),
-  );
-  const count =
-    ordinal(row.numOfPayments) ?? (texts.length === 1 ? texts[0]! : null);
+  ];
   return (
     token(row.transactionTypeCode) === "8" &&
     row.refundInd === false &&
-    count !== null &&
-    count >= 2 &&
+    counts.some((count) => count !== null && count >= 2) &&
     ordinal(row.curPaymentNum) !== null
   );
 }
 
 /**
  * Plan facts every payment row restates. A difference within one capture
- * leaves the purchase in review; it never splits the plan.
+ * leaves the purchase in review; it never splits the plan. The planned count
+ * is reconciled with the installment texts, where a null states nothing.
  */
 const planInvariants = [
   "trnPurchaseDate",
@@ -377,7 +377,6 @@ const planInvariants = [
   "transOriginalCurrencyCode",
   "trnCurrencySymbol",
   "trnAmt",
-  "numOfPayments",
 ] as const;
 
 /**
