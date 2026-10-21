@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -39,6 +40,19 @@ const context = (input: Record<string, unknown> = {}) => ({
   input: { perspective: "spending", ...input },
   command: (args: string[]) => ["fonds", ...args].join(" "),
 });
+
+/** Check the copied command's shell syntax without running a provider operation. */
+function nextCommand(output: string): string {
+  const command = /^Next: (.+)$/m.exec(output)?.[1];
+  expect(command).toBeDefined();
+  const parsed = spawnSync("/bin/sh", ["-n"], {
+    input: command,
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  expect(parsed.status, parsed.stderr).toBe(0);
+  return command!;
+}
 
 type Transaction = z.infer<typeof transactionOutputSchema>;
 
@@ -501,12 +515,13 @@ describe("refresh view", () => {
     expect(text).not.toMatch(/covered|complete history/i);
     expect(text).toContain("Next: fonds list-refreshes --connection-id cal");
     // Without a named connection, the next step needs none.
-    expect(
-      refreshView(plain(), summary, (args) => `fonds ${args.join(" ")}`, {
-        connectionId: undefined,
-        nothingToRefresh: false,
-      }),
-    ).toMatch(/Next: fonds list-connections +\(/);
+    const all = refreshView(
+      plain(),
+      summary,
+      (args) => `fonds ${args.join(" ")}`,
+      { connectionId: undefined, nothingToRefresh: false },
+    );
+    expect(nextCommand(all)).toBe("fonds list-connections");
   });
 
   it("does not present a refresh without saved credentials as a success", () => {
@@ -692,7 +707,7 @@ describe("commands in a terminal", () => {
     });
     expect(second.stdout).toBe(first.stdout);
     expect(first.stdout).toContain(`Data: ${own}`);
-    expect(first.stdout).toMatch(/Next: .* connect cal --db /);
+    expect(nextCommand(first.stdout)).toMatch(/ connect cal --db /);
     expect(first.stdout).not.toMatch(/created|initialized/i);
     expect((await piped(["init", "--db", own])).stdout).toBe(
       '{"initialized":true}\n',

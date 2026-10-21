@@ -511,8 +511,8 @@ export const operationViews: Readonly<Record<string, View<never>>> = {
 
 type Next = (args: string[]) => string;
 
-function nextStep(next: string): string {
-  return `\nNext: ${safe(next)}\n`;
+function nextStep(next: string, explanation?: string): string {
+  return `\nNext: ${safe(next)}\n${explanation ? `  ${safe(explanation)}\n` : ""}`;
 }
 
 export function initView(
@@ -525,7 +525,8 @@ export function initView(
     headline(p, "ok", "Ledger ready"),
     ...(location ? [`  Data: ${safe(location)}`] : []),
     nextStep(
-      `${next(["connect", providers[0]!])}  (providers: ${providers.join(", ")})`,
+      next(["connect", providers[0]!]),
+      `Providers: ${providers.join(", ")}`,
     ),
   ].join("\n");
 }
@@ -706,12 +707,15 @@ export function refreshView(
       : [
           nextStep(
             options.connectionId === undefined
-              ? `${next(["list-connections"])}  (each connection's latest refresh)`
+              ? next(["list-connections"])
               : next([
                   "list-refreshes",
                   "--connection-id",
                   options.connectionId,
                 ]),
+            options.connectionId === undefined
+              ? "Each connection's latest refresh"
+              : undefined,
           ),
         ]),
   ].join("\n");

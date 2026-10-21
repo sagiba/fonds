@@ -137,43 +137,52 @@ describe("quickstart", () => {
     rmSync(resolve(home, ".."), { recursive: true, force: true });
   });
 
-  it("runs demo idempotently and labels it synthetic", async () => {
-    const write = vi
-      .spyOn(process.stdout, "write")
-      .mockImplementation(() => true);
-    const events = async () => {
-      write.mockClear();
-      expect(
-        await main([
-          "list-events",
-          "--db",
-          join(home, "demo.sqlite"),
-          "--connection-id",
-          "demo",
-        ]),
-      ).toBe(0);
-      return String(write.mock.calls.at(-1)?.[0]);
-    };
-    try {
-      expect(await main(["demo"])).toBe(0);
-      const first = String(write.mock.calls.map((call) => call[0]).join(""));
-      expect(first).toMatch(
-        /^✓ Demo ready: synthetic CAL data, no real accounts$/m,
-      );
-      expect(first).toMatch(/^ {2}22 transactions · ledger /m);
-      // A demo, not an installation manual: client setup is mcp-config's.
-      expect(first).not.toMatch(/mcp add|mcpServers|ChatGPT|Claude/);
-      const before = await events();
-      write.mockClear();
-      expect(await main(["demo"])).toBe(0);
-      expect(String(write.mock.calls.map((call) => call[0]).join(""))).toBe(
-        first,
-      );
-      expect(await events()).toBe(before);
-    } finally {
-      write.mockRestore();
-    }
-  });
+  it.each([
+    ["xterm", "✓", "·"],
+    ["dumb", "ok", "|"],
+  ])(
+    "runs demo idempotently and labels it synthetic with TERM=%s",
+    async (term, mark, separator) => {
+      vi.stubEnv("TERM", term);
+      vi.stubEnv("NO_COLOR", "1");
+      vi.stubEnv("FORCE_COLOR", undefined);
+      const write = vi
+        .spyOn(process.stdout, "write")
+        .mockImplementation(() => true);
+      const events = async () => {
+        write.mockClear();
+        expect(
+          await main([
+            "list-events",
+            "--db",
+            join(home, "demo.sqlite"),
+            "--connection-id",
+            "demo",
+          ]),
+        ).toBe(0);
+        return String(write.mock.calls.at(-1)?.[0]);
+      };
+      try {
+        expect(await main(["demo"])).toBe(0);
+        const first = String(write.mock.calls.map((call) => call[0]).join(""));
+        expect(first.split("\n")[0]).toBe(
+          `${mark} Demo ready: synthetic CAL data, no real accounts`,
+        );
+        expect(first).toContain(`  22 transactions ${separator} ledger `);
+        // A demo, not an installation manual: client setup is mcp-config's.
+        expect(first).not.toMatch(/mcp add|mcpServers|ChatGPT|Claude/);
+        const before = await events();
+        write.mockClear();
+        expect(await main(["demo"])).toBe(0);
+        expect(String(write.mock.calls.map((call) => call[0]).join(""))).toBe(
+          first,
+        );
+        expect(await events()).toBe(before);
+      } finally {
+        write.mockRestore();
+      }
+    },
+  );
 
   it("keeps consume a stream of compact JSON lines in a terminal", async () => {
     // consume waits for each line's write callback before advancing its cursor.
