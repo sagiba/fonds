@@ -599,6 +599,47 @@ for (const backend of backends) {
       }
     });
 
+    it.each(["correction first", "review first"] as const)(
+      "never leaves a review approving facts a correction replaced (%s)",
+      async (order) => {
+        const key = `raced-native-${order.replace(" ", "-")}`;
+        const observe = (amountMinor: number, capturedAt: string) =>
+          capture(
+            JSON.stringify([row(key, { amountMinor })]),
+            synthetic,
+            nextRun(),
+            capturedAt,
+          );
+        await observe(-1000, "2040-08-01T00:00:00Z");
+        const original = (await all()).find((t) => t.sourceKey.includes(key))!;
+        const review = () =>
+          db.editAnnotation({
+            transactionId: original.id,
+            expectedVersion: 0,
+            expectedTransactionVersion: original.version,
+            review: { status: "approved" },
+          });
+        if (order === "correction first") {
+          await observe(-1001, "2040-08-02T00:00:00Z");
+          await expect(Promise.resolve().then(review)).rejects.toBeInstanceOf(
+            ConflictError,
+          );
+          expect(await db.getTransaction(original.id)).toMatchObject({
+            amountMinor: -1001,
+            reviewStatus: "unreviewed",
+          });
+        } else {
+          await review();
+          await observe(-1001, "2040-08-02T00:00:00Z");
+          expect(await db.getTransaction(original.id)).toMatchObject({
+            amountMinor: -1001,
+            reviewStatus: "stale",
+            reviewStale: true,
+          });
+        }
+      },
+    );
+
     it("preserves fixture evidence, annotations, correction staleness, replay and exact totals", async () => {
       const runId = nextRun();
       expect(
@@ -1039,49 +1080,95 @@ for (const backend of backends) {
     });
     // Run remote integration files serially: transient trigger declarations share
     // the dedicated HTTP server with strict migration-lineage validation.
-    it("retains evidence but rolls back a failed canonical and audit commit", async () => {
-      const runId = nextRun();
-      const trigger = `synthetic_fail_${randomUUID().replaceAll("-", "")}`;
-      if (backend === "postgres") {
-        await db.raw(
-          `CREATE FUNCTION ${trigger}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic rollback'; END $$`,
-        );
-        await db.raw(
-          `CREATE TRIGGER ${trigger} BEFORE INSERT ON events FOR EACH ROW EXECUTE FUNCTION ${trigger}()`,
-        );
-      } else {
-        await db.raw(
-          `CREATE TRIGGER ${trigger} BEFORE INSERT ON events WHEN NEW.run_id = '${runId}' BEGIN SELECT RAISE(ABORT,'synthetic rollback'); END`,
-        );
-      }
-      try {
+    // Each write in an application's transaction, from the first after the
+    // transaction rows through the applied marker, which is written last.
+    it.each([
+      ["transaction_observations", "INSERT", null],
+      ["transaction_reconciliation", "INSERT", null],
+      ["transaction_posting_links", "INSERT", null],
+      ["events", "INSERT", "NEW.run_id = '%run'"],
+      ["sync_runs", "UPDATE", "NEW.id = '%run' AND NEW.applied_at IS NOT NULL"],
+    ] as const)(
+      "retains evidence but rolls back everything when %s %s fails",
+      async (table, operation, condition) => {
+        const runId = nextRun();
+        const trigger = `synthetic_fail_${randomUUID().replaceAll("-", "")}`;
+        const when = condition ? condition.replaceAll("%run", runId) : null;
+        if (backend === "postgres") {
+          await db.raw(
+            `CREATE FUNCTION ${trigger}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic rollback'; END $$`,
+          );
+          await db.raw(
+            `CREATE TRIGGER ${trigger} BEFORE ${operation} ON ${table} FOR EACH ROW${when ? ` WHEN (${when})` : ""} EXECUTE FUNCTION ${trigger}()`,
+          );
+        } else {
+          await db.raw(
+            `CREATE TRIGGER ${trigger} BEFORE ${operation} ON ${table}${when ? ` WHEN ${when}` : ""} BEGIN SELECT RAISE(ABORT,'synthetic rollback'); END`,
+          );
+        }
+        try {
+          await expect(
+            capture(JSON.stringify([row("one")]), synthetic, runId),
+          ).rejects.toThrow();
+          expect(await all()).toHaveLength(0);
+          expect(await db.listEvents({ connectionId })).toHaveLength(0);
+          for (const written of [
+            "transactions",
+            "transaction_observations",
+            "transaction_reconciliation",
+            "transaction_posting_links",
+            "annotations",
+          ]) {
+            expect(
+              Number(
+                (await db.raw(`SELECT COUNT(*) AS count FROM ${written}`))[0]!
+                  .count,
+              ),
+            ).toBe(0);
+          }
+          expect(
+            (
+              await db.raw("SELECT applied_at FROM sync_runs WHERE id = ?", [
+                runId,
+              ])
+            )[0]?.applied_at,
+          ).toBeNull();
+          expect(
+            await db.raw(
+              "SELECT run_id FROM sync_run_bodies WHERE run_id = ?",
+              [runId],
+            ),
+          ).toHaveLength(1);
+        } finally {
+          await db.raw(
+            `DROP TRIGGER ${trigger}${backend === "postgres" ? ` ON ${table}` : ""}`,
+          );
+        }
         await expect(
-          capture(JSON.stringify([row("one")]), synthetic, runId),
-        ).rejects.toThrow();
-        expect(await all()).toHaveLength(0);
-        expect(await db.listEvents({ connectionId })).toHaveLength(0);
-        expect(
-          (
-            await db.raw("SELECT applied_at FROM sync_runs WHERE id = ?", [
-              runId,
-            ])
-          )[0]?.applied_at,
-        ).toBeNull();
-      } finally {
-        await db.raw(
-          `DROP TRIGGER ${trigger}${backend === "postgres" ? " ON events" : ""}`,
-        );
-      }
-      await expect(
-        Promise.resolve().then(() =>
-          db.applyRun(runId, { ...synthetic, parserVersion: "different" }),
-        ),
-      ).rejects.toThrow("parser version");
-      expect(await db.applyRun(runId, synthetic)).toMatchObject({
-        replayed: false,
-        created: 1,
-      });
-    });
+          Promise.resolve().then(() =>
+            db.applyRun(runId, { ...synthetic, parserVersion: "different" }),
+          ),
+        ).rejects.toThrow("parser version");
+        expect(await db.applyRun(runId, synthetic)).toMatchObject({
+          replayed: false,
+          created: 1,
+        });
+        expect(await all()).toHaveLength(1);
+        for (const written of [
+          "transactions",
+          "transaction_observations",
+          "transaction_reconciliation",
+          "transaction_posting_links",
+        ]) {
+          expect(
+            Number(
+              (await db.raw(`SELECT COUNT(*) AS count FROM ${written}`))[0]!
+                .count,
+            ),
+          ).toBe(1);
+        }
+      },
+    );
 
     describe("scheduled collection occurrences", () => {
       const occurrence = (iso: string) => ({

@@ -3,9 +3,17 @@ import { createHash, randomBytes } from "node:crypto";
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { symmetricDecrypt } from "better-auth/crypto";
 import { getSchema } from "better-auth/db";
-import { decodeJwt, importJWK, SignJWT } from "jose";
+import {
+  decodeJwt,
+  decodeProtectedHeader,
+  exportSPKI,
+  generateKeyPair,
+  importJWK,
+  SignJWT,
+} from "jose";
 import { Pool } from "pg";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 import { neonGoogleLogin } from "../../../deploy/neon/neon-login.js";
 import {
@@ -784,6 +792,121 @@ describe("single-owner Better Auth issuer", () => {
         ),
         JSON.stringify(override),
       ).toBeNull();
+    }
+  });
+
+  it("rejects unsigned, wrong-key and unaccepted-algorithm tokens before grant checks or downstream execution", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2040-01-15T12:00:00Z"));
+    let http: ReturnType<typeof createHttpService> | undefined;
+    try {
+      const tokens = await grant();
+      const claims = decodeJwt(tokens.access_token);
+      const header = decodeProtectedHeader(tokens.access_token);
+      const { alg, kid } = header;
+      if (!alg || !kid) {
+        throw new Error(
+          "Synthetic issuer token must name its algorithm and key",
+        );
+      }
+      const otherKey = await generateKeyPair(alg);
+      const { keys } = await service.auth.api.getJwks();
+      const publicKey = await importJWK(keys[0]!, alg);
+      if (publicKey instanceof Uint8Array) {
+        throw new Error("Synthetic issuer key must be asymmetric");
+      }
+      const unsigned = [
+        Buffer.from(JSON.stringify({ alg: "none", typ: "at+jwt" })).toString(
+          "base64url",
+        ),
+        Buffer.from(JSON.stringify(claims)).toString("base64url"),
+        "",
+      ].join(".");
+      const forgeries = [
+        ["unsigned", unsigned],
+        [
+          "wrong key with matching kid",
+          await new SignJWT(claims)
+            .setProtectedHeader({ ...header, alg })
+            .sign(otherKey.privateKey),
+        ],
+        [
+          "wrong key without kid",
+          await new SignJWT(claims)
+            .setProtectedHeader({ alg, typ: "at+jwt" })
+            .sign(otherKey.privateKey),
+        ],
+        [
+          "HS256 with issuer public key as secret",
+          await new SignJWT(claims)
+            .setProtectedHeader({
+              alg: "HS256",
+              kid,
+              typ: "at+jwt",
+            })
+            .sign(new TextEncoder().encode(await exportSPKI(publicKey))),
+        ],
+      ] as const;
+      const checkGrant = vi.spyOn(service, "hasActiveEventReadGrant");
+      const execute = vi.fn(async () => ({
+        active: await service.hasActiveEventReadGrant({
+          ownerId: config.ownerId,
+          clientId: "synthetic-client",
+        }),
+      }));
+      http = createHttpService(
+        {
+          backend: "postgres",
+          operations: [
+            {
+              name: "list_connections",
+              description: "Synthetic protected handler",
+              access: "read",
+              readOnly: true,
+              openWorld: false,
+              inputSchema: z.object({}),
+              outputSchema: z.object({ active: z.boolean() }),
+              execute,
+            },
+          ],
+        },
+        {
+          publicOrigin: config.publicOrigin,
+          ownerId: config.ownerId,
+          authProvider: service.provider,
+        },
+      );
+      const request = (token: string) =>
+        http!.app.request(`${config.publicOrigin}/v1/connections`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      const valid = await request(tokens.access_token);
+      expect(valid.status).toBe(200);
+      expect(await valid.json()).toEqual({ active: true });
+      expect(execute).toHaveBeenCalledOnce();
+      expect(checkGrant).toHaveBeenCalledOnce();
+      execute.mockClear();
+      checkGrant.mockClear();
+      for (const [scenario, token] of forgeries) {
+        expect(
+          await service.provider.authenticate(
+            new Request(`${config.publicOrigin}/mcp`, {
+              headers: { Authorization: `Bearer ${token}` },
+            }),
+          ),
+          scenario,
+        ).toBeNull();
+        const response = await request(token);
+        expect(response.status, scenario).toBe(401);
+        expect(await response.json(), scenario).toEqual({
+          error: { code: "unauthorized", message: "Authentication required." },
+        });
+        expect(checkGrant, scenario).not.toHaveBeenCalled();
+        expect(execute, scenario).not.toHaveBeenCalled();
+      }
+    } finally {
+      await http?.close();
+      vi.useRealTimers();
     }
   });
 
