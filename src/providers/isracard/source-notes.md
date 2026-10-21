@@ -300,6 +300,14 @@ and every code had one label. That label is the evidence for a kind:
   orders are legacy `isHoraatKeva` and DigitalV3 `isdirectDebit`. Collected data
   carries no MCC. Foreign rows state merchant number `0`, and their city slot
   can hold a phone number.
+- **Approvals use different encodings:** named wallet, security and channel
+  descriptors, merchant location/category/acquirer facts and credit/recurrence
+  indicators are retained as scalar evidence. Their numeric flags are not posted
+  booleans; their category codes are not established MCCs. Detail method,
+  recurrence, reason and website slots are retained even when null. These are
+  transaction facts, unlike excluded request metadata, UI controls and duplicate
+  holder context; unknown descendants remain excluded. Detail
+  `sumOfCompensation` is a system-code label, not money, and is excluded.
 - **Policy:** only `U` and `V`, wallet names from a bound detail, the
   standing-order flags and a transfer's bound `motavName` become typed facts; the
   name carries no role beyond the transfer. `presentCard` true becomes

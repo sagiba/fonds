@@ -11,7 +11,7 @@ import { ISRACARD_ENDPOINTS } from "./transport.js";
 
 export const isracardAdapter: SourceAdapter = {
   provider: "isracard",
-  parserVersion: "isracard-v14",
+  parserVersion: "isracard-v15",
   retainProviderEvidence: retainIsracardEvidence,
   mergeProviderEvidence: mergeIsracardEvidence,
   projectProviderState: projectIsracardState,

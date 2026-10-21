@@ -7,6 +7,81 @@ import {
 } from "../../../src/providers/isracard/evidence.js";
 
 describe("Isracard retained evidence", () => {
+  it("keeps approval classification and merchant facts without request or holder metadata", () => {
+    const identity = {
+      confirmationLocation: "23",
+      seqConfirmationNumber: "SYNTHETIC-APPROVAL",
+      confirmationTimeStamp: "opaque:synthetic:identity",
+    };
+    const facts = {
+      walletType: "SYNTHETIC-WALLET-CODE",
+      walletTypeDescription: "Synthetic wallet label",
+      securityIndicatorCode: "SYNTHETIC-SECURITY-CODE",
+      securityIndicatorDescription: "Synthetic security label",
+      tranzacCodeDescription: "Synthetic channel label",
+      branchCodeType: "42",
+      clearedCode: "SYNTHETIC-ACQUIRER",
+      clearedDescription: "Synthetic acquirer label",
+      cityDescription: "Invented City",
+      country: "SYNTHETIC-COUNTRY-CODE",
+      countryCode: "ISR",
+      countryDesc: "Synthetic country label",
+      currencyName: "Synthetic currency label",
+      creditFromBusiness: "2",
+      creditOrCharge: "3",
+      directDebit: "0",
+    };
+    expect(
+      retainIsracardEvidence({
+        rows: [
+          {
+            ...identity,
+            ...facts,
+            cardSuffix: "9999",
+            cardName: "Synthetic duplicate card context",
+            requestNumber: "request-1",
+            refreshedAt: "2040-07-01T00:00:00Z",
+            extraDetails: { generatedAt: "2040-07-01T00:00:00Z" },
+            unknownField: "noise",
+          },
+        ],
+      }),
+    ).toEqual({ rows: [{ ...identity, ...facts }] });
+  });
+
+  it("keeps descriptive detail slots while excluding UI controls and holder context", () => {
+    const facts = {
+      voucherNumberRatz: "SYNTHETIC-VOUCHER",
+      wayOfDeal: "Synthetic payment method",
+      horaatKevaDesc: null,
+      reasonOfTransaction: "Synthetic transaction explanation",
+      websiteName: "merchant.example",
+    };
+    expect(
+      retainIsracardEvidence({
+        detail: {
+          ...facts,
+          info: "Synthetic holder context",
+          sumOfCompensation: "Synthetic system-code label",
+          canOrder: "1",
+          isShowPaymentsTable: "yes",
+          requestNumber: "request-1",
+          selectedDate: "2040-07-01",
+          tablePageNum: "0",
+          future: { timestamp: "noise" },
+        },
+      }),
+    ).toEqual({ detail: facts });
+    expect(
+      retainIsracardEvidence({
+        detail: {
+          ...facts,
+          wayOfDeal: { changedAt: "2040-07-01", future: "noise" },
+        },
+      }),
+    ).toEqual({ detail: { ...facts, wayOfDeal: {} } });
+  });
+
   it("uses matching legacy row copies to preserve recorded origins despite opposite-family source noise", () => {
     const digital = {
       seqVoucherNumber: "DIGITAL-ID",

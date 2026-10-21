@@ -20,8 +20,11 @@ export const isracardDigitalRowShape =
   presentCard isTransactionSecure isWalletTransaction isdirectDebit isNewDirectDebit`);
 export const isracardApprovalRowShape =
   scalarFields(`confirmationLocation seqConfirmationNumber confirmationTimeStamp confirmationNumber
-  businessName purchaseDate originalAmount originalCurrency currencyIso currencySimbol ilsBillingAmount israelTransactionTime
-  transactionCode transactionDescription tranzacCodeType isTransactionSecure isWalletTransaction branchCodeDescription`);
+  businessName cityDescription country countryCode countryDesc clearedCode clearedDescription
+  purchaseDate originalAmount originalCurrency currencyIso currencyName currencySimbol ilsBillingAmount israelTransactionTime
+  transactionCode transactionDescription tranzacCodeType tranzacCodeDescription
+  securityIndicatorCode securityIndicatorDescription isTransactionSecure isWalletTransaction walletType walletTypeDescription
+  branchCodeType branchCodeDescription creditFromBusiness creditOrCharge directDebit`);
 export const isracardLegacyRowShape =
   scalarFields(`voucherNumber voucherNumberRatz voucherNumberRatzOutbound
   fullPurchaseDate fullPurchaseDateOutbound fullPaymentDate purchaseDate purchaseDateOutbound paymentDate
@@ -33,7 +36,8 @@ export const isracardLegacyRowShape =
 export const isracardDetailShape: EvidenceShape = {
   ...scalarFields(`voucherNumber voucherNumberRatz purchaseDateOutboundIsracard purchaseTime
     address phoneNumber city supplierId supplierName supplierNameIsracard motavName
-    transactionType walletPayName dealCode dealType numberOfPayments paymentNumber
+    transactionType walletPayName dealCode dealType wayOfDeal horaatKevaDesc reasonOfTransaction websiteName
+    numberOfPayments paymentNumber
     dealSum chargeSum chargeSumToDisplay dealSumOutbound dealSumOutboundInshekels
     currencyId currencyIdForCharge currencyIdOutbound linking
     discount sumBeforeDiscount saleName secondSaleName moreInfo sector clearingData solek
@@ -41,7 +45,7 @@ export const isracardDetailShape: EvidenceShape = {
     dollarConversion dollarTransferRate exchangeRateZMD
     commissionDiscountPercentage commissionDiscountSum commissionNetValue commissionNetValueCurrency
     interestPercentage interestSum moneyWithdrawalCommission dollarTransferCommissionPercentage
-    amlaDolarCa amlaDolarCaMatbea scumAmla sumDollar sumOfCompensation sumOfFund sumOfValueAddedTax`),
+    amlaDolarCa amlaDolarCaMatbea scumAmla sumDollar sumOfFund sumOfValueAddedTax`),
   Table1: [scalarFields("paymentNumber paymentDate paymentSum currencyId")],
 };
 
