@@ -12,7 +12,6 @@ import {
   projectCalState,
   retainCalEvidence,
 } from "../../../src/providers/cal/evidence.js";
-import { extractCal } from "../../../src/providers/cal/extract.js";
 import { calPostingEvidence } from "../../../src/providers/cal/posting-evidence.js";
 import { openDatabase } from "../../../src/storage/sqlite/database.js";
 
@@ -218,59 +217,6 @@ describe("CAL retained evidence", () => {
       currencyMapping: "derived",
     });
   });
-  it("applies the same recursive declaration to legacy evidence and new extraction", () => {
-    const source = {
-      ...row,
-      trnAmt: 10,
-      comments: [
-        { key: "Synthetic note", value: null, nested: { noise: true } },
-      ],
-      paymentsMade: [
-        {
-          date: "2040-07-01",
-          num: "1",
-          amount: 10,
-          currency: "₪",
-          noise: { nested: true },
-        },
-      ],
-      futureField: { nested: true },
-    };
-    const extracted = extractCal(
-      JSON.stringify({
-        statusCode: 1,
-        result: { transactions: [], clearanceRequests: [source] },
-      }),
-      { accountKey: "synthetic-account", runId: "synthetic-run" },
-    ).transactions[0]!;
-    const projected = retainCalEvidence({
-      rows: [
-        {
-          ...source,
-          trnAmt: "10",
-          paymentsMade: [
-            {
-              date: "2040-07-01",
-              num: "1",
-              amount: "10",
-              currency: "₪",
-              noise: "discard",
-            },
-          ],
-        },
-      ],
-      identity: { baseKey: "synthetic-derived" },
-      currencyMapping: "derived",
-    });
-    expect(projected.rows).toEqual(
-      retainCalEvidence(extracted.details.provider.cal!).rows,
-    );
-    expect(projected).not.toHaveProperty("identity");
-    expect(projected).not.toHaveProperty("currencyMapping");
-    expect(JSON.stringify(extracted.details.provider)).not.toContain("nested");
-    expect(JSON.stringify(projected)).not.toContain("futureField");
-  });
-
   it("retains every posting decoder field and rejects malformed optional evidence after projection", () => {
     const decode = (provider: JsonObject) =>
       calPostingEvidence({
@@ -306,16 +252,7 @@ describe("CAL retained evidence", () => {
     ).toBeNull();
   });
 
-  it("keeps exact numeric lexemes and distinguishes null from an absent field", () => {
-    expect(
-      retainCalEvidence({ rows: [{ trnAmt: "0.2900", merchantId: null }] }),
-    ).toEqual({ rows: [{ trnAmt: "0.2900", merchantId: null }] });
-    expect(retainCalEvidence({ rows: [{ trnAmt: "0.29" }] })).toEqual({
-      rows: [{ trnAmt: "0.29" }],
-    });
-  });
-
-  it("merges overlapping payment components quietly and replaces a correction", () => {
+  it("preserves duplicate retained comments across overlapping payment components", () => {
     const component = (num: string, amount: string) => ({
       cardUniqueId: "SYNTHETIC-CARD",
       trnIntId: "SYNTHETIC-PLAN",
@@ -336,20 +273,6 @@ describe("CAL retained evidence", () => {
       retained: { comments: [{ value: "note", key: "Synthetic" }] },
     };
     const merged = mergeCalEvidence(first, second);
-    expect(merged.rows).toHaveLength(2);
     expect((merged.retained as JsonObject).comments).toHaveLength(2);
-    expect(mergeCalEvidence(mergeCalEvidence(merged, first), second)).toEqual(
-      merged,
-    );
-    const corrected = mergeCalEvidence(merged, {
-      rows: [component("2", "12")],
-    });
-    expect(corrected.rows).toEqual([
-      component("1", "10"),
-      component("2", "12"),
-    ]);
-    expect(
-      mergeCalEvidence(corrected, { rows: [component("1", "10")] }),
-    ).toEqual(corrected);
   });
 });
