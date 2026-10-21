@@ -580,6 +580,64 @@ for (const backend of backends) {
       }
     });
 
+    it("never leaves a review approving facts that a concurrent correction replaced", async () => {
+      const peer = await db.peer();
+      try {
+        for (let attempt = 0; attempt < 4; attempt++) {
+          const key = `raced-native-${attempt}`;
+          await capture(
+            JSON.stringify([row(key, { amountMinor: -1000 })]),
+            synthetic,
+            nextRun(),
+            "2040-08-01T00:00:00Z",
+          );
+          const original = (await all()).find((t) =>
+            t.sourceKey.includes(key),
+          )!;
+          const [review, correction] = await Promise.allSettled([
+            db.editAnnotation({
+              transactionId: original.id,
+              expectedVersion: 0,
+              expectedTransactionVersion: original.version,
+              review: { status: "approved" },
+            }),
+            peer.ingestRun(
+              {
+                runId: nextRun(),
+                connectionId,
+                responses: [
+                  {
+                    accountKey: "account",
+                    endpoint: "synthetic:cal/recent",
+                    capturedAt: "2040-08-02T00:00:00Z",
+                    responseText: JSON.stringify([
+                      row(key, { amountMinor: -1001 }),
+                    ]),
+                  },
+                ],
+              },
+              synthetic,
+            ),
+          ]);
+          expect(correction.status).toBe("fulfilled");
+          const current = (await db.getTransaction(original.id))!;
+          expect(current.amountMinor).toBe(-1001);
+          if (review.status === "fulfilled") {
+            // The review committed first, so the correction must stale it.
+            expect(current).toMatchObject({
+              reviewStatus: "stale",
+              reviewStale: true,
+            });
+          } else {
+            expect(review.reason).toBeInstanceOf(ConflictError);
+            expect(current.reviewStatus).toBe("unreviewed");
+          }
+        }
+      } finally {
+        await peer.close();
+      }
+    });
+
     it("preserves fixture evidence, annotations, correction staleness, replay and exact totals", async () => {
       const runId = nextRun();
       expect(
