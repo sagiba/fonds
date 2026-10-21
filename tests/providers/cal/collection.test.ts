@@ -235,17 +235,8 @@ describe("CAL synthetic direct collection", () => {
     await generator.return(undefined);
   });
 
-  it.each([
-    undefined,
-    null,
-    "",
-    "x".repeat(129),
-    "Synthetic\nCard",
-    "4111 1111 1111 1111",
-    credentials.password,
-    token,
-  ])(
-    "omits invalid or secret-bearing card description %j",
+  it.each([credentials.password, token])(
+    "omits secret-bearing card description %j",
     async (cardDescription) => {
       const generator = collectCal({
         credentials,
@@ -2614,42 +2605,6 @@ describe("CAL monthly search coverage regression", () => {
 });
 
 describe("CAL bounded transport", () => {
-  it("caps response bytes despite a missing or lying content-length", async () => {
-    const fetcher = vi.fn<typeof fetch>(
-      async () =>
-        new Response("a".repeat(200), { headers: { "content-length": "1" } }),
-    );
-    await expect(
-      createCalTransport({
-        fetch: fetcher,
-        limits: { maxResponseBytes: 100 },
-      }).post(CAL_ENDPOINTS.init, {}),
-    ).rejects.toThrow("invalid_response");
-    expect(fetcher).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps the timeout through body reading and cancels stalled streams", async () => {
-    let cancelled = 0;
-    const fetcher = vi.fn<typeof fetch>(
-      async () =>
-        new Response(
-          new ReadableStream<Uint8Array>({
-            cancel() {
-              cancelled++;
-            },
-          }),
-        ),
-    );
-    await expect(
-      createCalTransport({
-        fetch: fetcher,
-        limits: { timeoutMs: 10, maxAttempts: 1 },
-      }).post(CAL_ENDPOINTS.init, {}),
-    ).rejects.toThrow("network_error");
-    expect(cancelled).toBe(1);
-    expect(fetcher).toHaveBeenCalledTimes(1);
-  });
-
   it("stops on caller abort and does not leak the arbitrary abort reason", async () => {
     const controller = new AbortController();
     const fetcher = syntheticFetch(

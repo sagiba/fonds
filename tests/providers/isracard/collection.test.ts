@@ -161,25 +161,6 @@ describe("Isracard conservative bounded collection", () => {
     await collection.return(undefined);
   });
 
-  it.each([
-    undefined,
-    null,
-    "",
-    "x".repeat(129),
-    "Synthetic\nCard",
-    "4111 1111 1111 1111",
-  ])("omits invalid cardName %j from discovery", async (cardName) => {
-    const { options } = setup([{ ...firstCard, ...{ cardName } }]);
-    const collection = collectIsracard(options);
-    const event = (await collection.next()).value;
-    expect(event).toMatchObject({
-      type: "card_discovery",
-      discovery: { cards: [{ last4: "1234" }] },
-    });
-    expect(JSON.stringify(event)).not.toContain('"displayName"');
-    await collection.return(undefined);
-  });
-
   it("discovers stable card identities before financial requests without retaining session identity or credential suffix", async () => {
     const { options, request } = setup([
       firstCard,

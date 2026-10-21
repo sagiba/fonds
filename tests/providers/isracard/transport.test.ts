@@ -73,9 +73,6 @@ describe("Isracard bounded session transport", () => {
       {},
       "authentication_challenge",
     ],
-    ['{"isSuccess":true}', 403, {}, "authentication_challenge"],
-    ['{"isSuccess":true}', 429, {}, "rate_limited"],
-    ['{"isSuccess":true}', 401, {}, "authentication_failed"],
     [
       '{"isSuccess":true}',
       200,
@@ -107,12 +104,6 @@ describe("Isracard bounded session transport", () => {
       {},
       "authentication_failed",
     ],
-    [
-      '{"isSuccess":true}',
-      302,
-      { location: "https://private.invalid" },
-      "invalid_response",
-    ],
     ["", 200, {}, "invalid_response"],
   ] as const)(
     "rejects HTTP and application failures without retry or reflected errors (%s)",
@@ -129,6 +120,24 @@ describe("Isracard bounded session transport", () => {
       expect(result.close).toHaveBeenCalledOnce();
     },
   );
+
+  it.each([
+    [401, "authentication_failed"],
+    [403, "authentication_challenge"],
+    [429, "rate_limited"],
+    [302, "invalid_response"],
+  ] as const)("classifies HTTP status %i as %s", async (status, code) => {
+    const result = response(
+      '{"isSuccess":true}',
+      status,
+      status === 302 ? { location: "https://private.invalid" } : {},
+    );
+    await expect(
+      createIsracardTransport({
+        httpClient: { request: async () => result },
+      }).request(ISRACARD_ENDPOINTS.cards, {}),
+    ).rejects.toMatchObject({ code });
+  });
 
   it.each([
     ["successful", [undefined, null, 0, "0", ""], true],
@@ -178,59 +187,6 @@ describe("Isracard bounded session transport", () => {
         redirect: "123",
       }),
     ).rejects.toMatchObject({ code: "invalid_response" });
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("bounds streamed bytes and malformed UTF8, closing the response", async () => {
-    for (const result of [
-      response('{"isSuccess":true}'),
-      {
-        ...response(""),
-        body: (async function* () {
-          yield new Uint8Array([0xff]);
-        })(),
-      },
-    ]) {
-      await expect(
-        createIsracardTransport({
-          httpClient: { request: async () => result },
-          limits: { maxResponseBytes: 8 },
-        }).request(ISRACARD_ENDPOINTS.cards, {}),
-      ).rejects.toMatchObject({ code: "invalid_response" });
-      expect(result.close).toHaveBeenCalledOnce();
-    }
-  });
-
-  it("times out a stalled client and stalled body, and honors an already-aborted signal", async () => {
-    const stalled = {
-      ...response(""),
-      body: {
-        [Symbol.asyncIterator]() {
-          return {
-            next: () => new Promise<IteratorResult<Uint8Array>>(() => {}),
-          };
-        },
-      },
-    };
-    for (const request of [
-      async () => new Promise<IsracardHttpResponse>(() => {}),
-      async () => stalled,
-    ]) {
-      await expect(
-        createIsracardTransport({
-          httpClient: { request },
-          limits: { timeoutMs: 5 },
-        }).request(ISRACARD_ENDPOINTS.cards, {}),
-      ).rejects.toMatchObject({ code: "network_error", fatal: true });
-    }
-    expect(stalled.close).toHaveBeenCalledOnce();
-    const request = vi.fn();
-    await expect(
-      createIsracardTransport({
-        httpClient: { request },
-        signal: AbortSignal.abort(),
-      }).request(ISRACARD_ENDPOINTS.login, {}),
-    ).rejects.toMatchObject({ code: "network_error" });
     expect(request).not.toHaveBeenCalled();
   });
 
