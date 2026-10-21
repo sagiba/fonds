@@ -1398,6 +1398,85 @@ describe("Isracard sessions across collections", () => {
     ]);
   });
 
+  it.each(["authentication_challenge", "rate_limited"] as const)(
+    "stops a reused session on %s after yielding the earlier month without another login",
+    async (code) => {
+      const { request, options } = setup();
+      const session: IsracardSession = {};
+      await events({
+        ...options,
+        session,
+        range: { from: "2040-04-01", to: "2040-04-30" },
+      });
+      const ordinary = request.getMockImplementation()!;
+      request.mockImplementation(async (endpoint, body, query) => {
+        if (
+          endpoint === ISRACARD_ENDPOINTS.transactions &&
+          (body as { billingMonth: string }).billingMonth === "01/06/2040"
+        ) {
+          throw new IsracardTransportError(code);
+        }
+        return ordinary(endpoint, body, query);
+      });
+      const result: CollectionEvent[] = [];
+      for await (const event of collectIsracard({
+        ...options,
+        session,
+        range: { from: "2040-05-01", to: "2040-07-31" },
+      })) {
+        if (event.type === "card_discovery") {
+          continue;
+        }
+        result.push(event);
+        if (event.type === "capture") {
+          expect(JSON.parse(event.capture.responseText)).toMatchObject({
+            billingMonth: "2040-05",
+          });
+          // May is handed over before June is requested, so June's stop cannot lose it.
+          expect(
+            request.mock.calls.some(
+              ([endpoint, body]) =>
+                endpoint === ISRACARD_ENDPOINTS.transactions &&
+                (body as { billingMonth: string }).billingMonth ===
+                  "01/06/2040",
+            ),
+          ).toBe(false);
+        }
+      }
+      expect(logins(request)).toBe(1);
+      expect(result.map((event) => event.type)).toEqual([
+        "capture",
+        "failure",
+        "failure",
+      ]);
+      expect(result[1]).toMatchObject({
+        fatal: false,
+        failure: {
+          code,
+          endpoint: ISRACARD_ENDPOINTS.transactions,
+          scope: { kind: "history", month: "2040-06" },
+        },
+      });
+      expect(result[2]).toMatchObject({
+        fatal: true,
+        failure: {
+          code,
+          scope: { kind: "history", from: "2040-05-01", to: "2040-07-31" },
+        },
+      });
+      expect(request.mock.calls.map(([endpoint]) => endpoint)).toEqual([
+        ISRACARD_ENDPOINTS.login,
+        ISRACARD_ENDPOINTS.cards,
+        ISRACARD_ENDPOINTS.transactions,
+        ISRACARD_ENDPOINTS.legacy,
+        ISRACARD_ENDPOINTS.cards,
+        ISRACARD_ENDPOINTS.transactions,
+        ISRACARD_ENDPOINTS.legacy,
+        ISRACARD_ENDPOINTS.transactions,
+      ]);
+    },
+  );
+
   it("logs in at most twice in one execution, however often Isracard rejects", async () => {
     const { request, options } = setup();
     const ordinary = request.getMockImplementation()!;

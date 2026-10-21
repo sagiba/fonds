@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { ConflictError } from "../../src/domain/errors.js";
 import { emptyDetails, unknownLedgerFacts } from "../../src/domain/model.js";
-import { reviewBasis, reviewState } from "../../src/domain/plans/annotation.js";
+import { reviewState } from "../../src/domain/plans/annotation.js";
 import { calAdapter } from "../../src/providers/cal/adapter.js";
 import {
   type Database,
@@ -388,7 +388,12 @@ describe("public review state and scalar totals", () => {
     expect(approved.data.review).toEqual({
       status: "approved",
       financialVersion: row.version,
-      basis: reviewBasis(row),
+      basis: {
+        amountMinor: -12345,
+        currency: "ILS",
+        amountBasis: "purchase_commitment",
+        kind: "purchase",
+      },
     });
     const removed = await db.editAnnotation({
       transactionId: row.id,
@@ -555,7 +560,12 @@ describe("public review state and scalar totals", () => {
           review: {
             status: "needs_review",
             financialVersion: result.version,
-            basis: reviewBasis(result),
+            basis: {
+              amountMinor: -12345,
+              currency: "ILS",
+              amountBasis: "purchase_commitment",
+              kind: "purchase",
+            },
           },
         },
       },

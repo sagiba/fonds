@@ -41,7 +41,19 @@ repository.
 2. Keep behavior changes separate from mechanical formatting and moves.
 3. Add or adjust meaningful tests when behavior changes. A bug fix needs a
    test that fails without the fix. Do not rewrite a golden snapshot merely
-   to make a failure disappear.
+   to make a failure disappear. Each test must fail if the behavior it names
+   were removed:
+   - Write expected values by hand; never compute them with the production
+     helper under test.
+   - Control the clock for time-dependent rules. Inject atomicity failures
+     after earlier writes, then check rollback and retry.
+   - Run storage behavior through the
+     [backend harness](tests/helpers/storage-harness.ts) unless it is
+     driver-specific.
+   - Give each scenario one primary layer; repeat it only for a distinct
+     integration risk.
+   - Pin contractual output and budgets, not incidental text or whole internal
+     objects.
 4. Identify any changed public contract, user procedure, security limit or
    source interpretation. Update its owner under the documentation rules below.
    Unchanged behavior needs no prose update.

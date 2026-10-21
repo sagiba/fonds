@@ -225,42 +225,6 @@ describe.skipIf(!postgresUrl)("durable PostgreSQL event subscriptions", () => {
     }
   });
 
-  it("accepts only one racing generation and never recreates a missing stale row", async () => {
-    const saved = (await store.save(subscription(), 0))!;
-    const concurrent = createPostgresEventStore(otherPool, db);
-    const results = await Promise.all([
-      store.save({ ...saved, cursor: 1 }, saved.generation),
-      concurrent.save({ ...saved, cursor: 2 }, saved.generation),
-    ]);
-    expect(results.filter(Boolean)).toHaveLength(1);
-    expect((await store.get(saved.id))?.generation).toBe(2);
-    expect(
-      await store.save({ ...saved, status: "inactive" }, saved.generation),
-    ).toBeUndefined();
-    expect(await store.save(subscription("missing-stale"), 10)).toBeUndefined();
-    expect(await store.get("missing-stale")).toBeUndefined();
-    expect(await store.save(subscription(), 0)).toBeUndefined();
-  });
-
-  it("filters due state using persisted expiry, retry schedule and active status", async () => {
-    await store.save(subscription("due"), 0);
-    await store.save(
-      { ...subscription("later"), nextAttemptAt: now + 60_000 },
-      0,
-    );
-    await store.save({ ...subscription("expired"), expiresAt: now }, 0);
-    await store.save(
-      { ...subscription("failed"), status: "failed", attempts: 5 },
-      0,
-    );
-    expect((await store.listDue(now, 25)).map((value) => value.id)).toEqual([
-      "due",
-    ]);
-    expect(
-      (await store.listDue(now + 60_000, 25)).map((value) => value.id),
-    ).toEqual(["due", "later"]);
-  });
-
   it("initializes cursors from committed connection-scoped financial changes", async () => {
     await db.ensureConnection({ id: "cal", provider: "cal" });
     await db.ensureConnection({ id: "other", provider: "cal" });
