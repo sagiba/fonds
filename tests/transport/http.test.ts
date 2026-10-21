@@ -308,6 +308,71 @@ describe("authenticated local HTTP service", () => {
         (await request(`/v1/cards/${discovered.id}?${query}`)).status,
       ).toBe(400);
     }
+    {
+      const card = {
+        id: "synthetic-card",
+        connectionId: "synthetic-application-contract",
+        providerKey: "private-provider-sentinel",
+        billingAccountId: null,
+        last4: "0012",
+        displayName: "Synthetic card",
+        attributes: { cardStatus: "private-attribute-sentinel" },
+        createdAt: "2040-08-01T00:00:00Z",
+        lastSeenAt: null,
+      };
+      const account = {
+        id: "synthetic-account",
+        connectionId: "synthetic-application-contract",
+        providerKey: "private-provider-sentinel",
+        type: "depository" as const,
+        institutionName: null,
+        mask: "0042",
+        displayName: null,
+        createdAt: "2040-08-01T00:00:00Z",
+        lastSeenAt: "2040-08-01T00:00:00Z",
+      };
+      const { providerKey: _providerKey, ...expected } = account;
+
+      await service.close();
+      service = createHttpService(
+        createApplication({
+          ...db,
+          getCard: async (id) => (id === card.id ? card : undefined),
+          listAccounts: async () => ({ accounts: [account], hasMore: false }),
+          getAccount: async (id) => (id === account.id ? account : undefined),
+        }),
+        { token },
+      );
+      const published = await request(`/v1/cards/synthetic-card`);
+      expect(published.status).toBe(200);
+      const text = await published.text();
+      expect(text).not.toMatch(/private-(provider|attribute)-sentinel/);
+      expect(JSON.parse(text)).toEqual({
+        card: {
+          id: "synthetic-card",
+          connectionId: "synthetic-application-contract",
+          billingAccountId: null,
+          last4: "0012",
+          displayName: "Synthetic card",
+          createdAt: "2040-08-01T00:00:00Z",
+          lastSeenAt: null,
+        },
+      });
+      expect((await request(`/v1/cards/missing`)).status).toBe(404);
+      const list = await request(
+        `/v1/accounts?connectionId=synthetic-application-contract`,
+      );
+      expect(list.status).toBe(200);
+      expect(await list.json()).toEqual({
+        data: [expected],
+        hasMore: false,
+        nextCursor: null,
+      });
+      const read = await request(`/v1/accounts/synthetic-account`);
+      expect(await read.json()).toEqual({ account: expected });
+      expect((await request(`/v1/accounts/missing`)).status).toBe(404);
+      expect((await request(`/v1/accounts`)).status).toBe(400);
+    }
   });
 
   it("uses current versions for edits, persists one audit, and returns safe conflicts", async () => {
@@ -329,6 +394,18 @@ describe("authenticated local HTTP service", () => {
       });
     const [a, b] = await Promise.all([update(), update()]);
     expect([a.status, b.status].sort()).toEqual([200, 409]);
+    const conflict = await request(`/v1/transactions/${row.id}/annotation`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        expectedVersion: 0,
+        notes: "Synthetic async note",
+      }),
+    });
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toMatchObject({
+      error: { code: "conflict" },
+    });
     const current = await (await request(`/v1/transactions/${row.id}`)).json();
     expect(current.transaction.annotation).toMatchObject({
       version: 1,
@@ -423,19 +500,33 @@ describe("authenticated local HTTP service", () => {
     ).toBe(413);
   });
 
-  it("never exposes database or unexpected error text", async () => {
-    await service.close();
-    const application = createApplication(db);
-    application.operations.find(
-      (op) => op.name === "list_connections",
-    )!.execute = () => {
-      throw new Error("SQL includes synthetic-sensitive-response");
-    };
-    service = createHttpService(application, { token });
-    const response = await request("/v1/connections");
-    expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({
-      error: { code: "internal_error", message: "Operation failed." },
-    });
-  });
+  it.each(["operation throw", "storage rejection"])(
+    "never exposes database or unexpected error text from %s",
+    async (failure) => {
+      await service.close();
+      const application = createApplication(
+        failure === "storage rejection"
+          ? {
+              ...db,
+              listConnections: async () => {
+                throw new Error("SQL contains synthetic-sensitive-payload");
+              },
+            }
+          : db,
+      );
+      if (failure === "operation throw") {
+        application.operations.find(
+          (op) => op.name === "list_connections",
+        )!.execute = () => {
+          throw new Error("SQL includes synthetic-sensitive-response");
+        };
+      }
+      service = createHttpService(application, { token });
+      const response = await request("/v1/connections");
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({
+        error: { code: "internal_error", message: "Operation failed." },
+      });
+    },
+  );
 });

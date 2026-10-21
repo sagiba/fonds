@@ -54,61 +54,59 @@ function extract(difference: Row) {
 }
 
 describe("CAL original-currency roles", () => {
-  it.each(originalCases)(
-    "preserves exact $currency original money without converting its already-billed ILS",
-    ({ iso, provider, currency, symbol, scale }) => {
-      const transaction = extract({
-        trnCurrencyIsoCode: iso,
-        transOriginalCurrencyCode: provider,
-        trnCurrencySymbol: symbol,
-        trnAmt: scale === 0 ? 4275 : scale === 3 ? 4.275 : 42.75,
-      });
-      expect(transaction).toMatchObject({
-        amountMinor: -8640,
-        currency: "ILS",
-        amountBasis: "purchase_commitment",
-        originalAmountMinor: -4275,
-        originalCurrency: currency,
-      });
-    },
-  );
-
-  it.each(originalCases)(
-    "resolves evidenced provider-original $currency code alone without interpreting it as a billing code",
-    ({ provider, currency, symbol, scale }) => {
-      const transaction = extract({
-        trnCurrencyIsoCode: null,
-        transOriginalCurrencyCode: provider,
-        trnCurrencySymbol: symbol,
-        trnAmt: scale === 0 ? 4275 : scale === 3 ? 4.275 : 42.75,
-      });
-      expect(transaction).toMatchObject({
-        amountMinor: -8640,
-        currency: "ILS",
-        originalAmountMinor: -4275,
-        originalCurrency: currency,
-      });
-    },
-  );
-
-  it.each(originalCases)(
-    "keeps unsupported fractional $currency original precision reviewable while retaining billed ILS",
-    ({ iso, provider, symbol, scale }) => {
-      const transaction = extract({
-        trnCurrencyIsoCode: iso,
-        transOriginalCurrencyCode: provider,
-        trnCurrencySymbol: symbol,
-        trnAmt: scale === 0 ? 42.75 : scale === 3 ? 4.2751 : 42.751,
-      });
-      expect(transaction).toMatchObject({
-        amountMinor: -8640,
-        currency: "ILS",
-        originalAmountMinor: null,
-        originalCurrency: null,
-      });
-      expect(transaction.details.issues).toContain(
-        "unresolved_original_amount",
-      );
+  it.each(originalCases.map((row) => [row.currency, row] as const))(
+    "preserves %s original money, resolves provider-only codes and flags excess precision without changing billed ILS",
+    (_name, { iso, provider, currency, symbol, scale }) => {
+      for (const [
+        scenario,
+        originalIso,
+        amount,
+        originalAmountMinor,
+        originalCurrency,
+      ] of [
+        [
+          "both codes",
+          iso,
+          scale === 0 ? 4275 : scale === 3 ? 4.275 : 42.75,
+          -4275,
+          currency,
+        ],
+        [
+          "provider code only",
+          null,
+          scale === 0 ? 4275 : scale === 3 ? 4.275 : 42.75,
+          -4275,
+          currency,
+        ],
+        [
+          "excess precision",
+          iso,
+          scale === 0 ? 42.75 : scale === 3 ? 4.2751 : 42.751,
+          null,
+          null,
+        ],
+      ] as const) {
+        const transaction = extract({
+          trnCurrencyIsoCode: originalIso,
+          transOriginalCurrencyCode: provider,
+          trnCurrencySymbol: symbol,
+          trnAmt: amount,
+        });
+        expect(transaction, scenario).toMatchObject({
+          amountMinor: -8640,
+          currency: "ILS",
+          originalAmountMinor,
+          originalCurrency,
+          ...(scenario === "both codes"
+            ? { amountBasis: "purchase_commitment" }
+            : {}),
+        });
+        if (scenario === "excess precision") {
+          expect(transaction.details.issues).toContain(
+            "unresolved_original_amount",
+          );
+        }
+      }
     },
   );
 

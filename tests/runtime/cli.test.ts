@@ -445,15 +445,33 @@ describe("offline CLI", () => {
     expect(updated.amount).toEqual({ currency: "ILS", amount: "-75.60" });
     expect(updated.annotation).toEqual(annotated.annotation);
     expect((await events("--limit", "1")).data).toHaveLength(1);
-    expect(
-      await success(
-        "totals",
-        "--db",
-        dbPath,
-        "--connection-id",
-        "synthetic-cli",
-      ),
-    ).toBeTruthy();
+    const totals = await success<{
+      totals: { currency: string; amount: string }[];
+      excludedCount: number;
+      excluded: Record<string, number>;
+    }>("totals", "--db", dbPath, "--connection-id", "synthetic-cli");
+    expect(Object.keys(totals).sort()).toEqual([
+      "excluded",
+      "excludedCount",
+      "fxFeeUnknownCount",
+      "fxFees",
+      "includedCount",
+      "totals",
+    ]);
+    expect(Object.keys(totals.excluded).sort()).toEqual([
+      "authorization",
+      "pending",
+      "retiredOrRemoved",
+      "transferOrIncome",
+      "unresolved",
+    ]);
+    expect(totals.excludedCount).toBe(
+      Object.values(totals.excluded).reduce((sum, count) => sum + count, 0),
+    );
+    expect(totals.totals.length).toBeGreaterThan(0);
+    for (const group of totals.totals) {
+      expect(group.amount).toMatch(/^-?\d+(\.\d+)?$/);
+    }
     const backupPath = join(directory, "backup.sqlite");
     expect(
       await success("backup", "--db", dbPath, "--out", backupPath),

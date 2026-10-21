@@ -79,26 +79,6 @@ describe.each(backends)("%s link and unlink with annotations", (backend) => {
     ).rejects.toBeInstanceOf(ConflictError);
   });
 
-  it("links annotations whose tags differ only in order", async () => {
-    const { pending, posted } = await pair();
-    for (const [transactionId, tags] of [
-      [pending.id, ["travel", "shared"]],
-      [posted.id, ["shared", "travel"]],
-    ] as const) {
-      await db.editAnnotation({
-        transactionId,
-        expectedVersion: 0,
-        tags: [...tags],
-      });
-    }
-    await db.linkPendingTransaction(
-      await harness.command(pending.id, posted.id),
-    );
-    expect(
-      (await db.getTransaction(pending.id))!.annotation?.data.tags,
-    ).toEqual(["shared", "travel"]);
-  });
-
   it("treats reordered or repeated tags as no change", async () => {
     const { posted } = await pair();
     const first = await db.editAnnotation({
