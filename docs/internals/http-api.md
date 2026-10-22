@@ -39,11 +39,12 @@ Zod's `z.toJSONSchema()`, keeping their field descriptions. Recursive schemas
 need a name to become shared components; register one beside `JsonValue` in
 openapi.ts when adding another.
 
-JSON Schema carries each input's shape, not refinements that combine inputs,
-such as a date bound requiring `dateRole`. Those rules stay in Zod, are stated in
-the operation's description, and answer 400. Prefer a declarative constraint
-when one exists: totals declare their two perspectives as an enum rather than
-refining `all` away, so the description cannot overstate what is accepted.
+JSON Schema carries each input's shape, not Zod refinements: a supported
+currency, or a date bound requiring `dateRole`. Those rules stay in Zod and
+answer 400; the API reference states them for clients, and the document says
+so. Where a declarative constraint expresses a rule, use it instead: totals
+declare their two perspectives as an enum, so the document lists exactly the
+perspectives they accept.
 
 Every operation route lists its error statuses; only writes, which check
 versions and lifecycle state, list 409. The

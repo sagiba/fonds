@@ -108,8 +108,8 @@ afterEach(async () => {
   await db.close();
 });
 
-function hostedService() {
-  const service = createHttpService(echoApplication, {
+function hostedService(application = echoApplication) {
+  const service = createHttpService(application, {
     publicOrigin,
     ownerId: "owner",
     authProvider: {
@@ -255,6 +255,46 @@ describe("OpenAPI document", () => {
           ...(method === "get" ? { limit: 5 } : { reason: "probe" }),
         },
       });
+    }
+  });
+
+  it("answers 202 while any refresh it started still runs", async () => {
+    const summary = (status: string) => ({
+      connectionId: "synthetic",
+      reason: null,
+      refresh: { status },
+    });
+    for (const [path, output, status] of [
+      [
+        "/v1/connections/synthetic/refreshes",
+        { refresh: { status: "running" } },
+        202,
+      ],
+      [
+        "/v1/connections/synthetic/refreshes",
+        { refresh: { status: "completed" } },
+        200,
+      ],
+      [
+        "/v1/refreshes",
+        { refreshes: [summary("completed"), summary("pending")] },
+        202,
+      ],
+      [
+        "/v1/refreshes",
+        { refreshes: [summary("completed"), summary("failed")] },
+        200,
+      ],
+    ] as const) {
+      const service = hostedService({
+        backend: "postgres",
+        operations: operationDefinitions.map((definition) => ({
+          ...definition,
+          execute: async () => output,
+        })),
+      });
+      const response = await hostedRequest(service, "post", path, {});
+      expect(response.status, JSON.stringify(output)).toBe(status);
     }
   });
 
@@ -444,6 +484,23 @@ describe("OpenAPI document", () => {
       { bearer: [] },
     ]);
     expect(document.paths).not.toHaveProperty("/v1/refreshes");
+    for (const path of [
+      "/v1/refreshes",
+      "/v1/connections/synthetic/refreshes",
+    ]) {
+      const refresh = await service.app.request(
+        `http://127.0.0.1:8787${path}`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: "{}",
+        },
+      );
+      expect(refresh.status, path).toBe(404);
+    }
     // The documented totals perspectives are the ones the service accepts.
     for (const [perspective, status] of [
       ["billing", 200],

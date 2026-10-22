@@ -46,8 +46,8 @@ raw source responses; a backfill is a [refresh](#refreshes) with `{from, to}`.
 [OpenAPI 3.1](https://spec.openapis.org/oas/v3.1.1) description of the `/v1`
 routes this deployment serves, generated from the operation definitions. It
 declares the hosted OAuth flow with each operation's scope, or the local bearer
-token, and carries no owner data. Rules that combine inputs are stated in each
-operation's description rather than its schema.
+token, and carries no owner data. Its schemas give each input's shape; the value
+and combination rules this reference states still apply.
 
 The [command-line client](guides/local-setup.md#use-the-command-line) runs
 the same operations as kebab-case commands and flags and prints each operation's

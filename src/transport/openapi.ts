@@ -286,7 +286,7 @@ export function openApiDocument(
       title: "Fonds",
       version: FONDS_VERSION,
       description:
-        "A single-owner financial evidence ledger. Money is an exact decimal string; keep each amount with its currency and amount basis. Schemas give each input's shape; rules across inputs are stated in each operation's description, and the service answers 400 when one is broken.",
+        "A single-owner financial evidence ledger. Money is an exact decimal string; keep each amount with its currency and amount basis. Schemas give each input's shape. The service also enforces rules a schema does not express, such as supported currencies and inputs that depend on each other, and answers 400 when one is broken; the API reference states them.",
     },
     externalDocs: {
       url: "https://github.com/sagiba/fonds/blob/main/docs/api.md",
