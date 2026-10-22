@@ -4,11 +4,7 @@ import type { OperationDefinition } from "../application/operations.js";
 import { FONDS_VERSION } from "../application/version.js";
 import { jsonValueSchema } from "../domain/model.js";
 import { operationScope } from "./auth.js";
-import {
-  REFRESH_ALL_ROUTE,
-  type RestRoute,
-  restRoutes,
-} from "./rest-routes.js";
+import { pathInputs, REST_ROUTES, type RestRoute } from "./rest-routes.js";
 
 type JsonSchema = core.JSONSchema.JSONSchema;
 
@@ -57,6 +53,47 @@ const errorSchema: JsonSchema = {
   },
   required: ["error"],
 };
+
+const challengeHeader = {
+  "WWW-Authenticate": {
+    description: "The Bearer challenge, naming the scopes to request.",
+    schema: { type: "string" },
+  },
+};
+
+/** The error statuses an operation route can answer; the API reference lists their codes. */
+const ERROR_RESPONSES = {
+  400: { name: "InvalidInput", description: "The input is invalid." },
+  401: {
+    name: "Unauthorized",
+    description: "Authentication is missing or invalid.",
+    headers: challengeHeader,
+  },
+  403: {
+    name: "Forbidden",
+    description:
+      "The Host or Origin is untrusted, or the grant lacks the operation's scope.",
+    headers: challengeHeader,
+  },
+  404: { name: "NotFound", description: "The record does not exist." },
+  409: {
+    name: "Conflict",
+    description:
+      "The request conflicts with current state. Read it again before retrying.",
+  },
+  413: {
+    name: "TooLarge",
+    description: "The request body or the output is too large.",
+  },
+  500: { name: "InternalError", description: "The operation failed." },
+} as const;
+
+/** Only writes check versions or lifecycle state, and so conflict. */
+function errorStatuses(definition: OperationDefinition) {
+  return ([400, 401, 403, 404, 409, 413, 500] as const).filter(
+    (status) => status !== 409 || definition.access === "write",
+  );
+}
 
 /** Points schema-local definition refs at the document's shared components. */
 function relocateRefs(value: unknown): unknown {
@@ -111,25 +148,20 @@ function schemaConverter() {
 function describeOperation(
   definition: OperationDefinition,
   route: RestRoute,
-  operationId: string,
   context: { convert: Convert; security: ApiSecurity },
-  /** Input fields this route never accepts. */
-  excluded: readonly string[] = [],
 ) {
   const input = context.convert(definition.inputSchema, "input");
   const properties = { ...input.properties } as Record<string, JsonSchema>;
   const required = new Set(input.required);
-  const pathNames = [...route.path.matchAll(/:([A-Za-z]+)/g)].map(
-    ([, name]) => name!,
-  );
-  const parameters: object[] = pathNames.map((name) => {
+  const path = pathInputs(route);
+  const parameters: object[] = path.map((name) => {
     const schema = properties[name];
     if (!schema) {
       throw new Error("Route parameter missing from operation input");
     }
     return { name, in: "path", required: true, schema };
   });
-  for (const name of [...pathNames, ...excluded]) {
+  for (const name of [...path, ...(route.excluded ?? [])]) {
     delete properties[name];
     required.delete(name);
   }
@@ -165,7 +197,7 @@ function describeOperation(
     },
   };
   return {
-    operationId,
+    operationId: route.operationId ?? route.operation,
     description: definition.description,
     ...(parameters.length > 0 && { parameters }),
     ...(requestBody && { requestBody }),
@@ -174,7 +206,14 @@ function describeOperation(
       ...(route.accepted && {
         202: { description: "Started and still running.", ...output },
       }),
-      default: { $ref: "#/components/responses/Error" },
+      ...Object.fromEntries(
+        errorStatuses(definition).map((status) => [
+          status,
+          {
+            $ref: `#/components/responses/${ERROR_RESPONSES[status].name}`,
+          },
+        ]),
+      ),
     },
     security: [
       context.security.kind === "oauth2"
@@ -216,10 +255,9 @@ function securitySchemes(security: ApiSecurity) {
 }
 
 /**
- * An OpenAPI 3.1 description of the `/v1` routes these operations serve. Schemas
- * come from the operations' own Zod schemas, so the document cannot drift from
- * what the service validates. Without `origin`, servers resolve relative to
- * the document's own URL.
+ * An OpenAPI 3.1 description of the `/v1` routes these operations serve, from
+ * the route table the HTTP service registers and the operations' Zod schemas.
+ * Without `origin`, servers resolve relative to the document's own URL.
  */
 export function openApiDocument(
   operations: readonly OperationDefinition[],
@@ -227,29 +265,18 @@ export function openApiDocument(
 ) {
   const { components, convert } = schemaConverter();
   const context = { convert, security: options.security };
+  const definitions = new Map(
+    operations.map((definition) => [definition.name, definition]),
+  );
   const paths: Record<string, Record<string, unknown>> = {};
-
-  function add(route: RestRoute, operation: object) {
-    const path = route.path.replace(/:([A-Za-z]+)/g, "{$1}");
-    (paths[path] ??= {})[route.method.toLowerCase()] = operation;
-  }
-
-  for (const definition of operations) {
-    const route = restRoutes[definition.name];
-    if (!route) {
-      throw new Error("Operation has no REST route");
-    }
-    add(route, describeOperation(definition, route, definition.name, context));
-    if (definition.name === "refresh_connection") {
-      add(
-        REFRESH_ALL_ROUTE,
-        describeOperation(
-          definition,
-          REFRESH_ALL_ROUTE,
-          "refresh_all_connections",
-          context,
-          ["connectionId"],
-        ),
+  for (const route of REST_ROUTES) {
+    const definition = definitions.get(route.operation);
+    if (definition) {
+      const path = route.path.replace(/:([A-Za-z]+)/g, "{$1}");
+      (paths[path] ??= {})[route.method.toLowerCase()] = describeOperation(
+        definition,
+        route,
+        context,
       );
     }
   }
@@ -259,7 +286,7 @@ export function openApiDocument(
       title: "Fonds",
       version: FONDS_VERSION,
       description:
-        "A single-owner financial evidence ledger. Money is an exact decimal string; keep each amount with its currency and amount basis.",
+        "A single-owner financial evidence ledger. Money is an exact decimal string; keep each amount with its currency and amount basis. Schemas give each input's shape; rules across inputs are stated in each operation's description, and the service answers 400 when one is broken.",
     },
     externalDocs: {
       url: "https://github.com/sagiba/fonds/blob/main/docs/api.md",
@@ -269,14 +296,21 @@ export function openApiDocument(
     }),
     paths,
     components: {
-      schemas: components,
+      schemas: { ...components, Error: errorSchema },
       securitySchemes: securitySchemes(options.security),
-      responses: {
-        Error: {
-          description: "A public error code and fixed message.",
-          content: { "application/json": { schema: errorSchema } },
-        },
-      },
+      responses: Object.fromEntries(
+        Object.values(ERROR_RESPONSES).map(({ name, ...response }) => [
+          name,
+          {
+            ...response,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+        ]),
+      ),
     },
   };
 }

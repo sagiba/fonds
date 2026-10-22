@@ -88,12 +88,12 @@ interface Document {
   };
 }
 
-/** Each operation answers with its own name, showing which one a route reached. */
-const namingApplication: Application = {
+/** Each operation echoes its name and input, showing what a route delivered. */
+const echoApplication: Application = {
   backend: "postgres",
   operations: operationDefinitions.map((definition) => ({
     ...definition,
-    execute: async () => ({ name: definition.name }),
+    execute: async (input) => ({ name: definition.name, input }),
   })),
 };
 
@@ -109,7 +109,7 @@ afterEach(async () => {
 });
 
 function hostedService() {
-  const service = createHttpService(namingApplication, {
+  const service = createHttpService(echoApplication, {
     publicOrigin,
     ownerId: "owner",
     authProvider: {
@@ -161,6 +161,22 @@ function propertySchema(schema: unknown, name: string): Schema | undefined {
     }
   }
   return undefined;
+}
+
+function hostedRequest(
+  service: ReturnType<typeof createHttpService>,
+  method: string,
+  path: string,
+  input?: object,
+) {
+  return service.app.request(`${publicOrigin}${path}`, {
+    method: method.toUpperCase(),
+    headers: {
+      Authorization: "Bearer synthetic",
+      "Content-Type": "application/json",
+    },
+    ...(input && { body: JSON.stringify(input) }),
+  });
 }
 
 function operation(document: Document, method: string, path: string) {
@@ -220,23 +236,43 @@ describe("OpenAPI document", () => {
     );
   });
 
-  it("documents each route as reaching its own operation", async () => {
+  it("documents each route as delivering its inputs to its own operation", async () => {
     const service = hostedService();
     for (const [method, path, operationId] of ROUTES) {
-      const response = await service.app.request(
-        `${publicOrigin}${path.replace(/\{[A-Za-z]+\}/g, "synthetic")}`,
-        {
-          method: method.toUpperCase(),
-          headers: {
-            Authorization: "Bearer synthetic",
-            "Content-Type": "application/json",
-          },
-          ...(method !== "get" && { body: "{}" }),
-        },
-      );
+      const pathInputs: Record<string, string> = {};
+      const url = path.replace(/\{([A-Za-z]+)\}/g, (_, name: string) => {
+        pathInputs[name] = `synthetic-${name}`;
+        return pathInputs[name];
+      });
+      const response =
+        method === "get"
+          ? await hostedRequest(service, method, `${url}?limit=5`)
+          : await hostedRequest(service, method, url, { reason: "probe" });
       expect(await response.json(), `${method} ${path}`).toEqual({
         name: REACHED[operationId] ?? operationId,
+        input: {
+          ...pathInputs,
+          ...(method === "get" ? { limit: 5 } : { reason: "probe" }),
+        },
       });
+    }
+  });
+
+  it("refuses an input its route carries elsewhere or excludes", async () => {
+    const service = hostedService();
+    for (const [method, path, input] of [
+      ["get", "/v1/cards/synthetic?cardId=other"],
+      ["get", "/v1/transactions?limit=5&limit=6"],
+      [
+        "patch",
+        "/v1/transactions/synthetic/annotation",
+        { transactionId: "other", expectedVersion: 0 },
+      ],
+      ["post", "/v1/connections/synthetic/refreshes", { connectionId: "x" }],
+      ["post", "/v1/refreshes", { connectionId: "synthetic" }],
+    ] as const) {
+      const response = await hostedRequest(service, method, path, input);
+      expect(response.status, `${method} ${path}`).toBe(400);
     }
   });
 
@@ -326,8 +362,29 @@ describe("OpenAPI document", () => {
     expect(Object.keys(refreshAll.responses)).toEqual([
       "200",
       "202",
-      "default",
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "413",
+      "500",
     ]);
+    // Reads check no versions or lifecycle state, so they never conflict.
+    expect(Object.keys(getTransaction.responses)).toEqual([
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500",
+    ]);
+    expect(
+      operation(document, "get", "/v1/transactions/totals").parameters?.find(
+        ({ name }) => name === "perspective",
+      )?.schema.enum,
+    ).toEqual(["spending", "billing"]);
   });
 
   it("declares the issuer's OAuth flow and each operation's scope", async () => {
@@ -387,6 +444,17 @@ describe("OpenAPI document", () => {
       { bearer: [] },
     ]);
     expect(document.paths).not.toHaveProperty("/v1/refreshes");
+    // The documented totals perspectives are the ones the service accepts.
+    for (const [perspective, status] of [
+      ["billing", 200],
+      ["all", 400],
+    ] as const) {
+      const totals = await service.app.request(
+        `http://127.0.0.1:8787/v1/transactions/totals?perspective=${perspective}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      expect(totals.status, perspective).toBe(status);
+    }
     expect(
       document.paths["/v1/connections/{connectionId}/refreshes"],
     ).not.toHaveProperty("post");

@@ -54,7 +54,7 @@ kebab-case filenames. Add a provider under `providers/<name>/`, exporting its
 `runtime/`, the root executables and `targets/` own credential input, startup
 and wiring concrete implementations together. Each operation is defined once in
 `application/operations.ts`; HTTP routes, MCP tools and CLI commands derive from
-it. Within those dependencies, the
+it ([HTTP API internals](http-api.md)). Within those dependencies, the
 [ESLint configuration](../../eslint.config.mjs) enforces import boundaries in
 every form, including type-only imports, re-exports and `import()`, and
 `tests/tooling/module-boundaries.test.mjs` verifies them:

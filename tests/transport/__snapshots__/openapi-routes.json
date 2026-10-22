@@ -6,7 +6,12 @@
     ],
     "responses": [
       "200",
-      "default"
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
     ]
   },
   "GET /v1/connections/{connectionId}": {
@@ -19,35 +24,12 @@
     ],
     "responses": [
       "200",
-      "default"
-    ]
-  },
-  "GET /v1/cards": {
-    "operationId": "list_cards",
-    "scopes": [
-      "financial:read"
-    ],
-    "parameters": [
-      "query connectionId (required)",
-      "query limit",
-      "query cursor"
-    ],
-    "responses": [
-      "200",
-      "default"
-    ]
-  },
-  "GET /v1/cards/{cardId}": {
-    "operationId": "get_card",
-    "scopes": [
-      "financial:read"
-    ],
-    "parameters": [
-      "path cardId (required)"
-    ],
-    "responses": [
-      "200",
-      "default"
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
     ]
   },
   "GET /v1/accounts": {
@@ -62,7 +44,12 @@
     ],
     "responses": [
       "200",
-      "default"
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
     ]
   },
   "GET /v1/accounts/{accountId}": {
@@ -75,7 +62,133 @@
     ],
     "responses": [
       "200",
-      "default"
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
+    ]
+  },
+  "GET /v1/cards": {
+    "operationId": "list_cards",
+    "scopes": [
+      "financial:read"
+    ],
+    "parameters": [
+      "query connectionId (required)",
+      "query limit",
+      "query cursor"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
+    ]
+  },
+  "GET /v1/cards/{cardId}": {
+    "operationId": "get_card",
+    "scopes": [
+      "financial:read"
+    ],
+    "parameters": [
+      "path cardId (required)"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
+    ]
+  },
+  "POST /v1/connections/{connectionId}/refreshes": {
+    "operationId": "refresh_connection",
+    "scopes": [
+      "financial:write"
+    ],
+    "parameters": [
+      "path connectionId (required)"
+    ],
+    "body": [
+      "from",
+      "to"
+    ],
+    "responses": [
+      "200",
+      "202",
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "413",
+      "500"
+    ]
+  },
+  "GET /v1/connections/{connectionId}/refreshes": {
+    "operationId": "list_refreshes",
+    "scopes": [
+      "financial:read"
+    ],
+    "parameters": [
+      "path connectionId (required)",
+      "query cursor",
+      "query limit"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
+    ]
+  },
+  "POST /v1/refreshes": {
+    "operationId": "refresh_all_connections",
+    "scopes": [
+      "financial:write"
+    ],
+    "body": [
+      "from",
+      "to"
+    ],
+    "responses": [
+      "200",
+      "202",
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "413",
+      "500"
+    ]
+  },
+  "GET /v1/refreshes/{refreshId}": {
+    "operationId": "get_refresh",
+    "scopes": [
+      "financial:read"
+    ],
+    "parameters": [
+      "path refreshId (required)"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
     ]
   },
   "GET /v1/transactions": {
@@ -110,22 +223,12 @@
     ],
     "responses": [
       "200",
-      "default"
-    ]
-  },
-  "GET /v1/transactions/{transactionId}": {
-    "operationId": "get_transaction",
-    "scopes": [
-      "financial:read"
-    ],
-    "parameters": [
-      "path transactionId (required)",
-      "query detail",
-      "query includeEvidence"
-    ],
-    "responses": [
-      "200",
-      "default"
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
     ]
   },
   "GET /v1/transactions/totals": {
@@ -158,7 +261,32 @@
     ],
     "responses": [
       "200",
-      "default"
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
+    ]
+  },
+  "GET /v1/transactions/{transactionId}": {
+    "operationId": "get_transaction",
+    "scopes": [
+      "financial:read"
+    ],
+    "parameters": [
+      "path transactionId (required)",
+      "query detail",
+      "query includeEvidence"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
     ]
   },
   "GET /v1/events": {
@@ -173,7 +301,12 @@
     ],
     "responses": [
       "200",
-      "default"
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
     ]
   },
   "GET /v1/connections/{connectionId}/sync-runs": {
@@ -188,7 +321,12 @@
     ],
     "responses": [
       "200",
-      "default"
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
     ]
   },
   "PATCH /v1/transactions/{transactionId}/annotation": {
@@ -210,68 +348,13 @@
     ],
     "responses": [
       "200",
-      "default"
-    ]
-  },
-  "POST /v1/connections/{connectionId}/refreshes": {
-    "operationId": "refresh_connection",
-    "scopes": [
-      "financial:write"
-    ],
-    "parameters": [
-      "path connectionId (required)"
-    ],
-    "body": [
-      "from",
-      "to"
-    ],
-    "responses": [
-      "200",
-      "202",
-      "default"
-    ]
-  },
-  "GET /v1/connections/{connectionId}/refreshes": {
-    "operationId": "list_refreshes",
-    "scopes": [
-      "financial:read"
-    ],
-    "parameters": [
-      "path connectionId (required)",
-      "query cursor",
-      "query limit"
-    ],
-    "responses": [
-      "200",
-      "default"
-    ]
-  },
-  "POST /v1/refreshes": {
-    "operationId": "refresh_all_connections",
-    "scopes": [
-      "financial:write"
-    ],
-    "body": [
-      "from",
-      "to"
-    ],
-    "responses": [
-      "200",
-      "202",
-      "default"
-    ]
-  },
-  "GET /v1/refreshes/{refreshId}": {
-    "operationId": "get_refresh",
-    "scopes": [
-      "financial:read"
-    ],
-    "parameters": [
-      "path refreshId (required)"
-    ],
-    "responses": [
-      "200",
-      "default"
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "413",
+      "500"
     ]
   },
   "POST /v1/annotations/undo": {
@@ -285,7 +368,13 @@
     ],
     "responses": [
       "200",
-      "default"
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "413",
+      "500"
     ]
   },
   "POST /v1/transactions/{transactionId}/link-pending": {
@@ -306,7 +395,13 @@
     ],
     "responses": [
       "200",
-      "default"
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "413",
+      "500"
     ]
   },
   "POST /v1/transactions/{transactionId}/unlink-pending": {
@@ -327,7 +422,13 @@
     ],
     "responses": [
       "200",
-      "default"
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "413",
+      "500"
     ]
   },
   "POST /v1/transactions/{transactionId}/removal": {
@@ -344,7 +445,13 @@
     ],
     "responses": [
       "200",
-      "default"
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "413",
+      "500"
     ]
   }
 }

@@ -1,7 +1,7 @@
 import { isPathAddressable } from "../application/financial-store.js";
 import type { OperationInvoker } from "../application/operations.js";
 import { isHttpsOrLoopback, LOOPBACK_HOSTS } from "./auth.js";
-import { REFRESH_ALL_ROUTE, restRoutes } from "./rest-routes.js";
+import { pathInputs, REST_ROUTES } from "./rest-routes.js";
 
 /** A failed remote call: the service's public error code and message only. */
 export class RemoteOperationError extends Error {
@@ -102,12 +102,16 @@ export function createRestClient(options: {
   const send = options.fetch ?? fetch;
   return {
     async invoke(name, input) {
-      // Without a connection, refresh_connection starts every connection's.
+      const values = { ...(input as Record<string, unknown>) };
+      const routes = REST_ROUTES.filter((entry) => entry.operation === name);
+      // Of several routes, the one whose path the input fills and whose
+      // refused inputs it omits, e.g. refreshing one connection or all.
       const route =
-        name === "refresh_connection" &&
-        (input as { connectionId?: unknown }).connectionId === undefined
-          ? REFRESH_ALL_ROUTE
-          : restRoutes[name];
+        routes.find(
+          (entry) =>
+            pathInputs(entry).every((key) => values[key] !== undefined) &&
+            !entry.excluded?.some((key) => values[key] !== undefined),
+        ) ?? routes[0];
       if (!route) {
         throw new RemoteOperationError(
           0,
@@ -115,7 +119,6 @@ export function createRestClient(options: {
           "Operation unavailable.",
         );
       }
-      const values = { ...(input as Record<string, unknown>) };
       const path = route.path.replace(/:([A-Za-z]+)/g, (_, key: string) => {
         const value = values[key];
         delete values[key];
