@@ -98,8 +98,9 @@ function identity(
   };
 }
 
-function setup(provider?: HostedAuthProvider) {
-  const application: Application = {
+function setup(
+  provider?: HostedAuthProvider,
+  application: Application = {
     backend: "sqlite",
     operations: operationDefinitions.map((definition) => ({
       ...definition,
@@ -107,7 +108,8 @@ function setup(provider?: HostedAuthProvider) {
       outputSchema: z.object({ name: z.string() }).strict(),
       execute: vi.fn(async () => ({ name: definition.name })),
     })),
-  };
+  },
+) {
   const authProvider = provider ?? {
     issuer,
     endpoints,
@@ -360,6 +362,32 @@ describe("hosted trusted auth boundary", () => {
       }
     },
   );
+
+  it("rejects request syntax before scope, and scope before operation validation", async () => {
+    const db = await openDatabase(":memory:");
+    try {
+      const { request } = setup(undefined, createApplication(db));
+      const path = "/v1/transactions/synthetic/annotation";
+      const patch = (bearer: string, body: string) =>
+        request(path, bearer, { method: "PATCH", body });
+      // Malformed JSON fails before the grant is checked.
+      const syntax = await patch("read", "{");
+      expect(syntax.status).toBe(400);
+      expect(await syntax.json()).toEqual({
+        error: { code: "invalid_input", message: "Invalid request input." },
+      });
+      // Well-formed input missing expectedVersion: a read grant is refused
+      // before the operation validates it; a write grant reaches validation.
+      expect((await patch("read", "{}")).status).toBe(403);
+      const invalid = await patch("write", "{}");
+      expect(invalid.status).toBe(400);
+      expect(await invalid.json()).toEqual({
+        error: { code: "invalid_input", message: "Invalid operation input." },
+      });
+    } finally {
+      await db.close();
+    }
+  });
 
   it("rejects mixed hosted/local configuration at runtime and malformed public origins", () => {
     const { application } = setup();

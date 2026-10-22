@@ -17,8 +17,8 @@ refuses, and when a success answers 202. Three consumers read that one table:
   requests from it;
 - [openapi.ts](../../src/transport/openapi.ts) generates `/v1/openapi.json`.
 
-A new operation needs a route entry; creating the HTTP service fails for an
-operation without one. An operation whose capability is absent, such as
+The table is keyed by operation name, so an operation without a route, or a
+route for an unknown operation, fails to compile. An operation whose capability is absent, such as
 refreshes, has no route and no description. Hono matches routes in registration
 order, so a static path such as `/v1/transactions/totals` must precede a
 parameter path it would also match.

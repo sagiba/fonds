@@ -258,12 +258,28 @@ function sourceTextPreview() {
   return preview;
 }
 
-/** Financial wire fields are deliberate; retained provider JSON never crosses this boundary. */
+type CompactTransaction = z.input<typeof transactionOutputSchema>;
+
+type DetailedTransaction = z.input<typeof transactionDetailOutputSchema>;
+
+/**
+ * Financial wire fields are deliberate; retained provider JSON never crosses
+ * this boundary. Compact unless `detail`; list pages are always compact.
+ */
+export function presentWireTransaction(
+  row: TransactionView,
+): CompactTransaction;
+export function presentWireTransaction(
+  row: TransactionView,
+  detail: boolean,
+  includeEvidence?: boolean,
+): CompactTransaction | DetailedTransaction;
+
 export function presentWireTransaction(
   row: TransactionView,
   detail = false,
   includeEvidence = false,
-) {
+): CompactTransaction | DetailedTransaction {
   const source = sourceTextPreview();
   const transaction = {
     id: row.id,

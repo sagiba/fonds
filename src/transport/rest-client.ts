@@ -1,7 +1,10 @@
 import { isPathAddressable } from "../application/financial-store.js";
-import type { OperationInvoker } from "../application/operations.js";
+import type {
+  OperationInvoker,
+  OperationName,
+} from "../application/operations.js";
 import { isHttpsOrLoopback, LOOPBACK_HOSTS } from "./auth.js";
-import { pathInputs, REST_ROUTES } from "./rest-routes.js";
+import { OPERATION_ROUTES, pathInputs, type RestRoute } from "./rest-routes.js";
 
 /** A failed remote call: the service's public error code and message only. */
 export class RemoteOperationError extends Error {
@@ -103,7 +106,9 @@ export function createRestClient(options: {
   return {
     async invoke(name, input) {
       const values = { ...(input as Record<string, unknown>) };
-      const routes = REST_ROUTES.filter((entry) => entry.operation === name);
+      const routes: readonly RestRoute[] = Object.hasOwn(OPERATION_ROUTES, name)
+        ? OPERATION_ROUTES[name as OperationName]
+        : [];
       // Of several routes, the one whose path the input fills and whose
       // refused inputs it omits, e.g. refreshing one connection or all.
       const route =

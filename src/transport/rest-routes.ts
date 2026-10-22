@@ -1,9 +1,10 @@
+import type { OperationName } from "../application/operations.js";
+
 /**
  * One `/v1` route of an operation. The HTTP service registers it, the REST
  * client calls it and the API description documents it, so all three agree.
  */
 export interface RestRoute {
-  operation: string;
   /** The API description's name for the route; defaults to the operation's. */
   operationId?: string;
   method: "GET" | "POST" | "PATCH";
@@ -29,82 +30,68 @@ function refreshStillRunning(output: unknown) {
   );
 }
 
-/** Registration order: a static path precedes a parameter path it would match. */
-export const REST_ROUTES: readonly RestRoute[] = [
-  { operation: "list_connections", method: "GET", path: "/v1/connections" },
-  {
-    operation: "get_connection",
-    method: "GET",
-    path: "/v1/connections/:connectionId",
-  },
-  { operation: "list_accounts", method: "GET", path: "/v1/accounts" },
-  { operation: "get_account", method: "GET", path: "/v1/accounts/:accountId" },
-  { operation: "list_cards", method: "GET", path: "/v1/cards" },
-  { operation: "get_card", method: "GET", path: "/v1/cards/:cardId" },
-  {
-    operation: "refresh_connection",
-    method: "POST",
-    path: "/v1/connections/:connectionId/refreshes",
-    accepted: refreshStillRunning,
-  },
-  {
+/**
+ * Each operation's routes; a missing operation fails to compile. Routes register
+ * in this order, so a static path precedes a parameter path it would also match.
+ */
+export const OPERATION_ROUTES = {
+  list_connections: [{ method: "GET", path: "/v1/connections" }],
+  get_connection: [{ method: "GET", path: "/v1/connections/:connectionId" }],
+  list_accounts: [{ method: "GET", path: "/v1/accounts" }],
+  get_account: [{ method: "GET", path: "/v1/accounts/:accountId" }],
+  list_cards: [{ method: "GET", path: "/v1/cards" }],
+  get_card: [{ method: "GET", path: "/v1/cards/:cardId" }],
+  refresh_connection: [
+    {
+      method: "POST",
+      path: "/v1/connections/:connectionId/refreshes",
+      accepted: refreshStillRunning,
+    },
     // Without a connection, refresh_connection starts every connection's.
-    operation: "refresh_connection",
-    operationId: "refresh_all_connections",
-    method: "POST",
-    path: "/v1/refreshes",
-    excluded: ["connectionId"],
-    accepted: refreshStillRunning,
-  },
-  {
-    operation: "list_refreshes",
-    method: "GET",
-    path: "/v1/connections/:connectionId/refreshes",
-  },
-  { operation: "get_refresh", method: "GET", path: "/v1/refreshes/:refreshId" },
-  { operation: "list_transactions", method: "GET", path: "/v1/transactions" },
-  {
-    operation: "get_transaction_totals",
-    method: "GET",
-    path: "/v1/transactions/totals",
-  },
-  {
-    operation: "get_transaction",
-    method: "GET",
-    path: "/v1/transactions/:transactionId",
-  },
-  { operation: "list_events", method: "GET", path: "/v1/events" },
-  {
-    operation: "list_sync_runs",
-    method: "GET",
-    path: "/v1/connections/:connectionId/sync-runs",
-  },
-  {
-    operation: "update_annotation",
-    method: "PATCH",
-    path: "/v1/transactions/:transactionId/annotation",
-  },
-  {
-    operation: "undo_annotation",
-    method: "POST",
-    path: "/v1/annotations/undo",
-  },
-  {
-    operation: "link_pending_transaction",
-    method: "POST",
-    path: "/v1/transactions/:transactionId/link-pending",
-  },
-  {
-    operation: "unlink_pending_transaction",
-    method: "POST",
-    path: "/v1/transactions/:transactionId/unlink-pending",
-  },
-  {
-    operation: "confirm_removal",
-    method: "POST",
-    path: "/v1/transactions/:transactionId/removal",
-  },
-];
+    {
+      operationId: "refresh_all_connections",
+      method: "POST",
+      path: "/v1/refreshes",
+      excluded: ["connectionId"],
+      accepted: refreshStillRunning,
+    },
+  ],
+  list_refreshes: [
+    { method: "GET", path: "/v1/connections/:connectionId/refreshes" },
+  ],
+  get_refresh: [{ method: "GET", path: "/v1/refreshes/:refreshId" }],
+  list_transactions: [{ method: "GET", path: "/v1/transactions" }],
+  get_transaction_totals: [{ method: "GET", path: "/v1/transactions/totals" }],
+  get_transaction: [{ method: "GET", path: "/v1/transactions/:transactionId" }],
+  list_events: [{ method: "GET", path: "/v1/events" }],
+  list_sync_runs: [
+    { method: "GET", path: "/v1/connections/:connectionId/sync-runs" },
+  ],
+  update_annotation: [
+    { method: "PATCH", path: "/v1/transactions/:transactionId/annotation" },
+  ],
+  undo_annotation: [{ method: "POST", path: "/v1/annotations/undo" }],
+  link_pending_transaction: [
+    { method: "POST", path: "/v1/transactions/:transactionId/link-pending" },
+  ],
+  unlink_pending_transaction: [
+    { method: "POST", path: "/v1/transactions/:transactionId/unlink-pending" },
+  ],
+  confirm_removal: [
+    { method: "POST", path: "/v1/transactions/:transactionId/removal" },
+  ],
+} satisfies Record<OperationName, readonly [RestRoute, ...RestRoute[]]>;
+
+export interface OperationRoute extends RestRoute {
+  operation: OperationName;
+}
+
+/** Every route with its operation, in registration order. */
+export const REST_ROUTES: readonly OperationRoute[] = Object.entries(
+  OPERATION_ROUTES,
+).flatMap(([operation, routes]) =>
+  routes.map((route) => ({ ...route, operation: operation as OperationName })),
+);
 
 /** The inputs a route's path carries, in path order. */
 export function pathInputs(route: RestRoute): string[] {

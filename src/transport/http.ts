@@ -153,11 +153,6 @@ export function createHttpService(
   const operations = new Map(
     application.operations.map((operation) => [operation.name, operation]),
   );
-  for (const name of operations.keys()) {
-    if (!REST_ROUTES.some((route) => route.operation === name)) {
-      throw new Error("Operation has no REST route");
-    }
-  }
   const token = Buffer.from(options.token ?? "");
   const app = new Hono<{ Variables: { identity: TrustedIdentity } }>();
   const { onRequest } = options;
