@@ -301,7 +301,7 @@ describe("Isracard extraction", () => {
       recurring: null,
       providerTransactionCode: "1",
     });
-    expect(discount.cardPresent).toBeNull();
+    expect(discount.cardPresent).toBe(false);
     expect(discount.details.provider.isracard!.rows).toContainEqual(
       expect.objectContaining({
         discountAmount: "10",

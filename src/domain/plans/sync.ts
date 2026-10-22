@@ -475,6 +475,13 @@ function retainEvidence(
   input.details.issues = [
     ...new Set([...input.details.issues, ...persistentIssues]),
   ];
+  const payment = adapter.paymentContextFromRetainedEvidence?.(input);
+  if (payment) {
+    Object.assign(input, payment.payment);
+    input.details.issues = [
+      ...new Set([...input.details.issues, ...payment.issues]),
+    ];
+  }
   recordPaymentContextConflicts(input, earlier);
 }
 

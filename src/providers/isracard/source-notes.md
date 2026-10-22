@@ -298,30 +298,34 @@ and every code had one label. That label is the evidence for a kind:
   tokenized card, card-on-file subscriptions included, not a mobile wallet. A
   detail's `transactionType` or `walletPayName` can name a wallet. Standing
   orders are legacy `isHoraatKeva` and DigitalV3 `isdirectDebit`. Collected data
-  carries no MCC. Foreign rows state merchant number `0`, and their city slot
-  can hold a phone number.
-- **Approvals use different encodings:** named wallet, security and channel
-  descriptors, merchant location/category/acquirer facts and credit/recurrence
-  indicators are retained as scalar evidence. Their numeric flags are not posted
-  booleans; their category codes are not established MCCs. Detail method,
-  recurrence, reason and website slots are retained even when null. These are
-  transaction facts, unlike excluded request metadata, UI controls and duplicate
-  holder context; unknown descendants remain excluded. Detail
-  `sumOfCompensation` is a system-code label, not money, and is excluded.
-- **Policy:** only `U` and `V`, wallet names from a bound detail, the
-  standing-order flags and a transfer's bound `motavName` become typed facts; the
-  name carries no role beyond the transfer. `presentCard` true becomes
-  `cardPresent` true; false states nothing, and the other flags stay raw. An
-  all-zero merchant number or a city without letters is not published. DigitalV3 `countryCode` is used only as a valid ISO
-  3166-1 alpha-3 code. An absent optional detail preserves an unambiguously matched
+  has no verified MCC mapping. Foreign rows state merchant number `0`, and their
+  city slot can hold contact information. A bound detail's `clearingData` explicitly
+  says presented or not presented. Named Apple Pay occurs in both modes; `R`
+  does not prove terminal use. Bound detail `dealCode` restates DigitalV3's
+  channel code where both are present and uses that codebook.
+- **Approvals use different encodings:** wallet/security/channel descriptors,
+  merchant facts and credit/recurrence indicators remain scalar evidence. Numeric
+  flags are not posted booleans; category codes are not established MCCs.
+  `APPLE MC` names Apple Pay; internet descriptions establish online use without
+  treating security code `V` as posted 3-D Secure. Detail method, recurrence,
+  reason and website slots remain evidence even when null. Request/UI/holder
+  metadata and unknown descendants stay excluded; `sumOfCompensation` is an
+  excluded system-code label, not money.
+- **Policy:** channel, wallet and presentation evidence are independent. Explicit
+  online/telephone evidence establishes remote use; a bound presentation label
+  supplies presence directly. The negative DigitalV3 flag alone states nothing.
+  Named remote wallet use is online, while a wallet name alone implies no channel.
+  Conflicting known statements leave the affected facts unknown. Retained bound
+  details remain evidence through sparse refreshes, so omitting them cannot clear
+  their conflicts. Valid same-row
+  city and ISO alpha-3 country fields are used on pending and posted rows; phone-only
+  cities and explicit web/email addresses are rejected. A transfer's bound
+  `motavName` carries no further party role. An absent optional detail preserves an unambiguously matched
   native transfer's prior counterparty name; a valid bound detail with an empty
   counterparty clears it.
-- **Checks:** [extraction] "maps DigitalV3 tranzacCodeType %j to %j / 3-D
-  Secure %j", "leaves conflicting explicit wallet names null…",
-  "does not infer a wallet from flags…", "names a transfer's counterparty only
-  from its bound detail's nonempty motavName", "keeps only a valid ISO 3166-1
-  alpha-3 merchant country code", "keeps same-row DigitalV3 moreInfo as additional
-  information and supplies no MCC".
+- **Checks:** [payment context] covers independent payment facts and conflicts;
+  [pending] covers approval enrichment; [extraction] covers bound-detail and
+  merchant projection.
 
 ## isracard.detail: optional transaction details
 
@@ -403,6 +407,7 @@ and every code had one label. That label is the evidence for a kind:
   statement summaries raw-only…".
 
 [amount basis]: ../../../tests/providers/isracard/amount-basis.test.ts
+[payment context]: ../../../tests/providers/isracard/payment-context.test.ts
 [collection]: ../../../tests/providers/isracard/collection.test.ts
 [extraction]: ../../../tests/providers/isracard/extraction.test.ts
 [refresh]: ../../../tests/providers/isracard/repeated-refresh.test.ts

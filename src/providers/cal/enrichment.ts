@@ -243,6 +243,11 @@ function rowPaymentContext(
   );
   const walletCode = token(row.walletProviderCode);
   const walletDescription = row.walletProviderDesc;
+  const namedApplePay = walletCode === "3" && walletDescription === "Apple Pay";
+  const internetWallet =
+    walletCode === "32" ||
+    (["2", "14", "22", "85"].includes(walletCode ?? "") &&
+      walletDescription === "אינטרנט");
   const issues: string[] = [];
   const evidence: CalComment[] = [];
 
@@ -251,13 +256,12 @@ function rowPaymentContext(
     way === "12" ||
     way === "15" ||
     way === "35" ||
-    // Wallet code 32 (internet) alone evidences an online authorization.
-    walletCode === "32";
+    internetWallet ||
+    secureComments.length > 0 ||
+    // A named wallet used without card presence is remote wallet use, not a terminal tap.
+    (namedApplePay && row.transCardPresentInd === false);
   let authorizationMethod: CalPaymentContext["authorizationMethod"];
-  if (
-    (contactlessComments.length > 0 && way !== null && way !== "21") ||
-    (contactless && online)
-  ) {
+  if (contactless && online) {
     authorizationMethod = null;
     issues.push("conflicting_payment_context");
   } else if (contactless) {
@@ -269,7 +273,7 @@ function rowPaymentContext(
 
   const secureWay = way === "15" || way === "35";
   let threeDSecureUsed: true | null | undefined;
-  if (secureComments.length > 0 && way !== null && !secureWay) {
+  if (contactless && (secureComments.length > 0 || secureWay)) {
     threeDSecureUsed = null;
     issues.push("conflicting_payment_context");
   } else if (secureComments.length > 0 || secureWay) {
@@ -285,10 +289,7 @@ function rowPaymentContext(
           : undefined,
       authorizationMethod,
       // Only the reviewed code/label pair establishes a wallet.
-      wallet:
-        walletCode === "3" && walletDescription === "Apple Pay"
-          ? "apple_pay"
-          : undefined,
+      wallet: namedApplePay ? "apple_pay" : undefined,
       threeDSecureUsed,
       // A standing order is evidenced by its execution method or its type.
       recurring: way === "9" || typeCode === "9" ? true : undefined,

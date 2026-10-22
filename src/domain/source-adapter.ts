@@ -2,6 +2,7 @@ import type { CardDiscovery } from "./cards.js";
 import type { CredentialInput, ProviderCredentials } from "./credentials.js";
 import type {
   JsonObject,
+  ReadPaymentContext,
   TransactionFacts,
   TransactionInput,
 } from "./model.js";
@@ -72,6 +73,13 @@ export interface SourceAdapter {
     previous: JsonObject,
     incoming: JsonObject,
   ): JsonObject;
+  /** Reinterpret current payment facts with retained optional evidence after component merging. */
+  paymentContextFromRetainedEvidence?(input: Readonly<TransactionFacts>):
+    | {
+        payment: ReadPaymentContext;
+        issues: string[];
+      }
+    | undefined;
   /**
    * Identity groups declare `identity.baseKey`; retained rows preserve their
    * distinguishing source facts. Shared matching uses the current observation.

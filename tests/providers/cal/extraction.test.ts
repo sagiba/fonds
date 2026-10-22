@@ -205,7 +205,7 @@ describe("CAL extraction", () => {
 
   it.each([
     [3, "Apple Pay", true, "apple_pay", null],
-    [3, "Apple Pay", false, "apple_pay", null],
+    [3, "Apple Pay", false, "apple_pay", "online"],
     [32, "אינטרנט", false, null, "online"],
     [32, "אינטרנט", true, null, "online"],
     [0, "", false, null, null],

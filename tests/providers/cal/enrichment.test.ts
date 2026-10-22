@@ -93,7 +93,7 @@ describe("CAL comment templates and payment context", () => {
     const commentOnly = templateRow("SECURE");
     delete commentOnly.trnExacWay;
     expect(extractOne(commentOnly)).toMatchObject({
-      authorizationMethod: null,
+      authorizationMethod: "online",
       threeDSecureUsed: true,
     });
     const methodOnly = templateRow("SECURE");
@@ -143,6 +143,74 @@ describe("CAL comment templates and payment context", () => {
       wallet: null,
     });
     expect(unlabeled.details.issues).toEqual([]);
+  });
+
+  it.each([2, 14, 22, 85])(
+    "uses the explicit internet label on wallet code %s",
+    (code) => {
+      const row = templateRow("OTHER-TEMPLATES");
+      Object.assign(row, {
+        comments: [],
+        trnExacWay: 9,
+        walletProviderCode: code,
+        walletProviderDesc: "אינטרנט",
+      });
+      expect(extractOne(row)).toMatchObject({
+        authorizationMethod: "online",
+        wallet: null,
+        recurring: true,
+      });
+      row.walletProviderDesc = "Synthetic unverified wallet label";
+      expect(extractOne(row).authorizationMethod).toBeNull();
+    },
+  );
+
+  it("separates remote Apple Pay from terminal wallet use without guessing an unknown execution method", () => {
+    const row = templateRow("OTHER-TEMPLATES");
+    Object.assign(row, {
+      comments: [],
+      trnExacWay: 1,
+      walletProviderCode: 3,
+      walletProviderDesc: "Apple Pay",
+      transCardPresentInd: false,
+    });
+    expect(extractOne(row)).toMatchObject({
+      wallet: "apple_pay",
+      cardPresent: false,
+      authorizationMethod: "online",
+    });
+    row.transCardPresentInd = true;
+    expect(extractOne(row)).toMatchObject({
+      wallet: "apple_pay",
+      cardPresent: true,
+      authorizationMethod: null,
+    });
+    row.transCardPresentInd = null;
+    expect(extractOne(row).authorizationMethod).toBeNull();
+  });
+
+  it.each([12, 999])(
+    "keeps explicit secure-online text when execution code %s states no opposing fact",
+    (way) => {
+      const row = templateRow("SECURE");
+      row.trnExacWay = way;
+      const result = extractOne(row);
+      expect(result).toMatchObject({
+        authorizationMethod: "online",
+        threeDSecureUsed: true,
+      });
+      expect(result.details.issues).not.toContain(
+        "conflicting_payment_context",
+      );
+    },
+  );
+
+  it("does not let an unknown execution code veto an explicit contactless statement", () => {
+    const row = templateRow("CONTACTLESS");
+    row.trnExacWay = 999;
+    const result = extractOne(row);
+    expect(result.authorizationMethod).toBe("contactless");
+    expect(result.details.issues).not.toContain("conflicting_payment_context");
   });
 
   it("leaves conflicting payment context null with a source issue and keeps the comments", () => {

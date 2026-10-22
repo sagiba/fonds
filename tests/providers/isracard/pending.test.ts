@@ -143,6 +143,76 @@ async function ingest(
 }
 
 describe("Isracard authorization extraction", () => {
+  it("projects same-row merchant location, named wallet and source descriptions without guessing accounting or security codes", () => {
+    const [row] = facts(
+      capture({
+        rows: [
+          {
+            ...approval(),
+            cityDescription: "Invented City",
+            countryCode: "ISR",
+            walletTypeDescription: "APPLE MC",
+            tranzacCodeDescription: "אינטרנט",
+            securityIndicatorCode: "V",
+            transactionDescription: "Synthetic authorization description",
+            transactionCode: 901,
+            branchCodeType: 14,
+            branchCodeDescription: "Synthetic category",
+            isWalletTransaction: 0,
+          },
+        ],
+      }),
+    );
+    expect(row).toMatchObject({
+      kind: "unknown",
+      amountBasis: "authorization",
+      wallet: "apple_pay",
+      cardPresent: false,
+      authorizationMethod: "online",
+      threeDSecureUsed: null,
+      merchantCategoryCode: null,
+      description: "Synthetic authorization description",
+      providerTransactionCode: "901",
+      details: { merchant: { city: "Invented City", countryCode: "ISR" } },
+    });
+  });
+
+  it.each([
+    "+99 555 5555",
+    "https://merchant.example",
+    "www.merchant.example",
+    "contact@merchant.example",
+    "SHOP.EXAMPLE.COM",
+    "help.example.com",
+    "shop.example.com/bill",
+  ])(
+    "keeps non-location pending city %s out of merchant fields",
+    (cityDescription) => {
+      const [row] = facts(
+        capture({
+          rows: [{ ...approval(), cityDescription, countryCode: "ZZZ" }],
+        }),
+      );
+      expect(row!.details.merchant).toMatchObject({
+        city: null,
+        countryCode: null,
+      });
+      expect(row!.details.provider.isracard!.rows).toEqual([
+        expect.objectContaining({ cityDescription, countryCode: "ZZZ" }),
+      ]);
+    },
+  );
+
+  it.each(["St. Louis", "St.Louis", "St.Jo"])(
+    "keeps dotted place-name candidate %s",
+    (cityDescription) => {
+      expect(
+        facts(capture({ rows: [{ ...approval(), cityDescription }] }))[0]!
+          .details.merchant.city,
+      ).toBe(cityDescription);
+    },
+  );
+
   it("uses the full opaque detail-address tuple, without confirmation display or purchase date, for native pending identity", () => {
     const source = capture();
     const result = extract(source);

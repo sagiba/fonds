@@ -254,6 +254,12 @@ for (const backend of backends) {
 
     it.each([
       ["+99 999 9999999", null],
+      ["https://merchant.example", null],
+      ["www.merchant.example", null],
+      ["contact@merchant.example", null],
+      ["SHOP.EXAMPLE.COM", null],
+      ["shop.example.com/bill", null],
+      ["St.Louis", "St.Louis"],
       ["Synthetic city", "Synthetic city"],
     ])(
       "restores a stored merchant city %j through a sparse read only when it names a place",
