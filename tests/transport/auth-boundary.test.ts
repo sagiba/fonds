@@ -365,6 +365,8 @@ describe("hosted trusted auth boundary", () => {
 
   it("rejects request syntax before scope, and scope before operation validation", async () => {
     const db = await openDatabase(":memory:");
+    // The store validates edits too; the operation must reject them first.
+    const edit = vi.spyOn(db, "editAnnotation");
     try {
       const { request } = setup(undefined, createApplication(db));
       const path = "/v1/transactions/synthetic/annotation";
@@ -384,6 +386,7 @@ describe("hosted trusted auth boundary", () => {
       expect(await invalid.json()).toEqual({
         error: { code: "invalid_input", message: "Invalid operation input." },
       });
+      expect(edit).not.toHaveBeenCalled();
     } finally {
       await db.close();
     }

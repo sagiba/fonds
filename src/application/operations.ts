@@ -557,7 +557,7 @@ type Definitions = typeof definitions;
 export type OperationName = keyof Definitions;
 
 /** Every operation in API order; refresh_connection needs a collection capability. */
-export const operationDefinitions: readonly OperationDefinition[] =
+export const operationDefinitions: readonly Definitions[OperationName][] =
   Object.values(definitions);
 
 /** Each executor returns what its output schema accepts, before parsing. */
@@ -783,7 +783,7 @@ export function createApplication(
       .map((definition) =>
         bindOperation(
           definition,
-          executors[definition.name as OperationName],
+          executors[definition.name],
           definition.access === "write" &&
             definition.name !== "refresh_connection"
             ? capabilities.afterWrite
