@@ -1,7 +1,11 @@
 import { Validator } from "@seriousme/openapi-schema-validator";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createApplication } from "../../src/application/operations.js";
+import {
+  type Application,
+  createApplication,
+  operationDefinitions,
+} from "../../src/application/operations.js";
 import {
   type Database,
   openDatabase,
@@ -43,6 +47,12 @@ const ROUTES = [
   ],
   ["post", "/v1/transactions/{transactionId}/removal", "confirm_removal"],
 ] as const;
+/** The operation a route reaches when its operationId differs from the name. */
+const REACHED: Readonly<Record<string, string>> = {
+  refresh_all_connections: "refresh_connection",
+};
+
+type Schema = Record<string, unknown>;
 
 interface Parameter {
   name: string;
@@ -61,7 +71,10 @@ interface DocumentedOperation {
       };
     };
   };
-  responses: Record<string, unknown>;
+  responses: Record<
+    string,
+    { content: { "application/json": { schema: Schema } } }
+  >;
   security: Record<string, string[]>[];
 }
 
@@ -69,8 +82,20 @@ interface Document {
   [key: string]: unknown;
   servers?: { url: string }[];
   paths: Record<string, Record<string, DocumentedOperation>>;
-  components: { securitySchemes: Record<string, unknown> };
+  components: {
+    schemas: Record<string, Schema>;
+    securitySchemes: Record<string, unknown>;
+  };
 }
+
+/** Each operation answers with its own name, showing which one a route reached. */
+const namingApplication: Application = {
+  backend: "postgres",
+  operations: operationDefinitions.map((definition) => ({
+    ...definition,
+    execute: async () => ({ name: definition.name }),
+  })),
+};
 
 let db: Database;
 const services: ReturnType<typeof createHttpService>[] = [];
@@ -84,39 +109,29 @@ afterEach(async () => {
 });
 
 function hostedService() {
-  const service = createHttpService(
-    createApplication(db, {
-      refreshes: {
-        start: async () => {
-          throw new Error("synthetic refresh unavailable");
-        },
-        startAll: async () => [],
+  const service = createHttpService(namingApplication, {
+    publicOrigin,
+    ownerId: "owner",
+    authProvider: {
+      issuer,
+      authorizationScopes: ["offline_access", "financial:read"],
+      endpoints: {
+        authorization: `${issuer}/oauth2/authorize`,
+        token: `${issuer}/oauth2/token`,
       },
-    }),
-    {
-      publicOrigin,
-      ownerId: "owner",
-      authProvider: {
-        issuer,
-        authorizationScopes: ["offline_access", "financial:read"],
-        endpoints: {
-          authorization: `${issuer}/oauth2/authorize`,
-          token: `${issuer}/oauth2/token`,
-        },
-        authenticate: async (request) =>
-          request.headers.get("authorization") === "Bearer synthetic"
-            ? {
-                source: "synthetic",
-                subject: "owner",
-                ownerId: "owner",
-                resource: `${publicOrigin}/mcp`,
-                clientId: "synthetic-client",
-                scopes: ["financial:read", "financial:write"],
-              }
-            : null,
-      },
+      authenticate: async (request) =>
+        request.headers.get("authorization") === "Bearer synthetic"
+          ? {
+              source: "synthetic",
+              subject: "owner",
+              ownerId: "owner",
+              resource: `${publicOrigin}/mcp`,
+              clientId: "synthetic-client",
+              scopes: ["financial:read", "financial:write"],
+            }
+          : null,
     },
-  );
+  });
   services.push(service);
   return service;
 }
@@ -127,6 +142,25 @@ async function hostedDocument() {
   );
   expect(response.status).toBe(200);
   return (await response.json()) as Document;
+}
+
+/** The first schema found under a property of this name, at any depth. */
+function propertySchema(schema: unknown, name: string): Schema | undefined {
+  if (schema === null || typeof schema !== "object") {
+    return undefined;
+  }
+  const properties = (schema as { properties?: Record<string, Schema> })
+    .properties;
+  if (properties?.[name]) {
+    return properties[name];
+  }
+  for (const entry of Object.values(schema)) {
+    const found = propertySchema(entry, name);
+    if (found) {
+      return found;
+    }
+  }
+  return undefined;
 }
 
 function operation(document: Document, method: string, path: string) {
@@ -186,9 +220,9 @@ describe("OpenAPI document", () => {
     );
   });
 
-  it("documents only routes the service serves", async () => {
+  it("documents each route as reaching its own operation", async () => {
     const service = hostedService();
-    for (const [method, path] of ROUTES) {
+    for (const [method, path, operationId] of ROUTES) {
       const response = await service.app.request(
         `${publicOrigin}${path.replace(/\{[A-Za-z]+\}/g, "synthetic")}`,
         {
@@ -200,11 +234,44 @@ describe("OpenAPI document", () => {
           ...(method !== "get" && { body: "{}" }),
         },
       );
-      const body = (await response.json()) as { error?: { message: string } };
-      expect(body.error?.message, `${method} ${path}`).not.toBe(
-        "Route not found.",
-      );
+      expect(await response.json(), `${method} ${path}`).toEqual({
+        name: REACHED[operationId] ?? operationId,
+      });
     }
+  });
+
+  it("carries the operations' own schemas and descriptions", async () => {
+    const document = await hostedDocument();
+    const transaction = operation(
+      document,
+      "get",
+      "/v1/transactions/{transactionId}",
+    ).responses["200"]!.content["application/json"].schema;
+    const money = propertySchema(transaction, "amount");
+    const decimal = propertySchema(money, "amount");
+    expect(decimal?.type).toBe("string");
+    const pattern = new RegExp(decimal?.pattern as string);
+    expect(pattern.test("-12.30")).toBe(true);
+    expect(pattern.test("1e3")).toBe(false);
+    expect(propertySchema(transaction, "presence")?.enum).toEqual([
+      "seen",
+      "not_returned",
+      "removed",
+    ]);
+    expect(propertySchema(transaction, "status")?.description).toEqual(
+      expect.stringContaining("Source report status"),
+    );
+    const metadata = operation(
+      document,
+      "patch",
+      "/v1/transactions/{transactionId}/annotation",
+    ).requestBody!.content["application/json"].schema.properties;
+    expect(JSON.stringify(metadata)).toContain(
+      '"$ref":"#/components/schemas/JsonValue"',
+    );
+    expect(document.components.schemas.JsonValue).toEqual(
+      expect.objectContaining({ anyOf: expect.any(Array) }),
+    );
   });
 
   it("places path, query and body inputs as the routes read them", async () => {

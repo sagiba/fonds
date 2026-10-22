@@ -37,7 +37,10 @@ const SCOPE_DESCRIPTIONS: Readonly<Record<string, string>> = {
 
 const QUERY_TYPES = new Set(["string", "integer", "number", "boolean"]);
 
-/** Recursive schemas need a name: Zod emits them as definitions to reference. */
+/**
+ * Recursive schemas need a name: Zod emits them as definitions to reference.
+ * Replacing the global registry here hides its metadata, which `convert` restores.
+ */
 const namedSchemas = z.registry<{ id: string }>();
 namedSchemas.add(jsonValueSchema, { id: "JsonValue" });
 
@@ -79,7 +82,15 @@ function relocateRefs(value: unknown): unknown {
 function schemaConverter() {
   const components: Record<string, JsonSchema> = {};
   const convert: Convert = (schema, io) => {
-    const converted = z.toJSONSchema(schema, { io, metadata: namedSchemas });
+    const converted = z.toJSONSchema(schema, {
+      io,
+      metadata: namedSchemas,
+      override: ({ zodSchema, jsonSchema }) => {
+        const metadata = { ...z.globalRegistry.get(zodSchema) };
+        delete metadata.id;
+        Object.assign(jsonSchema, metadata);
+      },
+    });
     const definitions = converted.$defs ?? {};
     // The document's dialect applies; definitions move to components.
     delete converted.$schema;
