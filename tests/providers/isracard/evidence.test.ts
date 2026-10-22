@@ -402,6 +402,13 @@ describe("Isracard retained evidence", () => {
     };
     const rows = [earlier, later];
     expect(latestIsracardDigitalRows({ rows })).toEqual([]);
+    expect(latestIsracardDigitalRows({ rows: [earlier] })).toEqual([earlier]);
+    expect(
+      latestIsracardDigitalRows({
+        rows: [earlier, { voucherNumberRatz: "SYNTHETIC-1" }],
+        identity: { currentRows: [1] },
+      }),
+    ).toEqual([earlier]);
     expect(
       latestIsracardDigitalRows({ rows, identity: { currentRows: [1] } }),
     ).toEqual([later]);

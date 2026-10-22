@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { presentWireEvent } from "../../src/application/wire-output.js";
+import type { JsonObject } from "../../src/domain/model.js";
 import { isracardAdapter } from "../../src/providers/isracard/adapter.js";
 import {
   type IsracardCapture,
@@ -298,9 +299,16 @@ describe.each(backends)("%s Isracard semantic evidence", (backend) => {
     }
   });
 
-  it.each(["omitted", "refetched"])(
-    "preserves a conflict when digital evidence disappears and detail is %s",
-    async (detailMode) => {
+  it.each(
+    ["omitted", "refetched"].flatMap((detailMode) =>
+      ["current", "unmarked", "legacy-only"].map((storedState) => ({
+        detailMode,
+        storedState,
+      })),
+    ),
+  )(
+    "preserves a conflict when digital evidence disappears with $detailMode detail and $storedState stored selection",
+    async ({ detailMode, storedState }) => {
       const source = JSON.parse(
         readFileSync(
           new URL(
@@ -338,16 +346,35 @@ describe.each(backends)("%s Isracard semantic evidence", (backend) => {
       const original = (await db.listTransactions({ perspective: "all" })).find(
         (row) => row.details.provider.isracard?.detail,
       )!;
+      if (storedState === "legacy-only") {
+        const sparse = structuredClone(source);
+        delete sparse.responses.digital;
+        await ingestCapture(2, sparse);
+      }
+      if (storedState !== "current") {
+        const stored = (await db.getTransaction(original.id))!;
+        const identity = structuredClone(
+          stored.details.provider.isracard!.identity,
+        ) as JsonObject;
+        delete identity.latestDigitalRows;
+        if (storedState === "unmarked") {
+          delete identity.currentRows;
+        }
+        await db.raw(
+          "UPDATE transaction_reconciliation SET provider_identity_json = ? WHERE transaction_id = ?",
+          [JSON.stringify({ isracard: identity }), original.id],
+        );
+      }
       const detailText = source.responses.details;
       delete source.responses.details;
       const digitalText = source.responses.digital;
-      for (const day of [2, 3, 4, 5]) {
-        if (day === 3 || day === 4) {
+      for (const day of [3, 4, 5, 6]) {
+        if (day !== 5) {
           delete source.responses.digital;
         } else {
           source.responses.digital = digitalText;
         }
-        if ((day === 3 || day === 4) && detailMode === "refetched") {
+        if (day !== 5 && detailMode === "refetched") {
           source.responses.details = detailText;
         } else {
           delete source.responses.details;

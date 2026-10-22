@@ -247,18 +247,40 @@ export function mergeIsracardEvidence(
 /** Row shape is an evidence boundary, not chronology; only the last observation supplies fallback facts. */
 export function latestIsracardDigitalRows(namespace: JsonObject): JsonValue[] {
   const identity = namespace.identity;
-  if (!identity || typeof identity !== "object" || Array.isArray(identity)) {
+  if (
+    identity !== undefined &&
+    (!identity || typeof identity !== "object" || Array.isArray(identity))
+  ) {
     return [];
   }
-  const indices = Object.hasOwn(identity, "latestDigitalRows")
-    ? identity.latestDigitalRows
-    : identity.currentRows;
-  // Older records can recover only their last capture's rows, never all retained versions.
-  if (indices === undefined) {
-    return [];
+  if (identity && Object.hasOwn(identity, "latestDigitalRows")) {
+    return currentSourceRows({
+      rows: namespace.rows ?? [],
+      identity: { currentRows: identity.latestDigitalRows! },
+    }).filter((row) => isracardEvidenceGeneration(row) === "digital");
   }
-  return currentSourceRows({
-    rows: namespace.rows ?? [],
-    identity: { currentRows: indices },
-  }).filter((row) => isracardEvidenceGeneration(row) === "digital");
+  if (identity && Object.hasOwn(identity, "currentRows")) {
+    const current = currentSourceRows(namespace);
+    if (
+      current.length === 0 &&
+      (!Array.isArray(identity.currentRows) || identity.currentRows.length > 0)
+    ) {
+      return [];
+    }
+    const digital = current.filter(
+      (row) => isracardEvidenceGeneration(row) === "digital",
+    );
+    if (digital.length > 0) {
+      return digital;
+    }
+  }
+  // Without chronology, one retained statement per component is unambiguous;
+  // competing shape variants cannot be ordered by their values or array position.
+  const digital = evidenceList(retainIsracardEvidence(namespace).rows).filter(
+    (row) => isracardEvidenceGeneration(row) === "digital",
+  );
+  const keys = digital.map(componentKey);
+  return keys.includes(null) || new Set(keys).size !== keys.length
+    ? []
+    : digital;
 }
