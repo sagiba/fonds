@@ -153,6 +153,8 @@ export function createHttpService(
   const operations = new Map(
     application.operations.map((operation) => [operation.name, operation]),
   );
+  // The route table covers the catalog at compile time; an application
+  // assembled outside it could still carry an operation HTTP would not serve.
   for (const name of operations.keys()) {
     if (!REST_ROUTES.some((route) => route.operation === name)) {
       throw new Error("Operation has no REST route");

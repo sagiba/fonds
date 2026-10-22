@@ -162,7 +162,11 @@ export function calculateTotals(
 ) {
   const groups = new Map<
     string,
-    { currency: string; amountBasis: string | null; amounts: number[] }
+    {
+      currency: string;
+      amountBasis: Transaction["amountBasis"] | null;
+      amounts: number[];
+    }
   >();
   const fxFees = new Map<string, number[]>();
   let fxFeeUnknownCount = 0;

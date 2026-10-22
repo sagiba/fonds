@@ -436,6 +436,28 @@ describe("asynchronous application storage contract", () => {
     await expect(operation.execute({ unexpected: true })).rejects.toThrow();
   });
 
+  it("bounds the whole response even when every record is within its limits", async () => {
+    // 100 connections of 4,000-character names: each name is valid, together
+    // about 400 KiB, over the 256 KiB response budget.
+    store.listConnections = async () =>
+      Array.from({ length: 100 }, (_, index) => ({
+        id: `synthetic-connection-${index}`,
+        provider: "cal",
+        displayName: "n".repeat(4000),
+        createdAt: "2040-08-01T00:00:00Z",
+        latestRefresh: null,
+      }));
+    const response = await request("/v1/connections");
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({
+      error: {
+        code: "output_too_large",
+        message:
+          "Requested output exceeds the response limit. Narrow the request.",
+      },
+    });
+  });
+
   it("rejects oversized and invalid storage output with fixed public errors", async () => {
     store.listConnections = async () => [
       {

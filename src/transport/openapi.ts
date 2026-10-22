@@ -4,7 +4,7 @@ import type { OperationDefinition } from "../application/operations.js";
 import { FONDS_VERSION } from "../application/version.js";
 import { jsonValueSchema } from "../domain/model.js";
 import { operationScope } from "./auth.js";
-import { pathInputs, REST_ROUTES, type RestRoute } from "./rest-routes.js";
+import { type OperationRoute, pathInputs, REST_ROUTES } from "./rest-routes.js";
 
 type JsonSchema = core.JSONSchema.JSONSchema;
 
@@ -147,7 +147,7 @@ function schemaConverter() {
 
 function describeOperation(
   definition: OperationDefinition,
-  route: RestRoute,
+  route: OperationRoute,
   context: { convert: Convert; security: ApiSecurity },
 ) {
   const input = context.convert(definition.inputSchema, "input");
