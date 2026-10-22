@@ -418,6 +418,7 @@ describe("Neon configuration", () => {
         "FONDS_GOOGLE_OWNER_EMAIL",
         "FONDS_NEON_GOOGLE_AUTH_URL",
         "FONDS_OWNER_ID",
+        "FONDS_PUBLIC_API_DESCRIPTION",
         "FONDS_PUBLIC_ORIGIN",
         "FONDS_REFRESH_SECRET",
       ]);
@@ -499,6 +500,47 @@ describe("Neon configuration", () => {
     }
   });
 
+  it("always declares the API description setting, off unless it is 1", async () => {
+    for (const name of [
+      "FONDS_PUBLIC_ORIGIN",
+      "FONDS_OWNER_ID",
+      "FONDS_AUTH_SECRET",
+      "FONDS_CONNECTION_ID",
+      "FONDS_CONNECTION_PROVIDER",
+      "FONDS_REFRESH_SECRET",
+      "FONDS_NEON_GOOGLE_AUTH_URL",
+      "FONDS_GOOGLE_OWNER_EMAIL",
+    ]) {
+      vi.stubEnv(name, `synthetic-${name}`);
+    }
+    vi.stubEnv("FONDS_CONNECTION_CREDENTIALS_FILE", undefined);
+    vi.stubEnv("FONDS_CREDENTIALS_KEY", undefined);
+    try {
+      // Neon keeps an omitted variable, so off is declared, not left out.
+      for (const [value, declared] of [
+        [undefined, "0"],
+        ["0", "0"],
+        ["1", "1"],
+      ] as const) {
+        vi.stubEnv("FONDS_PUBLIC_API_DESCRIPTION", value);
+        vi.resetModules();
+        const { default: config } = await import("../../../neon.js");
+        expect(
+          config.functions?.fonds?.env?.FONDS_PUBLIC_API_DESCRIPTION,
+          String(value),
+        ).toBe(declared);
+      }
+      vi.stubEnv("FONDS_PUBLIC_API_DESCRIPTION", "yes");
+      vi.resetModules();
+      await expect(import("../../../neon.js")).rejects.toThrow(
+        "FONDS_PUBLIC_API_DESCRIPTION must be 0 or 1",
+      );
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
   it("forwards a valid credentials key so stored connections are collected", async () => {
     for (const name of [
       "FONDS_PUBLIC_ORIGIN",
@@ -528,5 +570,46 @@ describe("Neon configuration", () => {
       vi.unstubAllEnvs();
       vi.resetModules();
     }
+  });
+});
+
+describe("Neon API description", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("serves the description only when the deployment opts in", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const connect = vi.spyOn(Pool.prototype, "connect");
+    for (const [setting, status] of [
+      [undefined, 401],
+      ["0", 401],
+      ["1", 200],
+    ] as const) {
+      const service = createNeonService({
+        ...environment,
+        ...(setting !== undefined && { FONDS_PUBLIC_API_DESCRIPTION: setting }),
+      });
+      try {
+        const response = await service.fetch(
+          new Request(`${publicOrigin}/v1/openapi.json`),
+        );
+        expect(response.status, String(setting)).toBe(status);
+        if (status === 401) {
+          expect(response.headers.get("WWW-Authenticate")).toContain(
+            "Bearer resource_metadata=",
+          );
+        } else {
+          expect(await response.json()).toMatchObject({
+            openapi: "3.1.1",
+            servers: [{ url: publicOrigin }],
+          });
+        }
+      } finally {
+        await service.close();
+      }
+    }
+    // Describing the API never touches the database.
+    expect(connect).not.toHaveBeenCalled();
   });
 });

@@ -185,7 +185,7 @@ describe("trusted client address", () => {
     },
   );
 
-  it.each(["", "0", "true", "yes"])(
+  it.each(["", "true", "yes", "2"])(
     "publishes the API description only when opted in with 1, not %o",
     (value) => {
       const parse = (FONDS_PUBLIC_API_DESCRIPTION?: string) =>
@@ -197,8 +197,19 @@ describe("trusted client address", () => {
           }),
         }).publicApiDescription === true;
       expect(parse()).toBe(false);
+      expect(parse("0")).toBe(false);
       expect(parse("1")).toBe(true);
-      expect(() => parse(value)).toThrow(/FONDS_PUBLIC_API_DESCRIPTION/);
+      let message = "";
+      try {
+        parse(value);
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message).toContain("FONDS_PUBLIC_API_DESCRIPTION");
+      // Configuration errors name the variable, never its value.
+      if (value) {
+        expect(message).not.toContain(value);
+      }
     },
   );
 });
