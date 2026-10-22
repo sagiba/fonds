@@ -108,10 +108,14 @@ afterEach(async () => {
   await db.close();
 });
 
-function hostedService(application = echoApplication) {
+function hostedService(
+  application = echoApplication,
+  publicApiDescription = true,
+) {
   const service = createHttpService(application, {
     publicOrigin,
     ownerId: "owner",
+    publicApiDescription,
     authProvider: {
       issuer,
       authorizationScopes: ["offline_access", "financial:read"],
@@ -461,6 +465,17 @@ describe("OpenAPI document", () => {
     expect(operation(document, "post", "/v1/refreshes").security).toEqual([
       { oauth2: ["financial:write"] },
     ]);
+  });
+
+  it("is not served by a hosted deployment that has not opted in", async () => {
+    const service = hostedService(echoApplication, false);
+    const anonymous = await service.app.request(
+      `${publicOrigin}/v1/openapi.json`,
+    );
+    expect(anonymous.status).toBe(401);
+    expect(
+      (await hostedRequest(service, "get", "/v1/openapi.json")).status,
+    ).toBe(404);
   });
 
   it("is served locally without the bearer and omits unavailable refreshes", async () => {

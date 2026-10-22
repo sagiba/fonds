@@ -184,6 +184,23 @@ describe("trusted client address", () => {
       expect(() => parse(value)).toThrow(/FONDS_TRUST_PROXY/);
     },
   );
+
+  it.each(["", "0", "true", "yes"])(
+    "publishes the API description only when opted in with 1, not %o",
+    (value) => {
+      const parse = (FONDS_PUBLIC_API_DESCRIPTION?: string) =>
+        hostedNodeConfiguration({
+          ...base,
+          FONDS_DATABASE_URL: "postgresql://u:p@127.0.0.1/fonds",
+          ...(FONDS_PUBLIC_API_DESCRIPTION !== undefined && {
+            FONDS_PUBLIC_API_DESCRIPTION,
+          }),
+        }).publicApiDescription === true;
+      expect(parse()).toBe(false);
+      expect(parse("1")).toBe(true);
+      expect(() => parse(value)).toThrow(/FONDS_PUBLIC_API_DESCRIPTION/);
+    },
+  );
 });
 
 describe("hosted auth rate limit", () => {

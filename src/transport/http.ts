@@ -86,6 +86,7 @@ export type HttpServiceOptions = {
   | {
       token: string;
       authProvider?: never;
+      publicApiDescription?: never;
       publicOrigin?: never;
       ownerId?: never;
       platformRoutes?: never;
@@ -104,6 +105,8 @@ export type HttpServiceOptions = {
       platformRoutes?: RouteHandler;
       /** Unauthenticated login/discovery routes, after the Host and body guards. */
       publicRoutes?: RouteHandler;
+      /** Serve the API description without authentication; a local service always does. */
+      publicApiDescription?: boolean;
     }
 );
 
@@ -289,27 +292,31 @@ export function createHttpService(
       ),
     );
   }
-  let apiDocument: ReturnType<typeof openApiDocument> | undefined;
-  // The description holds no owner data; clients import it before they hold a token.
-  app.get("/v1/openapi.json", (context) =>
-    context.json(
-      (apiDocument ??= openApiDocument(
-        application.operations,
-        hosted
-          ? {
-              origin: publicOrigin!,
-              security: {
-                kind: "oauth2",
-                authorizationUrl: options.authProvider.endpoints.authorization,
-                tokenUrl: options.authProvider.endpoints.token,
-                scopes: authorizationScopes,
-                resource,
-              },
-            }
-          : { security: { kind: "bearer" } },
-      )),
-    ),
-  );
+  // The description holds no owner data, and importers fetch it before they
+  // hold a token; a hosted deployment advertises it only when the operator opts in.
+  if (!hosted || options.publicApiDescription) {
+    let apiDocument: ReturnType<typeof openApiDocument> | undefined;
+    app.get("/v1/openapi.json", (context) =>
+      context.json(
+        (apiDocument ??= openApiDocument(
+          application.operations,
+          hosted
+            ? {
+                origin: publicOrigin!,
+                security: {
+                  kind: "oauth2",
+                  authorizationUrl:
+                    options.authProvider.endpoints.authorization,
+                  tokenUrl: options.authProvider.endpoints.token,
+                  scopes: authorizationScopes,
+                  resource,
+                },
+              }
+            : { security: { kind: "bearer" } },
+        )),
+      ),
+    );
+  }
   const unauthenticated = (context: Context) => {
     context.header("WWW-Authenticate", challenge);
     return context.json(

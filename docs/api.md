@@ -44,7 +44,9 @@ raw source responses; a backfill is a [refresh](#refreshes) with `{from, to}`.
 
 `GET /v1/openapi.json` is an unauthenticated
 [OpenAPI 3.1](https://spec.openapis.org/oas/v3.1.1) description of the `/v1`
-routes this deployment serves, generated from the operation definitions. It
+routes this deployment serves, generated from the operation definitions. The
+local server always serves it; a hosted deployment only with
+[`FONDS_PUBLIC_API_DESCRIPTION=1`](guides/hosted-service.md#configuration). It
 declares the hosted OAuth flow with each operation's scope, or the local bearer
 token, and carries no owner data. Its schemas give each input's shape; the value
 and combination rules this reference states still apply.
