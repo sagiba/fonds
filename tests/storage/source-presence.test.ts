@@ -30,6 +30,7 @@ const synthetic: SourceAdapter = {
   ...baseSynthetic,
   sourceCoverage: {
     kind: "account_window",
+    statuses: ["pending", "posted"],
     resources: ["synthetic:presence", "synthetic:cal/recent"],
     dateField: "transactionDate",
     days: 60,
@@ -276,6 +277,273 @@ describe.each(backends)("%s authoritative source presence", (backend) => {
       });
     },
   );
+
+  it.each([
+    ["correction-first", "synthetic:other-resource"],
+    ["snapshot-first", "synthetic:other-resource"],
+    ["correction-first", "synthetic:presence"],
+    ["snapshot-first", "synthetic:presence"],
+  ] as const)(
+    "reconciles native facts leaving retained coverage: %s, %s",
+    async (order, endpoint) => {
+      const input = row("leaving-window", {
+        transactionDate: "2040-07-01",
+        amountMinor: -4300,
+      });
+      await capture("baseline", 1, [input]);
+      const [original] = await db.listTransactions();
+      const annotation = await db.editAnnotation({
+        transactionId: original!.id,
+        expectedVersion: 0,
+        notes: "Keep independently corrected source facts",
+      });
+      const correct = () =>
+        capture(
+          "correction",
+          3,
+          [{ ...input, transactionDate: "2039-01-01" }],
+          synthetic,
+          undefined,
+          endpoint,
+        );
+      const complete = () =>
+        capture("complete", 5, [
+          row("other", {
+            transactionDate: "2040-07-04",
+            amountMinor: -1100,
+          }),
+        ]);
+      if (order === "correction-first") {
+        await correct();
+        await complete();
+      } else {
+        await complete();
+        await correct();
+      }
+      const stored = (await db.getTransaction(original!.id))!;
+      expect(stored).toMatchObject({
+        id: original!.id,
+        transactionDate: "2039-01-01",
+        amountMinor: -4300,
+        presence: "seen",
+        annotation,
+        lastSeenAt: "2040-07-03T12:00:00.000Z",
+        lastSeenRunId: "correction",
+      });
+      expect(stored.sourceAbsence).toBeUndefined();
+      expect(await db.getTotals({ connectionId })).toMatchObject({
+        includedCount: 2,
+        totals: [{ currency: "ILS", amountMinor: -5400 }],
+      });
+      const cursor = await db.latestEventId();
+      await correct();
+      await complete();
+      expect(await db.getTransaction(original!.id)).toEqual(stored);
+      expect(await db.latestEventId()).toBe(cursor);
+    },
+  );
+
+  it.each(["correction-first", "snapshot-first"] as const)(
+    "current-over-history correction leaving coverage: %s",
+    async (order) => {
+      const input = row("history-origin", {
+        transactionDate: "2040-07-01",
+        amountMinor: -4300,
+      });
+      await capture("historical", 3, [input], synthetic, { kind: "history" });
+      const [original] = await db.listTransactions();
+      const annotation = await db.editAnnotation({
+        transactionId: original!.id,
+        expectedVersion: 0,
+        notes: "Historical baseline annotation",
+      });
+      const correct = () =>
+        capture("current", 2, [{ ...input, transactionDate: "2039-01-01" }]);
+      const complete = () =>
+        capture("complete", 5, [
+          row("other", { transactionDate: "2040-07-04", amountMinor: -1100 }),
+        ]);
+      if (order === "correction-first") {
+        await correct();
+        await complete();
+      } else {
+        await complete();
+        await correct();
+      }
+      const stored = (await db.getTransaction(original!.id))!;
+      expect(stored).toMatchObject({
+        id: original!.id,
+        transactionDate: "2039-01-01",
+        amountMinor: -4300,
+        presence: "seen",
+        annotation,
+        lastSeenAt: "2040-07-02T12:00:00.000Z",
+        lastSeenRunId: "current",
+      });
+      expect(stored.sourceAbsence).toBeUndefined();
+      expect(await db.getTotals({ connectionId })).toMatchObject({
+        includedCount: 2,
+        totals: [{ currency: "ILS", amountMinor: -5400 }],
+      });
+      const cursor = await db.latestEventId();
+      await correct();
+      await complete();
+      expect(await db.getTransaction(original!.id)).toEqual(stored);
+      expect(await db.latestEventId()).toBe(cursor);
+    },
+  );
+
+  it.each([3, 5])(
+    "accepts newer positive facts without defeating an applicable negative at day %s",
+    async (day) => {
+      const input = row("native", {
+        transactionDate: "2040-07-01",
+        amountMinor: -4300,
+      });
+      await capture("baseline", 1, [input]);
+      const [original] = await db.listTransactions();
+      await capture("absent", 5, []);
+      await capture("correct", day, [
+        { ...input, transactionDate: "2040-07-02", amountMinor: -4700 },
+      ]);
+      expect(await db.getTransaction(original!.id)).toMatchObject({
+        transactionDate: "2040-07-02",
+        amountMinor: -4700,
+        presence: "not_returned",
+        lastSeenRunId: "correct",
+        sourceAbsence: { runId: "absent" },
+      });
+      await capture("older", 2, [
+        { ...input, transactionDate: "2039-01-01", amountMinor: -9900 },
+      ]);
+      expect(await db.getTransaction(original!.id)).toMatchObject({
+        transactionDate: "2040-07-02",
+        amountMinor: -4700,
+        lastSeenRunId: "correct",
+        sourceAbsence: { runId: "absent" },
+      });
+      expect(await db.getTotals({ connectionId })).toMatchObject({
+        includedCount: 0,
+        totals: [],
+      });
+    },
+  );
+
+  it("keeps actually observed newer facts when an older correction leaves coverage", async () => {
+    const input = row("native", {
+      transactionDate: "2040-07-01",
+      amountMinor: -4300,
+    });
+    await capture("baseline", 1, [input]);
+    const [original] = await db.listTransactions();
+    await capture("observed", 5, [input]);
+    await capture("older", 3, [{ ...input, transactionDate: "2039-01-01" }]);
+    expect(await db.getTransaction(original!.id)).toMatchObject({
+      transactionDate: "2040-07-01",
+      lastSeenRunId: "observed",
+      presence: "seen",
+    });
+    expect(
+      (await db.getTransaction(original!.id))!.sourceAbsence,
+    ).toBeUndefined();
+  });
+
+  it("reapplies retained coverage after corrected facts leave and reenter its window", async () => {
+    const input = row("native", {
+      transactionDate: "2040-07-01",
+      amountMinor: -4300,
+    });
+    await capture("baseline", 1, [input]);
+    const [original] = await db.listTransactions();
+    await capture("absent", 5, []);
+    await capture("outside", 3, [{ ...input, transactionDate: "2039-01-01" }]);
+    expect(await db.getTotals({ connectionId })).toMatchObject({
+      includedCount: 1,
+    });
+    await capture("inside", 4, [input]);
+    const settled = await db.getTransaction(original!.id);
+    expect(settled).toMatchObject({
+      presence: "not_returned",
+      sourceAbsence: { runId: "absent" },
+      lastSeenRunId: "inside",
+    });
+    const cursor = await db.latestEventId();
+    await capture("outside", 3, [{ ...input, transactionDate: "2039-01-01" }]);
+    await capture("inside", 4, [input]);
+    expect(await db.getTransaction(original!.id)).toEqual(settled);
+    expect(await db.latestEventId()).toBe(cursor);
+    expect(await db.getTotals({ connectionId })).toMatchObject({
+      includedCount: 0,
+    });
+  });
+
+  it("retains another applicable omission when a narrower receipt becomes inapplicable", async () => {
+    const input = row("native", {
+      transactionDate: "2040-07-01",
+      amountMinor: -4300,
+    });
+    await capture("baseline", 1, [input]);
+    const [original] = await db.listTransactions();
+    await capture("wide", 4, []);
+    await capture("narrow", 5, [], synthetic, {
+      kind: "recent",
+      from: "2040-06-20",
+      to: "2040-07-05",
+    });
+    expect(
+      (await db.getTransaction(original!.id))!.sourceAbsence,
+    ).toMatchObject({ runId: "narrow" });
+    await capture("correction", 3, [
+      { ...input, transactionDate: "2040-06-15" },
+    ]);
+    expect(await db.getTransaction(original!.id)).toMatchObject({
+      transactionDate: "2040-06-15",
+      presence: "not_returned",
+      sourceAbsence: { runId: "wide" },
+    });
+    expect(await db.getTotals({ connectionId })).toMatchObject({
+      includedCount: 0,
+    });
+  });
+
+  it("does not erase a negative receipt whose coverage cannot be reconstructed", async () => {
+    const input = row("native", {
+      transactionDate: "2040-07-01",
+      amountMinor: -4300,
+    });
+    await capture("baseline", 1, [input]);
+    const [original] = await db.listTransactions();
+    await insertTransactionFixture(
+      db,
+      [
+        {
+          ...original!,
+          presence: "not_returned",
+          sourceAbsence: {
+            runId: "unavailable-coverage",
+            capturedAt: "2040-07-05T12:00:00.000Z",
+          },
+        },
+      ],
+      "update",
+    );
+    await capture("correction", 3, [
+      { ...input, transactionDate: "2039-01-01" },
+    ]);
+    expect(await db.getTransaction(original!.id)).toMatchObject({
+      transactionDate: "2039-01-01",
+      lastSeenRunId: "correction",
+      presence: "not_returned",
+      sourceAbsence: { runId: "unavailable-coverage" },
+    });
+    expect(await db.getTotals({ connectionId })).toMatchObject({
+      includedCount: 0,
+    });
+    await capture("fresh", 6, [input]);
+    expect(
+      (await db.getTransaction(original!.id))!.sourceAbsence,
+    ).toBeUndefined();
+  });
 
   it.each([
     ["correction-first", 3, true],

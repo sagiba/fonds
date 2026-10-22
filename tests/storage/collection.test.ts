@@ -513,11 +513,13 @@ for (const backend of backends) {
           ...calAdapter,
           sourceCoverage: {
             kind: "account_window" as const,
+            statuses: ["pending", "posted"] as const,
             resources: ["cal:recent"],
             dateField: "transactionDate" as const,
             days: 60,
           },
           rejectEmptyRecentPosted: true,
+          rejectEmptyRecent: false,
         };
         const date = new Date().toISOString().slice(0, 10);
         const populated = responseText

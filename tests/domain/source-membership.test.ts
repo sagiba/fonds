@@ -31,6 +31,7 @@ const adapter: SourceAdapter = {
   }),
   sourceCoverage: {
     kind: "account_window",
+    statuses: ["pending", "posted"],
     resources: ["recent"],
     dateField: "transactionDate",
     days: 60,
@@ -40,7 +41,7 @@ const adapter: SourceAdapter = {
 };
 const sameOrigin: SourceAdapter = {
   ...adapter,
-  sourceCoverage: { kind: "same_origin" },
+  sourceCoverage: { kind: "same_origin", statuses: ["pending", "posted"] },
 };
 
 function response(fields: Partial<Response> = {}): Response {
@@ -141,6 +142,7 @@ describe("declared account-window coverage", () => {
       ...adapter,
       sourceCoverage: {
         kind: "account_window",
+        statuses: ["pending", "posted"],
         resources: ["recent"],
         dateField: "bookingDate",
         days: 60,
@@ -305,6 +307,7 @@ describe("declared account-window coverage", () => {
             ...adapter,
             sourceCoverage: {
               kind: "account_window",
+              statuses: ["pending", "posted"],
               resources: ["recent"],
               dateField: "transactionDate",
               days,
@@ -319,17 +322,27 @@ describe("declared account-window coverage", () => {
 });
 
 describe("conservative same-origin coverage", () => {
-  it("defaults undeclared adapters to matching retained resource and normalized scope", () => {
-    const { sourceCoverage: _coverage, ...undeclared } = adapter;
-    const coverage = sourceCoverage(undeclared, response(), partition())!;
+  it.each(["posted", "pending"] as const)(
+    "does not infer %s absence authority from positive comparability",
+    (status) => {
+      const { sourceCoverage: _coverage, ...undeclared } = adapter;
+      expect(
+        sourceCoverage(undeclared, response(), partition({ status })),
+      ).toBeUndefined();
+    },
+  );
+
+  it("requires declared same-origin coverage before comparing retained resource and normalized scope", () => {
+    const declared = sameOrigin;
+    const coverage = sourceCoverage(declared, response(), partition())!;
     expect(coverage.kind).toBe("same_origin");
-    expect(snapshotContainsRow(undeclared, coverage, row(), response())).toBe(
+    expect(snapshotContainsRow(declared, coverage, row(), response())).toBe(
       true,
     );
-    expect(snapshotContainsRow(undeclared, coverage, row())).toBe(false);
+    expect(snapshotContainsRow(declared, coverage, row())).toBe(false);
     expect(
       snapshotContainsRow(
-        undeclared,
+        declared,
         coverage,
         row(),
         response({ endpoint: "recent-alias" }),
@@ -337,7 +350,7 @@ describe("conservative same-origin coverage", () => {
     ).toBe(true);
     expect(
       snapshotContainsRow(
-        undeclared,
+        declared,
         coverage,
         row(),
         response({ endpoint: "history" }),
@@ -345,7 +358,7 @@ describe("conservative same-origin coverage", () => {
     ).toBe(false);
     expect(
       snapshotContainsRow(
-        undeclared,
+        declared,
         coverage,
         row(),
         response({ accountKey: "another-account" }),

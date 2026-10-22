@@ -62,8 +62,8 @@ export interface AutomaticPostingCapability {
 
 /** Source-declared domains whose omissions can be interpreted by the shared engine. */
 export type SourceCoveragePolicy = {
-  /** Restrict omission authority independently of positive partition comparison. */
-  statuses?: readonly ("pending" | "posted")[];
+  /** Explicit omission authority, independent of positive partition comparison. */
+  statuses: readonly ("pending" | "posted")[];
 } & (
   | { kind: "same_origin" }
   | {
@@ -102,12 +102,14 @@ export interface SourceAdapter {
   pendingPostingCandidates?: boolean;
   /** Opt in to narrow, reversible same-capture purchase/refund continuation. */
   automaticPosting?: AutomaticPostingCapability;
-  /** Omitted declarations retain conservative same-resource, same-scope coverage. */
+  /** Opt in to negative evidence; positive comparison never grants absence authority. */
   sourceCoverage?: SourceCoveragePolicy;
   /** Compare recent absence only within this many days of capture (UTC dates). */
   recentComparableDays?: number;
   /** Reject a successful empty recent posted partition if comparable posted rows exist. */
   rejectEmptyRecentPosted?: boolean;
+  /** Reject a wholly empty recent capture while covered current rows remain. */
+  rejectEmptyRecent?: boolean;
   /** Declared source evidence only, projected identically for stored and new rows; return {} to retain none. */
   retainProviderEvidence(evidence: JsonObject): JsonObject;
   /** Adapter-derived reconciliation state, never part of source-content comparison. */

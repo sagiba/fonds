@@ -1409,8 +1409,10 @@ function extractGroup(
     countryCode !== null && isCountryCode(countryCode) ? countryCode : null;
   let detailBillingDate: string | null = null;
   let boundDetail: SourceRow | null = null;
-  let counterpartyName: TransactionInput["counterpartyName"] =
-    kind === "transfer" ? undefined : null;
+  const namedParty = kind === "transfer" || (!digital && kind === "unknown");
+  let counterpartyName: TransactionInput["counterpartyName"] = namedParty
+    ? undefined
+    : null;
   // A detail projects facts only when its own voucher is the requested one;
   // an unbound detail stays in the archive alone.
   if (binding !== null) {
@@ -1421,8 +1423,8 @@ function extractGroup(
       details.merchant.phone = text(detail.phoneNumber);
       // The bound voucher's own charge date, unlike a requested billing month.
       detailBillingDate = sourceDate(detail.moedChiuvFull);
-      // A transfer's bound detail names its other party.
-      if (kind === "transfer") {
+      // A bound name states a party, not the unavailable Digital kind or role.
+      if (namedParty) {
         counterpartyName = text(detail.motavName)?.trim() || null;
       }
       details.provider.isracard.detail = isracardDetailEvidence(detail);

@@ -148,10 +148,10 @@ export function sourceCoverage(
     scopeKey: normalizedScopeKey,
   };
   const policy = adapter.sourceCoverage;
-  if (policy?.statuses && !policy.statuses.includes(partition.status)) {
+  if (!policy || !policy.statuses.includes(partition.status)) {
     return undefined;
   }
-  if (!policy || policy.kind === "same_origin") {
+  if (policy.kind === "same_origin") {
     const recentCutoff =
       adapter.recentComparableDays === undefined
         ? undefined

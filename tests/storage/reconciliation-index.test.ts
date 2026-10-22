@@ -64,6 +64,7 @@ function bankAdapter(overrides: Partial<SourceAdapter> = {}): SourceAdapter {
   return {
     provider: "synthetic-bank",
     parserVersion: "synthetic-v1",
+    sourceCoverage: { kind: "same_origin", statuses: ["pending", "posted"] },
     retainProviderEvidence: () => ({}),
     projectProviderState: (value) =>
       evidenceObject(value, {

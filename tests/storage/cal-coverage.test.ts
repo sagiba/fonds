@@ -186,18 +186,20 @@ describe.each(backends)("%s actual CAL omission authority", (backend) => {
     },
   );
 
-  it("applies same-origin pending disappearance even when the posted list becomes empty", async () => {
+  it("applies same-origin pending disappearance while the posted partition remains populated", async () => {
     await capture("baseline", "2040-06-30T12:00:00Z", [purchase], [pending]);
     const pendingRow = (await db.listTransactions()).find(
       (row) => row.status === "pending",
     )!;
-    expect(await capture("empty", "2040-07-02T12:00:00Z", [])).toMatchObject({
+    expect(
+      await capture("pending-empty", "2040-07-02T12:00:00Z", [purchase]),
+    ).toMatchObject({
       status: "completed",
       unlisted: 1,
     });
     expect(await db.getTransaction(pendingRow.id)).toMatchObject({
       presence: "not_returned",
-      sourceAbsence: { runId: "empty" },
+      sourceAbsence: { runId: "pending-empty" },
     });
     expect(
       (await db.listTransactionPage({ connectionId, limit: 100 })).transactions,

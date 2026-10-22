@@ -255,6 +255,60 @@ describe.each(backends)("%s linked current pending component", (backend) => {
     },
   );
 
+  it.each(["correction-first", "snapshot-first"] as const)(
+    "reconciles linked authorization facts leaving negative coverage: %s",
+    async (order) => {
+      const { survivor, postedId } = await linked();
+      const dated = {
+        ...postingAdapter,
+        sourceCoverage: {
+          kind: "account_window" as const,
+          statuses: ["pending", "posted"] as ("pending" | "posted")[],
+          resources: ["synthetic:cal/recent"],
+          dateField: "transactionDate" as const,
+          days: 60,
+        },
+      };
+      const corrected = authorization("pending", {
+        transactionDate: "2039-01-01",
+        amountMinor: -250,
+      });
+      const correction = () =>
+        harness.capture(3, [corrected, row("posted")], dated);
+      const omission = () => harness.capture(5, [row("posted")], dated);
+      if (order === "correction-first") {
+        await correction();
+        await omission();
+      } else {
+        await omission();
+        await correction();
+      }
+      const pending = await component(survivor.id);
+      expect(pending).toMatchObject({
+        transactionDate: "2039-01-01",
+        amountMinor: -250,
+        presence: "seen",
+        lastSeenRunId: "posting-3",
+      });
+      expect(pending.sourceAbsence).toBeUndefined();
+      expect((await db.getTransaction(survivor.id))!.amountMinor).toBe(-100);
+      const cursor = await db.latestEventId();
+      await correction();
+      await omission();
+      expect(await db.latestEventId()).toBe(cursor);
+      const split = await db.unlinkPendingTransaction(
+        await harness.command(survivor.id, postedId),
+      );
+      expect(split.pending).toMatchObject({
+        transactionDate: "2039-01-01",
+        amountMinor: -250,
+        presence: "seen",
+      });
+      expect(split.pending.sourceAbsence).toBeUndefined();
+      expect(split.posted.amountMinor).toBe(-100);
+    },
+  );
+
   it("makes component absence and restoration semantic but repeated absence watermarks quiet", async () => {
     const { survivor, postedId } = await linked();
     await harness.capture(3, [authorization(), row("posted")]);
@@ -272,6 +326,7 @@ describe.each(backends)("%s linked current pending component", (backend) => {
       absent.version,
     );
     expect(await db.latestEventId()).toBe(quietCursor);
+    let factCursor = quietCursor;
     for (const day of [6, 4]) {
       await harness.capture(
         day,
@@ -280,12 +335,17 @@ describe.each(backends)("%s linked current pending component", (backend) => {
         { runId: `blocked-positive-${day}` },
       );
       expect(await component(survivor.id)).toMatchObject({
-        amountMinor: -100,
+        amountMinor: -900,
         presence: "not_returned",
-        lastSeenRunId: "posting-3",
+        lastSeenRunId: "blocked-positive-6",
         sourceAbsence: { runId: "posting-6" },
       });
-      expect(await db.latestEventId()).toBe(quietCursor);
+      if (day === 6) {
+        expect(await db.listEvents({ after: quietCursor })).toHaveLength(1);
+        factCursor = await db.latestEventId();
+      } else {
+        expect(await db.latestEventId()).toBe(factCursor);
+      }
     }
     const command = await harness.command(survivor.id, postedId);
     await harness.capture(7, [

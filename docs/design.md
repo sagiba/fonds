@@ -134,27 +134,27 @@ receipt and review reason. Contradictory or unsupported interpretations cannot
 revive older bundles; retained support is not fresh posting-match evidence. Legacy
 receipt origins remain unknown until fresh support is observed.
 
-Source membership is independent of posting links. Only accepted successful
-comparable coverage proves absence. The shared engine applies adapter-declared
-coverage across collection origins when covered; failed, incomplete or
-out-of-domain captures cannot exclude valid money. Newer retained coverage also
+Membership is independent of posting links. Only explicit, accepted coverage
+proves absence; comparability alone grants no omission authority. Shared engine
+coverage crosses origins only when declared; failed, incomplete or out-of-domain
+captures cannot exclude valid money. Newer retained coverage also
 governs historical discovery: later imports cannot resurrect proven omissions,
 while out-of-window history stays eligible. Billed lines are not
 absence-comparable; observed components can support synthesized purchases.
 
 Absence retains records, annotations and evidence without implying
 cancellation/refund, but excludes current reads/totals. Unknown membership,
-including `not_returned`, does not exclude. Only strictly newer recent positive
-evidence clears absence; equal-time absence wins. Repeated omissions update
-receipts without version/event churn. Owner removal is separate: reappearance
-must postdate its decision. [API fields](api.md#fields) owns inspectable state and
+including `not_returned`, does not exclude. Positive freshness governs facts;
+negative evidence applies only within its proven scope. Corrections re-evaluate
+retained coverage without discarding unreconstructable receipts. Within scope,
+restoration requires strictly newer positive evidence; equal-time absence wins.
+Repeated omissions advance receipts quietly. Reappearance must postdate owner removal. [API fields](api.md#fields) owns inspectable state and
 queries.
 
-Adapters may reject an implausibly empty recent posted capture while covered,
+Adapters may reject an implausibly empty recent capture while covered,
 eligible rows remain. This is a failed, applied `implausible_empty` run that
-cannot be replayed into the ledger. It can also block legitimate disappearance
-of the last posted population until provider completeness is established; it is
-not proof that every cancellation is reconciled.
+cannot be replayed into the ledger. Legitimate final-population disappearance can also be blocked until completeness
+is established; cancellation reconciliation is not guaranteed.
 
 ## Purchases and billed lines
 

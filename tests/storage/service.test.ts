@@ -565,13 +565,45 @@ for (const backend of backends) {
       ]);
     });
 
-    it("does not restore or change current state from an older capture", async () => {
+    it("preserves newer facts and membership while accepting independently newer native observations", async () => {
       await capture(db, connectionId, "recent-01", 1);
       await capture(db, connectionId, "recent-02", 3);
       const current = await db.listTransactions();
       const changesBefore = await db.listEvents();
       await capture(db, connectionId, "recent-01", 2, "older-capture");
-      expect(await db.listTransactions()).toEqual(current);
+      const expected = structuredClone(current);
+      const advanced = expected.filter((row) =>
+        ["SYNTHETIC-AUTH-PENDING-POSTED", "SYNTHETIC-TXN-VANISH"].some((key) =>
+          row.sourceKey.includes(`"${key}"`),
+        ),
+      );
+      expect(advanced).toHaveLength(2);
+      for (const row of advanced) {
+        expect(row.lastSeenRunId).toBe("recent-01-1");
+        row.lastSeenAt = "2040-08-02T00:00:00.000Z";
+        row.lastSeenRunId = "older-capture";
+        row.details.sourceRefs = row.details.sourceRefs.map((ref) => ({
+          ...ref,
+          runId: "older-capture",
+        }));
+        row.details.provider.cal = {
+          ...(row.details.provider.cal as Record<string, never>),
+          identity: { currentRows: [0] },
+        };
+        for (const receipt of [
+          row.sourceEvidence?.identity,
+          row.sourceEvidence?.financial,
+        ]) {
+          if (receipt) {
+            receipt.runId = "older-capture";
+            receipt.capturedAt = row.lastSeenAt;
+          }
+        }
+      }
+      expect(await db.listTransactions()).toEqual(expected);
+      expect(await db.listEvents()).toEqual(changesBefore);
+      await capture(db, connectionId, "recent-01", 2, "older-capture");
+      expect(await db.listTransactions()).toEqual(expected);
       expect(await db.listEvents()).toEqual(changesBefore);
     });
 

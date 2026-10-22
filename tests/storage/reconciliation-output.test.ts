@@ -17,11 +17,13 @@ const completeCalShape = {
   ...calAdapter,
   sourceCoverage: {
     kind: "account_window" as const,
+    statuses: ["pending", "posted"] as const,
     resources: ["cal:recent"],
     dateField: "transactionDate" as const,
     days: 60,
   },
   rejectEmptyRecentPosted: true,
+  rejectEmptyRecent: false,
 };
 
 afterEach(() => vi.useRealTimers());

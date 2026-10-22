@@ -27,6 +27,7 @@ export const calAdapter: SourceAdapter = {
     postedAmountBasis: "purchase_commitment",
   },
   recentComparableDays: RECENT_COMPARABLE_DAYS,
+  rejectEmptyRecent: true,
   sourceCoverage: {
     kind: "account_window",
     statuses: ["pending"],

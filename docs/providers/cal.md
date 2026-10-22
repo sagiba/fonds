@@ -81,12 +81,13 @@ become review candidates.
 
 ## Absence and recovery
 
-Posted omissions, including empty recent lists, do not establish cancellation or
-[source absence](../api.md#fields): previously observed purchases remain in current
-reads and totals. Supported pending omissions can establish absence within the
-same recent scope. Recent reads cannot exclude purchases imported from history.
-The [coverage rationale](../../src/providers/cal/source-notes.md#calwindow-recent-window-and-search-coverage)
-explains the limits. Accounts commit independently; invocations can be partial.
+Posted omissions prove neither cancellation nor [source absence](../api.md#fields):
+purchases retain observation state, current reads and totals, including
+history imports. Pending omissions can establish absence within recent scope.
+A wholly empty response with covered pending rows fails with
+`implausible_empty` without membership changes; retry. This may delay final expiry; leaving coverage does not itself prove disappearance.
+See [coverage rationale](../../src/providers/cal/source-notes.md#calwindow-recent-window-and-search-coverage)
+for limits. Accounts commit independently; invocations can be partial.
 
 Authentication challenges, invalid credentials and rate limits stop the refresh,
 and repeated network or invalid-response failures stop after a bounded budget

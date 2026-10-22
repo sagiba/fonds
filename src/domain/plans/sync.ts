@@ -193,7 +193,7 @@ export interface SyncResult {
 }
 
 /** Bump when shared reconciliation rules change, independently of archived parser versions. */
-export const RECONCILIATION_POLICY_VERSION = "source-presence-v13";
+export const RECONCILIATION_POLICY_VERSION = "source-presence-v14";
 
 export function reconciliationFailure(warnings: readonly string[]) {
   const failureCode = reconciliationFailureCodeSchema.options.find((code) =>
@@ -412,7 +412,7 @@ function legacyIdentityComparisons(
   >,
   adapter: SourceAdapter,
 ): SourceIdentityFacts[] | undefined {
-  if (oldGroup.length !== newGroup.length) {
+  if (oldGroup.length > newGroup.length) {
     return undefined;
   }
   const previousByProof = new Map<string, Transaction>();
@@ -431,9 +431,14 @@ function legacyIdentityComparisons(
   for (const input of newGroup) {
     const pristine = pristineInputs.get(input);
     const proof = pristine && legacyIdentityProof(input, pristine, adapter);
-    const previous =
-      proof === undefined ? undefined : previousByProof.get(proof);
-    if (!previous || comparisons.has(previous.id)) {
+    if (proof === undefined) {
+      return undefined;
+    }
+    const previous = previousByProof.get(proof);
+    if (!previous) {
+      continue;
+    }
+    if (comparisons.has(previous.id)) {
       return undefined;
     }
     const captured = previous.sourceEvidence?.identity?.financialFingerprint;
@@ -451,7 +456,11 @@ function legacyIdentityComparisons(
       },
     });
   }
-  return oldGroup.map((row) => comparisons.get(row.id)!);
+  // Extra observations are new only after every legacy member has exactly one
+  // pristine counterpart. A different source key or amount alone proves neither.
+  return comparisons.size === oldGroup.length
+    ? oldGroup.map((row) => comparisons.get(row.id)!)
+    : undefined;
 }
 
 function groupSignature(
@@ -998,6 +1007,9 @@ function indexAccountRows(
           changedFacts:
             uncertain &&
             !unverifiedLegacy &&
+            // Exact migration proofs preserve the old attribution even when
+            // the complete current capture also contains independent new rows.
+            !missingComparison &&
             oldGroup.length > 0 &&
             (oldGroup.length !== newGroup.length ||
               groupSignature(comparisonGroup!, includeSource, adapter) !==
@@ -1487,39 +1499,76 @@ export function extractRun(run: Run, adapter: SourceAdapter) {
 
 type ExtractedResponse = ReturnType<typeof extractRun>["extracted"][number];
 
-/**
- * A comparable recent posted read that returned no posted rows while the
- * account still has live posted rows inside the recent horizon.
- */
-function implausiblyEmptyPosted(
+function stalePartition(
+  response: FinancialResponse,
+  status: "posted" | "pending",
+  adapter: SourceAdapter,
+  history: ReturnType<typeof indexRunHistory>,
+): boolean {
+  const latest = history.latestComparable.get(
+    partitionKey(
+      adapter,
+      response.accountKey,
+      response.endpoint,
+      response.scope,
+      status,
+    ),
+  );
+  return latest !== undefined && latest > response.capturedAt;
+}
+
+/** Empty-response safeguards cannot grant coverage the source did not declare. */
+function implausiblyEmpty(
   { response, result }: ExtractedResponse,
   rows: Transaction[],
   adapter: SourceAdapter,
   history: ReturnType<typeof indexRunHistory>,
   cardKeys: ReadonlyMap<string, string>,
 ): boolean {
-  const partition = result.partitions.find((part) => part.status === "posted");
-  const coverage =
-    partition && !result.historical
-      ? sourceCoverage(adapter, response, partition)
-      : undefined;
-  return (
-    coverage !== undefined &&
-    !result.transactions.some((row) => row.status === "posted") &&
-    rows.some(
-      (row) =>
-        row.presence === "seen" &&
-        !row.supersededById &&
-        row.lastSeenAt <= response.capturedAt &&
-        snapshotContainsRow(
-          adapter,
-          coverage,
-          row,
-          history.response(row.lastSeenRunId, row.sourceScope),
-          row.cardId ? cardKeys.get(row.cardId) : undefined,
-        ),
-    )
-  );
+  if (result.historical) {
+    return false;
+  }
+  const whollyEmpty = result.transactions.length === 0;
+  return result.partitions.some((partition) => {
+    if (
+      !(
+        (adapter.rejectEmptyRecent && whollyEmpty) ||
+        (adapter.rejectEmptyRecentPosted &&
+          partition.status === "posted" &&
+          !result.transactions.some((row) => row.status === "posted"))
+      ) ||
+      stalePartition(response, partition.status, adapter, history)
+    ) {
+      return false;
+    }
+    const coverage = sourceCoverage(adapter, response, partition);
+    if (!coverage) {
+      return false;
+    }
+    const coveredCurrent = (row: Transaction) =>
+      row.presence !== "removed" &&
+      row.sourceAbsence === undefined &&
+      !row.supersededById &&
+      row.lastSeenAt <= response.capturedAt &&
+      snapshotContainsRow(
+        adapter,
+        coverage,
+        row,
+        history.response(row.lastSeenRunId, row.sourceScope),
+        row.cardId ? cardKeys.get(row.cardId) : undefined,
+      );
+    return rows.some((row) => {
+      const link = row.details.postingLink;
+      return (
+        coveredCurrent(row) ||
+        (row.presence !== "removed" &&
+          !row.supersededById &&
+          link !== undefined &&
+          !link.split &&
+          coveredCurrent(link.pending))
+      );
+    });
+  });
 }
 
 /** Every financial operation uses the same content rule, including indirect review changes. */
@@ -1846,9 +1895,8 @@ export function planRun(
   );
   // Rejection applies to the whole run; collection and the CLI build one response per run.
   if (
-    adapter.rejectEmptyRecentPosted &&
     extracted.some((entry) =>
-      implausiblyEmptyPosted(entry, beforeRows, adapter, history, cardKeys),
+      implausiblyEmpty(entry, beforeRows, adapter, history, cardKeys),
     )
   ) {
     const failureCode = reconciliationFailureCodeSchema.enum.implausible_empty;
@@ -1893,16 +1941,7 @@ export function planRun(
   for (const { response, result, recentCutoff } of extracted) {
     const stalePartitions = new Set<"posted" | "pending">();
     for (const status of ["posted", "pending"] as const) {
-      const latest = history.latestComparable.get(
-        partitionKey(
-          adapter,
-          response.accountKey,
-          response.endpoint,
-          response.scope,
-          status,
-        ),
-      );
-      if (latest && latest > response.capturedAt) {
+      if (stalePartition(response, status, adapter, history)) {
         stalePartitions.add(status);
       }
     }
@@ -2029,6 +2068,40 @@ export function planRun(
         prior && { runId: prior.runId, capturedAt: prior.coverage.capturedAt }
       );
     };
+    const reconciledAbsence = (
+      input: TransactionFacts,
+      previous: Pick<Transaction, "lastSeenAt" | "sourceAbsence">,
+    ) => {
+      const applicable = priorAbsence(input, previous.lastSeenAt);
+      const retained = previous.sourceAbsence;
+      if (!retained || retained.capturedAt < response.capturedAt) {
+        return applicable;
+      }
+      const witnesses = history.coverages.filter(
+        ({ runId: witnessRunId, coverage }) =>
+          witnessRunId === retained.runId &&
+          coverage.capturedAt === retained.capturedAt &&
+          coverage.accountKey === input.sourceScope &&
+          coverage.status === input.status,
+      );
+      // Facts have their own positive clock. A later negative receipt remains
+      // binding unless its retained scope disproves applicability to those facts.
+      const stillBinding =
+        witnesses.length === 0 ||
+        witnesses.some(({ coverage }) =>
+          snapshotContainsRow(
+            adapter,
+            coverage,
+            input,
+            response,
+            input.cardId ? cardKeys.get(input.cardId) : undefined,
+          ),
+        );
+      return stillBinding &&
+        (!applicable || retained.capturedAt >= applicable.capturedAt)
+        ? retained
+        : applicable;
+    };
     const continuations = planPostingContinuations({
       current,
       inputs,
@@ -2125,9 +2198,25 @@ export function planRun(
         changedFacts,
         fingerprints,
       } = index.groups.get(base)!;
-      // Check evidence precedence before even changing identity/review flags.
+      const knownNative = knownGroup.length === 1 ? knownGroup[0] : undefined;
+      const newerNativeFacts =
+        !result.historical &&
+        input.identityStrength === "native" &&
+        newGroup.length === 1 &&
+        knownNative?.identityStrength === "native" &&
+        !knownNative.supersededById &&
+        (history.historical(knownNative) ||
+          knownNative.lastSeenAt < response.capturedAt) &&
+        index.matches(input.sourceKey).count === 1 &&
+        !input.details.issues.includes("ambiguous_identity") &&
+        !knownNative.details.issues.includes("ambiguous_identity") &&
+        (knownNative.sourceKey === input.sourceKey ||
+          knownNative.sourceAliases.includes(input.sourceKey));
+      // Snapshot chronology does not invalidate independently newer native facts.
+      // Historical captures still cannot replace current facts.
       if (
-        (result.historical || stalePartitions.has(input.status)) &&
+        (result.historical ||
+          (stalePartitions.has(input.status) && !newerNativeFacts)) &&
         knownGroup.length > 0
       ) {
         // Explicit historical windows can add observations to a verified native identity.
@@ -2216,7 +2305,13 @@ export function planRun(
       if (
         previous &&
         ((previous.sourceAbsence !== undefined &&
-          previous.sourceAbsence.capturedAt >= response.capturedAt) ||
+          previous.sourceAbsence.capturedAt >= response.capturedAt &&
+          (input.identityStrength !== "native" ||
+            previous.identityStrength !== "native" ||
+            matches.count !== 1 ||
+            newGroup.length !== 1 ||
+            input.details.issues.includes("ambiguous_identity") ||
+            previous.details.issues.includes("ambiguous_identity"))) ||
           (!history.historical(previous) &&
             previous.lastSeenAt > response.capturedAt))
       ) {
@@ -2404,18 +2499,6 @@ export function planRun(
           });
         }
       } else {
-        if (
-          counterpartyAbsent &&
-          input.identityStrength === "native" &&
-          previous.identityStrength === "native" &&
-          !input.details.issues.includes("ambiguous_identity") &&
-          !previous.details.issues.includes("ambiguous_identity") &&
-          input.kind === "transfer" &&
-          previous.kind === "transfer"
-        ) {
-          input.counterpartyName = previous.counterpartyName;
-          retainUnassertedCounterpartyIdentity(input, previous);
-        }
         // Missing plan metadata is not a single-payment assertion. Keep the
         // known plan while accepting fresh purchase facts; explicit conflicts
         // keep accepted money and remain reviewable until the source restates
@@ -2509,7 +2592,22 @@ export function planRun(
             !result.historical &&
             !stalePartitions.has(input.status),
         });
-        const accepted = financial.facts;
+        const accepted = {
+          ...financial.facts,
+          sourceEvidence: input.sourceEvidence,
+        };
+        if (
+          counterpartyAbsent &&
+          accepted.identityStrength === "native" &&
+          previous.identityStrength === "native" &&
+          !accepted.details.issues.includes("ambiguous_identity") &&
+          !previous.details.issues.includes("ambiguous_identity") &&
+          accepted.kind === "transfer" &&
+          previous.kind === "transfer"
+        ) {
+          accepted.counterpartyName = previous.counterpartyName;
+          retainUnassertedCounterpartyIdentity(accepted, previous);
+        }
         retainEvidence(plan.transaction(id)!, accepted, adapter);
         const changed =
           JSON.stringify(financialState(previous)) !==
@@ -2524,7 +2622,7 @@ export function planRun(
           newGroup.length === 1 &&
           !accepted.details.issues.includes("ambiguous_identity") &&
           !previous.details.issues.includes("ambiguous_identity")
-            ? priorAbsence(accepted, previous.lastSeenAt)
+            ? reconciledAbsence(accepted, previous)
             : undefined;
         const presence = sourceAbsence ? "not_returned" : "seen";
         const presenceChanged =
@@ -2757,10 +2855,7 @@ export function planRun(
             : undefined;
         if (
           !result.historical &&
-          !stalePartitions.has("pending") &&
           pending.lastSeenAt < response.capturedAt &&
-          (!pending.sourceAbsence ||
-            pending.sourceAbsence.capturedAt < response.capturedAt) &&
           (pending.presence !== "removed" ||
             (pending.lastSeenAt < response.capturedAt &&
               (!removal || removal.createdAt < response.capturedAt)))
@@ -2777,7 +2872,7 @@ export function planRun(
           });
           Object.assign(accepted, financial.facts);
           retainEvidence(pending, accepted, adapter);
-          const sourceAbsence = priorAbsence(accepted, pending.lastSeenAt);
+          const sourceAbsence = reconciledAbsence(accepted, pending);
           pending = {
             ...pending,
             ...accepted,

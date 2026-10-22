@@ -54,15 +54,15 @@ established transaction role and remains unretained, not classified as proven no
   removed. A successful empty yearly search can omit records that its quarterly
   or monthly subdivisions return. The web frontend's 540-day selection limit is
   not a server retention guarantee.
-- **Policy:** posted omissions establish no financial absence: neither a stated
-  window nor a purchase date proves that a billed transaction must still appear.
-  Pending omissions compare only within the same known unfiltered recent scope,
-  with a 60-day margin; completeness remains an adopted
-  policy, not a server guarantee. Recent reads cannot exclude historical purchases.
-  CAL has no booking date. Billed lines are not compared for absence because search
-  selects by purchase date. Search windows are padded by one UTC day because the
-  boundaries are unknown. Empty posted lists do not cancel retained purchases or
-  prevent independent pending observations from being applied.
+- **Policy:** posted omissions establish no financial absence or observation-state
+  change: a purchase date cannot prove continued recent-list membership. Pending
+  omissions use the same unfiltered recent scope with a 60-day margin, an adopted
+  policy rather than a completeness guarantee. Wholly empty responses cannot
+  distinguish final pending expiry from transient emptiness; rejection while covered
+  pending rows remain favors retention. Positive pending observations still apply
+  with empty posted lists. Historical purchases remain eligible. CAL has no booking
+  date; billed lines are noncomparable because search selects by purchase date.
+  Unknown boundaries justify padding search windows by one UTC day.
 - **Checks:** [collection] "CAL monthly search coverage regression", "pads UTC
   calendar dates…".
 

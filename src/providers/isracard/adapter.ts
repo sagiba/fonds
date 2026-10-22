@@ -13,7 +13,7 @@ import { ISRACARD_ENDPOINTS } from "./transport.js";
 
 export const isracardAdapter: SourceAdapter = {
   provider: "isracard",
-  parserVersion: "isracard-v16",
+  parserVersion: "isracard-v17",
   retainProviderEvidence: retainIsracardEvidence,
   mergeProviderEvidence: mergeIsracardEvidence,
   paymentContextFromRetainedEvidence: retainedPaymentContext,
@@ -22,6 +22,7 @@ export const isracardAdapter: SourceAdapter = {
   financialAuthority: isracardFinancialAuthority,
   validateScope: validateIsracardScope,
   normalizeScope: normalizeIsracardScope,
+  sourceCoverage: { kind: "same_origin", statuses: ["pending"] },
   pendingPostingCandidates: true,
   automaticPosting: {
     pendingAmountBasis: "authorization",

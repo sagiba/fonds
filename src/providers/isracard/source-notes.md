@@ -321,10 +321,10 @@ and every code had one label. That label is the evidence for a kind:
   details remain evidence through sparse refreshes, so omitting them cannot clear
   their conflicts. Valid same-row
   city and ISO alpha-3 country fields are used on pending and posted rows; phone-only
-  cities and explicit web/email addresses are rejected. A transfer's bound
-  `motavName` carries no further party role. An absent optional detail preserves an unambiguously matched
-  native transfer's prior counterparty name; a valid bound detail with an empty
-  counterparty clears it.
+  cities and explicit web/email addresses are rejected. Bound `motavName`
+  identifies a party, not its role or unavailable Digital classification.
+  Bound empty clears; absent detail preserves a uniquely matched native
+  transfer's prior name through retained financial support.
 - **Checks:** [payment context] covers independent payment facts and conflicts;
   [pending] covers approval enrichment; [extraction] covers bound-detail and
   merchant projection.
