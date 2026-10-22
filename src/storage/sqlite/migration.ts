@@ -10,6 +10,6 @@ export const sqliteMigrations: readonly Migration[] = [
   {
     "version": 2,
     "name": "0002_source_lifecycle",
-    "sql": "ALTER TABLE transaction_reconciliation\n  ADD COLUMN posting_overlap_json TEXT CHECK (posting_overlap_json IS NULL OR json_valid(posting_overlap_json));\nALTER TABLE transactions ADD COLUMN source_absence_json TEXT;\nALTER TABLE transaction_reconciliation\n  ADD COLUMN source_evidence_json TEXT CHECK (source_evidence_json IS NULL OR json_valid(source_evidence_json));\n"
+    "sql": "ALTER TABLE transaction_reconciliation\n  ADD COLUMN posting_overlap_json TEXT CHECK (posting_overlap_json IS NULL OR json_valid(posting_overlap_json));\nALTER TABLE transactions ADD COLUMN source_absence_json TEXT CHECK (source_absence_json IS NULL OR json_valid(source_absence_json));\nALTER TABLE transaction_reconciliation\n  ADD COLUMN source_evidence_json TEXT CHECK (source_evidence_json IS NULL OR json_valid(source_evidence_json));\n"
   }
 ];

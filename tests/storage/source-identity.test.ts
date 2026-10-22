@@ -5,7 +5,9 @@ import {
   presentWireTransaction,
 } from "../../src/application/wire-output.js";
 import { emptyDetails, type TransactionInput } from "../../src/domain/model.js";
+import { evidenceObject } from "../../src/domain/provider-evidence.js";
 import type { TransactionView } from "../../src/domain/read-model.js";
+import type { CollectionScope } from "../../src/domain/records.js";
 import type { SourceAdapter } from "../../src/domain/source-adapter.js";
 import { calAdapter } from "../../src/providers/cal/adapter.js";
 import {
@@ -33,6 +35,33 @@ const shared = {
   provider: { cal: { identity: { baseKey: "synthetic-shared" } } },
 };
 const restated = () => ({ ...parent(), installmentCount: 1, details: shared });
+
+const sourceRowsAdapter: SourceAdapter = {
+  ...synthetic,
+  retainProviderEvidence: (value) =>
+    evidenceObject(value, {
+      rows: [{ witness: "scalar", amount: "scalar", currency: "scalar" }],
+    }),
+};
+
+function evidencedRow(
+  key: string,
+  fields: Partial<TransactionInput> = {},
+): TransactionInput {
+  const input = row(key, { identityStrength: "ambiguous", ...fields });
+  return {
+    ...input,
+    details: {
+      ...input.details,
+      provider: {
+        cal: {
+          identity: { baseKey: "legacy-evidenced-group" },
+          rows: [{ witness: key, amount: input.amountMinor, currency: "ILS" }],
+        },
+      },
+    },
+  };
+}
 
 function semantic(rows: TransactionView[]) {
   return rows
@@ -114,7 +143,11 @@ describe.each(backends)("%s captured source identity", (backend) => {
   });
   afterEach(() => db.close());
 
-  async function capture(body: unknown, adapter: SourceAdapter = synthetic) {
+  async function capture(
+    body: unknown,
+    adapter: SourceAdapter = synthetic,
+    scope?: CollectionScope,
+  ) {
     day++;
     return db.ingestRun(
       {
@@ -126,6 +159,7 @@ describe.each(backends)("%s captured source identity", (backend) => {
             endpoint: "synthetic:source-identity",
             capturedAt: `2040-07-${String(day).padStart(2, "0")}T12:00:00Z`,
             responseText: JSON.stringify(body),
+            ...(scope === undefined ? {} : { scope }),
           },
         ],
       },
@@ -139,6 +173,15 @@ describe.each(backends)("%s captured source identity", (backend) => {
       presence: "all",
       includeSuperseded: true,
     });
+
+  async function forgetComparisons(ids: string[]) {
+    for (const id of ids) {
+      await db.raw(
+        "UPDATE transaction_reconciliation SET source_evidence_json = NULL WHERE transaction_id = ?",
+        [id],
+      );
+    }
+  }
 
   async function quiet(body: unknown, adapter: SourceAdapter = synthetic) {
     const before = semantic(await rows());
@@ -334,11 +377,28 @@ describe.each(backends)("%s captured source identity", (backend) => {
     ).toMatchObject({ retiredFromMatching: false, runId: "source-2" });
     expect(await db.listEvents({ after: cursor })).toEqual([]);
 
-    await capture([
+    const same = [
       parent(),
       line("line-a"),
       line("line-b", { identityStrength: "native", amountMinor: -2400 }),
-    ]);
+    ].map((input) => ({
+      ...input,
+      details: {
+        ...input.details,
+        provider: {
+          cal: {
+            rows: [
+              {
+                witness: input.sourceKey,
+                amount: input.amountMinor,
+                currency: input.currency,
+              },
+            ],
+          },
+        },
+      },
+    }));
+    await capture(same, sourceRowsAdapter);
     const held = (await rows()).find((item) => item.sourceKey === "line-a")!;
     const note = await db.editAnnotation({
       transactionId: held.id,
@@ -349,23 +409,388 @@ describe.each(backends)("%s captured source identity", (backend) => {
       "UPDATE transaction_reconciliation SET source_evidence_json = NULL WHERE transaction_id = ?",
       [held.id],
     );
-    const same = [
-      parent(),
-      line("line-a"),
-      line("line-b", { identityStrength: "native", amountMinor: -2400 }),
-    ];
-    expect(await capture(same)).toMatchObject({ created: 1 });
+    expect(held.details.provider.cal!.rows).toHaveLength(1);
+    expect(await capture(same, sourceRowsAdapter)).toMatchObject({
+      created: 0,
+      unlisted: 0,
+    });
     expect(await db.getTransaction(held.id)).toMatchObject({
       amountMinor: null,
       annotation: note,
-      sourceEvidence: { identity: { retiredFromMatching: true } },
+      presence: "seen",
+      sourceIssues: expect.arrayContaining(["unverified_legacy_identity"]),
     });
     expect(
-      (await db.getTransaction(held.id))!.sourceEvidence!.identity!
-        .financialFingerprint,
+      (await db.getTransaction(held.id))!.sourceEvidence?.identity,
     ).toBeUndefined();
-    await quiet(same);
+    expect(await rows()).toHaveLength(3);
+    await quiet(same, sourceRowsAdapter);
   });
+
+  it.each(["weak", "ambiguous"] as const)(
+    "defers an ordinary legacy %s row without a proof instead of replacing it",
+    async (identityStrength) => {
+      const input = row("legacy-ordinary", {
+        identityStrength,
+        amountMinor: -12345,
+      });
+      await capture([input]);
+      const original = (await rows())[0]!;
+      const annotation = await db.editAnnotation({
+        transactionId: original.id,
+        expectedVersion: 0,
+        notes: "Ordinary legacy owner note.",
+      });
+      await forgetComparisons([original.id]);
+      const totals = await db.getTotals();
+      const cursor = await db.latestEventId();
+      expect(await capture([input])).toMatchObject({
+        created: 0,
+        updated: 1,
+        unlisted: 0,
+      });
+      expect(await db.listTransactions({ presence: "current" })).toHaveLength(
+        1,
+      );
+      expect(await db.getTransaction(original.id)).toMatchObject({
+        identityStrength,
+        amountMinor: -12345,
+        presence: "seen",
+        lastSeenAt: original.lastSeenAt,
+        annotation,
+        reviewRequired: true,
+        sourceIssues: ["unverified_legacy_identity"],
+      });
+      expect(
+        (await db.getTransaction(original.id))!.sourceEvidence,
+      ).toBeUndefined();
+      expect(await db.getTotals()).toEqual(totals);
+      expect(
+        (await db.listEvents({ after: cursor })).map((event) => event.type),
+      ).not.toContain("transaction.created");
+      await quiet([input]);
+      const deferred = await db.raw(
+        "SELECT reason, first_seen_run_id, last_seen_run_id FROM deferred_evidence",
+      );
+      expect(deferred).toEqual([
+        {
+          reason: "unverified_legacy_identity",
+          first_seen_run_id: "source-2",
+          last_seen_run_id: "source-4",
+        },
+      ]);
+    },
+  );
+
+  it.each(["ordinary ambiguous posting", "weak pending authorization"])(
+    "bootstraps a legacy CAL %s from exact retained source evidence",
+    async (scenario) => {
+      const document = JSON.parse(fixture("recent-01"));
+      const pending = scenario === "weak pending authorization";
+      const source = pending
+        ? document.result.clearanceRequests[1]
+        : document.result.transactions.find(
+            (item: { trnIntId: string }) =>
+              item.trnIntId === "SYNTHETIC-TXN-REGULAR",
+          );
+      delete source[pending ? "transactionID" : "trnIntId"];
+      const body = {
+        statusCode: 1,
+        result: {
+          transactions: pending ? [] : [source],
+          clearanceRequests: pending ? [source] : [],
+        },
+      };
+      await capture(body, calAdapter);
+      const original = (await rows())[0]!;
+      await db.editAnnotation({
+        transactionId: original.id,
+        expectedVersion: 0,
+        notes: "CAL legacy owner note.",
+      });
+      await forgetComparisons([original.id]);
+      const before = semantic(await rows());
+      const events = await db.listEvents();
+      expect(await capture(body, calAdapter)).toMatchObject({
+        created: 0,
+        updated: 0,
+        unlisted: 0,
+      });
+      expect(semantic(await rows())).toEqual(before);
+      expect(await db.listTransactions({ presence: "current" })).toHaveLength(
+        1,
+      );
+      expect(
+        (await db.getTransaction(original.id))!.sourceEvidence?.identity,
+      ).toMatchObject({
+        runId: "source-2",
+        retiredFromMatching: false,
+      });
+      expect(await db.listEvents()).toEqual(events);
+      await quiet(body, calAdapter);
+    },
+  );
+
+  it("bootstraps a uniquely proved reordered legacy group without moving its notes", async () => {
+    const first = evidencedRow("a", { amountMinor: -100 });
+    const second = evidencedRow("b", { amountMinor: -200 });
+    await capture([first, second], sourceRowsAdapter);
+    const original = (await rows()).find((item) => item.sourceKey === "a")!;
+    await db.editAnnotation({
+      transactionId: original.id,
+      expectedVersion: 0,
+      notes: "Note stays on a.",
+    });
+    await forgetComparisons((await rows()).map((item) => item.id));
+    const before = semantic(await rows());
+    const events = await db.listEvents();
+    expect(await capture([second, first], sourceRowsAdapter)).toMatchObject({
+      created: 0,
+      updated: 0,
+      unlisted: 0,
+    });
+    expect(semantic(await rows())).toEqual(before);
+    expect(await db.listEvents()).toEqual(events);
+    await quiet([first, second], sourceRowsAdapter);
+  });
+
+  it.each([
+    "partial capture",
+    "omitted transfer name",
+    "original money",
+    "FX fee",
+    "FX rate",
+  ] as const)(
+    "defers a legacy comparison without complete pristine proof: %s",
+    async (reason) => {
+      const input = evidencedRow("guarded", {
+        ...(reason === "omitted transfer name"
+          ? { kind: "transfer" as const }
+          : {}),
+        ...(reason === "partial capture"
+          ? { details: { ...emptyDetails(), issues: ["ambiguous_identity"] } }
+          : {}),
+      });
+      await capture([input], sourceRowsAdapter);
+      const original = (await rows())[0]!;
+      const annotation = await db.editAnnotation({
+        transactionId: original.id,
+        expectedVersion: 0,
+        notes: "Guarded legacy annotation.",
+      });
+      await forgetComparisons([original.id]);
+      const incoming = structuredClone(input);
+      if (reason === "omitted transfer name") {
+        delete incoming.counterpartyName;
+      } else if (reason === "original money") {
+        incoming.originalAmountMinor = -300;
+        incoming.originalCurrency = "USD";
+      } else if (reason === "FX fee") {
+        incoming.fxFeeMinor = 125;
+        incoming.fxFeeCurrency = "ILS";
+      } else if (reason === "FX rate") {
+        incoming.details.currencyExchange = [
+          {
+            sourceCurrency: "USD",
+            targetCurrency: "ILS",
+            unitCurrency: "USD",
+            exchangeRate: "3.2",
+            quotationDate: "2040-07-01",
+          },
+        ];
+      }
+      const adapter: SourceAdapter =
+        reason === "partial capture"
+          ? {
+              ...sourceRowsAdapter,
+              extract(text, context) {
+                const result = sourceRowsAdapter.extract(text, context);
+                return {
+                  ...result,
+                  partitions: result.partitions.map((partition) => ({
+                    ...partition,
+                    comparable: false,
+                  })),
+                };
+              },
+            }
+          : sourceRowsAdapter;
+      expect(await capture([incoming], adapter)).toMatchObject({
+        created: 0,
+        updated: 1,
+        unlisted: 0,
+      });
+      const retained = (await db.getTransaction(original.id))!;
+      expect(retained).toMatchObject({
+        amountMinor: original.amountMinor,
+        originalAmountMinor: original.originalAmountMinor,
+        originalCurrency: original.originalCurrency,
+        fxFeeMinor: original.fxFeeMinor,
+        fxFeeCurrency: original.fxFeeCurrency,
+        counterpartyName: original.counterpartyName,
+        identityStrength: original.identityStrength,
+        presence: "seen",
+        annotation,
+        sourceIssues:
+          reason === "partial capture"
+            ? ["ambiguous_identity", "unverified_legacy_identity"]
+            : ["unverified_legacy_identity"],
+      });
+      expect(retained.details.currencyExchange).toEqual(
+        original.details.currencyExchange,
+      );
+      expect(retained.sourceEvidence).toBeUndefined();
+      await quiet([incoming], adapter);
+      // A later timestamp alone did not clear review. The complete original
+      // statement supplies the actual unique proof, including explicit null.
+      expect(await capture([input], sourceRowsAdapter)).toMatchObject({
+        created: 0,
+        updated: 1,
+        unlisted: 0,
+      });
+      expect(await db.getTransaction(original.id)).toMatchObject({
+        amountMinor: original.amountMinor,
+        annotation,
+        sourceIssues:
+          reason === "partial capture" ? ["ambiguous_identity"] : [],
+        sourceEvidence: {
+          identity: { retiredFromMatching: false, runId: "source-5" },
+        },
+      });
+      await quiet([input], sourceRowsAdapter);
+    },
+  );
+
+  it("defers indistinguishable legacy evidence rather than guessing an annotation's row", async () => {
+    const first = evidencedRow("a");
+    const second = { ...first, sourceKey: "b" };
+    await capture([first, second], sourceRowsAdapter);
+    const original = (await rows()).find((item) => item.sourceKey === "a")!;
+    const annotation = await db.editAnnotation({
+      transactionId: original.id,
+      expectedVersion: 0,
+      notes: "Do not guess this note's attribution.",
+    });
+    await forgetComparisons((await rows()).map((item) => item.id));
+    expect(await capture([second, first], sourceRowsAdapter)).toMatchObject({
+      created: 0,
+      unlisted: 0,
+    });
+    expect(await rows()).toHaveLength(2);
+    expect(await db.getTransaction(original.id)).toMatchObject({
+      annotation,
+      sourceIssues: ["unverified_legacy_identity"],
+    });
+    expect(
+      (await rows()).every((item) => item.sourceEvidence === undefined),
+    ).toBe(true);
+    await quiet([first, second], sourceRowsAdapter);
+  });
+
+  it.each(["history-only", "confirmed absent", "owner removed"] as const)(
+    "distinguishes unknown legacy membership from an intentionally separate weak reappearance: %s",
+    async (membership) => {
+      const input = evidencedRow("membership", {
+        identityStrength: "weak",
+        amountMinor: -12345,
+      });
+      const historical: SourceAdapter = {
+        ...sourceRowsAdapter,
+        extract(text, context) {
+          return {
+            ...sourceRowsAdapter.extract(text, context),
+            historical: true,
+          };
+        },
+      };
+      await capture(
+        [input],
+        membership === "history-only" ? historical : sourceRowsAdapter,
+        membership === "history-only"
+          ? { kind: "history", from: "2040-07-01", to: "2040-07-01" }
+          : undefined,
+      );
+      const original = (await rows())[0]!;
+      const annotation = await db.editAnnotation({
+        transactionId: original.id,
+        expectedVersion: 0,
+        notes: "Original membership annotation.",
+      });
+      await forgetComparisons([original.id]);
+      if (membership === "confirmed absent") {
+        await capture([], sourceRowsAdapter);
+        expect(
+          (await db.getTransaction(original.id))!.sourceAbsence,
+        ).toBeDefined();
+      } else if (membership === "owner removed") {
+        await db.confirmRemoval({
+          transactionId: original.id,
+          expectedVersion: original.version,
+          reason: "Invented owner decision.",
+        });
+      } else {
+        expect(original.presence).toBe("not_returned");
+        expect(original.sourceAbsence).toBeUndefined();
+      }
+      expect(await capture([input], sourceRowsAdapter)).toMatchObject({
+        created: membership === "history-only" ? 0 : 1,
+      });
+      const current = await db.listTransactions({ presence: "current" });
+      expect(current).toHaveLength(1);
+      expect(await db.getTotals()).toMatchObject({
+        includedCount: 1,
+        totals: [
+          {
+            currency: "ILS",
+            amountBasis: "purchase_commitment",
+            amountMinor: -12345,
+          },
+        ],
+      });
+      expect(await db.getTransaction(original.id)).toMatchObject({
+        annotation,
+      });
+      if (membership === "history-only") {
+        expect(current[0]).toMatchObject({
+          id: original.id,
+          presence: "not_returned",
+          identityStrength: "weak",
+          sourceIssues: ["unverified_legacy_identity"],
+        });
+        expect(current[0]!.sourceEvidence).toBeUndefined();
+        expect(await rows()).toHaveLength(1);
+      } else {
+        expect(current[0]!.id).not.toBe(original.id);
+        expect(current[0]!.annotation).toBeNull();
+        expect(await rows()).toHaveLength(2);
+      }
+      if (membership === "confirmed absent") {
+        const before = semantic(await rows());
+        const events = await db.listEvents();
+        for (let repeat = 0; repeat < 2; repeat++) {
+          expect(await capture([input], sourceRowsAdapter)).toMatchObject({
+            created: 0,
+            updated: 0,
+            unlisted: 0,
+          });
+          const receipt = {
+            runId: `source-${day}`,
+            capturedAt: `2040-07-${String(day).padStart(2, "0")}T12:00:00.000Z`,
+          };
+          expect((await db.getTransaction(original.id))!.sourceAbsence).toEqual(
+            receipt,
+          );
+          // Only the independently validated continuing-absence watermark moves.
+          before.find((item) => item.id === original.id)!.sourceAbsence =
+            receipt;
+          expect(semantic(await rows())).toEqual(before);
+          expect(await db.listEvents()).toEqual(events);
+        }
+      } else {
+        await quiet([input], sourceRowsAdapter);
+      }
+    },
+  );
 
   it.each(["original money", "FX fee", "FX rate"] as const)(
     "preserves uncertain identities distinguished by captured %s before projection",

@@ -356,6 +356,30 @@ for (const [backend, open, enabled] of subjects) {
         expect(await subject.query("SELECT * FROM transactions")).toEqual([
           { ...before[0], source_absence_json: null },
         ]);
+        const receipt =
+          '{"runId":"synthetic-absence","capturedAt":"2040-02-01T00:00:00Z"}';
+        await subject.query(
+          `UPDATE transactions SET source_absence_json = '${receipt}'`,
+        );
+        expect(
+          await subject.query("SELECT source_absence_json FROM transactions"),
+        ).toEqual([{ source_absence_json: receipt }]);
+        if (backend !== "postgres") {
+          await expect(
+            subject.query(
+              "UPDATE transactions SET source_absence_json = 'not-json'",
+            ),
+          ).rejects.toThrow(/CHECK constraint failed/i);
+          expect(
+            await subject.query("SELECT source_absence_json FROM transactions"),
+          ).toEqual([{ source_absence_json: receipt }]);
+        }
+        await subject.query(
+          "UPDATE transactions SET source_absence_json = NULL",
+        );
+        expect(await subject.query("SELECT * FROM transactions")).toEqual([
+          { ...before[0], source_absence_json: null },
+        ]);
       } finally {
         await subject.close();
       }

@@ -286,6 +286,8 @@ function identityBase(row: TransactionFacts, provider: string): string {
 type SourceIdentityFacts = TransactionFacts &
   Pick<Transaction, "sourceEvidence">;
 
+const UNVERIFIED_LEGACY_IDENTITY = "unverified_legacy_identity";
+
 function retainUnassertedCounterpartyIdentity(
   input: SourceIdentityFacts,
   previous: Transaction,
@@ -322,7 +324,24 @@ function retainUnassertedCounterpartyIdentity(
     // Do not guess the retained name from legacy accepted facts, or make its
     // omitted-name observation look equal to a later uncertain nameless row.
     delete input.sourceEvidence!.identity;
+    if (previous.details.issues.includes(UNVERIFIED_LEGACY_IDENTITY)) {
+      // Another omission does not resolve an already deferred attribution.
+      input.details.issues = withIssue(
+        input.details.issues,
+        UNVERIFIED_LEGACY_IDENTITY,
+      );
+    }
   }
+}
+
+function identitySourceRows(row: TransactionFacts, adapter: SourceAdapter) {
+  const namespace = row.details.provider[adapter.provider] ?? {};
+  return currentSourceRows({
+    ...retainedTransactionEvidence(row, adapter),
+    ...(namespace.identity === undefined
+      ? {}
+      : { identity: namespace.identity }),
+  });
 }
 
 function identityFingerprint(
@@ -330,19 +349,109 @@ function identityFingerprint(
   includeSource: boolean,
   adapter: SourceAdapter,
 ): string {
-  const namespace = row.details.provider[adapter.provider] ?? {};
-  const source = includeSource
-    ? currentSourceRows({
-        ...retainedTransactionEvidence(row, adapter),
-        ...(namespace.identity === undefined
-          ? {}
-          : { identity: namespace.identity }),
-      })
-    : undefined;
   return canonicalJson({
     financial: row.sourceEvidence?.identity?.financialFingerprint ?? null,
+    source: includeSource ? identitySourceRows(row, adapter) : undefined,
+  });
+}
+
+/** A migration comparison is proved only where accepted facts were not projected. */
+function legacyIdentityProof(
+  row: TransactionFacts,
+  financial: ReturnType<typeof financialState>,
+  adapter: SourceAdapter,
+): string | undefined {
+  const identityIssues = new Set([
+    "ambiguous_identity",
+    "ambiguous_source_identity",
+    "weak_source_identity",
+    UNVERIFIED_LEGACY_IDENTITY,
+  ]);
+  if (
+    row.cardId === null ||
+    row.purchaseId !== null ||
+    row.installmentNumber !== null ||
+    (row.installmentCount !== null && row.installmentCount !== 1) ||
+    row.amountMinor === null ||
+    row.currency === null ||
+    row.kind === "unknown" ||
+    row.amountBasis === "unknown" ||
+    row.details.postingLink ||
+    row.details.issues.some((issue) => !identityIssues.has(issue))
+  ) {
+    return undefined;
+  }
+  const source = identitySourceRows(row, adapter);
+  if (
+    source.length === 0 ||
+    source.some(
+      (item) =>
+        !item ||
+        typeof item !== "object" ||
+        Array.isArray(item) ||
+        Object.keys(item).length === 0,
+    )
+  ) {
+    return undefined;
+  }
+  return canonicalJson({
+    sourceScope: row.sourceScope,
+    cardId: row.cardId,
+    financial,
     source,
   });
+}
+
+/** Unknown old comparisons are initialized from proved current evidence, never old money. */
+function legacyIdentityComparisons(
+  oldGroup: Transaction[],
+  newGroup: SourceIdentityFacts[],
+  pristineInputs: ReadonlyMap<
+    TransactionFacts,
+    ReturnType<typeof financialState>
+  >,
+  adapter: SourceAdapter,
+): SourceIdentityFacts[] | undefined {
+  if (oldGroup.length !== newGroup.length) {
+    return undefined;
+  }
+  const previousByProof = new Map<string, Transaction>();
+  for (const previous of oldGroup) {
+    const proof = legacyIdentityProof(
+      previous,
+      financialState(previous),
+      adapter,
+    );
+    if (proof === undefined || previousByProof.has(proof)) {
+      return undefined;
+    }
+    previousByProof.set(proof, previous);
+  }
+  const comparisons = new Map<string, SourceIdentityFacts>();
+  for (const input of newGroup) {
+    const pristine = pristineInputs.get(input);
+    const proof = pristine && legacyIdentityProof(input, pristine, adapter);
+    const previous =
+      proof === undefined ? undefined : previousByProof.get(proof);
+    if (!previous || comparisons.has(previous.id)) {
+      return undefined;
+    }
+    const captured = previous.sourceEvidence?.identity?.financialFingerprint;
+    if (
+      captured !== undefined &&
+      captured !== input.sourceEvidence?.identity?.financialFingerprint
+    ) {
+      return undefined;
+    }
+    comparisons.set(previous.id, {
+      ...previous,
+      sourceEvidence: {
+        ...previous.sourceEvidence,
+        identity: input.sourceEvidence?.identity,
+      },
+    });
+  }
+  return oldGroup.map((row) => comparisons.get(row.id)!);
 }
 
 function groupSignature(
@@ -760,10 +869,14 @@ function indexRunHistory(runs: PriorRun[], adapter: SourceAdapter) {
 /** Snapshot indexes deliberately exclude writes made during this response. */
 function indexAccountRows(
   current: Transaction[],
-  inputs: TransactionFacts[],
+  inputs: SourceIdentityFacts[],
   adapter: SourceAdapter,
   capturedAt: string,
   history: ReturnType<typeof indexRunHistory>,
+  pristineInputs: ReadonlyMap<
+    TransactionFacts,
+    ReturnType<typeof financialState>
+  >,
 ) {
   const provider = adapter.provider;
   const baseKey = (row: TransactionFacts) => identityBase(row, provider);
@@ -807,6 +920,14 @@ function indexAccountRows(
     [...newGroups].map(([base, newGroup]) => {
       const oldGroup = oldGroups.get(base) ?? [];
       const knownGroup = knownGroups.get(base) ?? [];
+      const unknownMembership = knownGroup.filter(
+        (row) =>
+          row.presence === "not_returned" &&
+          !row.sourceAbsence &&
+          !row.supersededById &&
+          row.identityStrength !== "native" &&
+          row.sourceEvidence?.identity?.financialFingerprint === undefined,
+      );
       const oldUncertain = oldGroup.some(
         (row) => row.identityStrength !== "native",
       );
@@ -819,17 +940,36 @@ function indexAccountRows(
         [...oldGroup, ...newGroup].some(
           (row) => row.identityStrength === "ambiguous",
         );
+      const missingComparison =
+        uncertain &&
+        oldGroup.some(
+          (row) =>
+            row.sourceEvidence?.identity?.financialFingerprint === undefined,
+        );
+      const comparisonGroup = missingComparison
+        ? legacyIdentityComparisons(oldGroup, newGroup, pristineInputs, adapter)
+        : oldGroup;
+      const unverifiedLegacy =
+        comparisonGroup === undefined || unknownMembership.length > 0;
+      const comparisons = new Map(
+        oldGroup.map((row, index) => [row.id, comparisonGroup?.[index] ?? row]),
+      );
       const fingerprints = new Map(
         [
           ...Map.groupBy(
             uncertain
               ? oldGroup.filter(
                   (row) =>
-                    row.sourceEvidence?.identity?.financialFingerprint !==
-                    undefined,
+                    comparisons.get(row.id)!.sourceEvidence?.identity
+                      ?.financialFingerprint !== undefined,
                 )
               : [],
-            (row) => identityFingerprint(row, includeSource, adapter),
+            (row) =>
+              identityFingerprint(
+                comparisons.get(row.id)!,
+                includeSource,
+                adapter,
+              ),
           ),
         ].map(([key, rows]) => [key, { rows, next: 0 }]),
       );
@@ -842,6 +982,8 @@ function indexAccountRows(
           includeSource,
           fingerprints,
           oldUncertain,
+          unverifiedLegacy,
+          legacyProtectedGroup: [...oldGroup, ...unknownMembership],
           nativeSourceKeys: new Set(
             knownGroup
               .filter(
@@ -855,9 +997,10 @@ function indexAccountRows(
           ),
           changedFacts:
             uncertain &&
+            !unverifiedLegacy &&
             oldGroup.length > 0 &&
             (oldGroup.length !== newGroup.length ||
-              groupSignature(oldGroup, includeSource, adapter) !==
+              groupSignature(comparisonGroup!, includeSource, adapter) !==
                 groupSignature(newGroup, includeSource, adapter)),
           hasNewerCurrent: knownGroup.some(
             (row) => !history.historical(row) && row.lastSeenAt > capturedAt,
@@ -1787,8 +1930,8 @@ export function planRun(
       }
       const purchaseKey = input.purchaseKey ?? null;
       // Compare captured facts, never a held projection or a resolved service ID.
-      const { purchaseId: _purchaseId, ...sourceFinancial } =
-        financialState(resolved);
+      const capturedFinancial = financialState(resolved);
+      const { purchaseId: _purchaseId, ...sourceFinancial } = capturedFinancial;
       const sourceEvidence: NonNullable<Transaction["sourceEvidence"]> = {
         identity: {
           financialFingerprint: canonicalJson({
@@ -1810,6 +1953,7 @@ export function planRun(
       return {
         facts: { ...withoutInstallmentFx(resolved), sourceEvidence },
         financialAuthority,
+        capturedFinancial,
         purchaseKey,
         counterpartyAbsent: input.counterpartyName === undefined,
         cardKey: input.cardKey,
@@ -1832,6 +1976,18 @@ export function planRun(
       adapter,
       response.capturedAt,
       history,
+      new Map(
+        prepared
+          .filter(
+            ({ facts, financialAuthority, counterpartyAbsent }) =>
+              financialAuthority.kind === "asserted" &&
+              !counterpartyAbsent &&
+              !result.historical &&
+              !stalePartitions.has(facts.status) &&
+              hasComparablePartition(result, facts.status),
+          )
+          .map(({ facts, capturedFinancial }) => [facts, capturedFinancial]),
+      ),
     );
     const comparableAbsence = (previous: Transaction) => {
       const partition = result.partitions.find(
@@ -1892,8 +2048,8 @@ export function planRun(
       }
       index.consume(id);
     };
-    const markedGroups = new Set<Transaction[]>();
-    const markGroupSeen = (rows: Transaction[]) => {
+    const markedGroups = new Set<readonly Transaction[]>();
+    const markGroupSeen = (rows: readonly Transaction[]) => {
       if (markedGroups.has(rows)) {
         return;
       }
@@ -1963,6 +2119,8 @@ export function planRun(
         includeSource,
         hasNewerCurrent,
         oldUncertain,
+        unverifiedLegacy,
+        legacyProtectedGroup,
         nativeSourceKeys,
         changedFacts,
         fingerprints,
@@ -2011,6 +2169,25 @@ export function planRun(
       }
       if (hasNewerCurrent) {
         markGroupSeen(knownGroup);
+        continue;
+      }
+      if (unverifiedLegacy) {
+        // Missing migration metadata is not evidence of a new transaction or
+        // of absence. Keep attribution and money until current evidence proves it.
+        markGroupSeen(legacyProtectedGroup);
+        for (const previous of legacyProtectedGroup) {
+          const latest = plan.transaction(previous.id)!;
+          plan.updateTransaction(previous.id, {
+            details: {
+              ...latest.details,
+              issues: withIssue(
+                latest.details.issues,
+                UNVERIFIED_LEGACY_IDENTITY,
+              ),
+            },
+          });
+        }
+        defer(input, UNVERIFIED_LEGACY_IDENTITY, cardKey, purchaseKey);
         continue;
       }
       const uncertain = input.identityStrength !== "native" || oldUncertain;
@@ -2554,6 +2731,17 @@ export function planRun(
           authorization.sourceScope !== pending.sourceScope ||
           authorization.cardId !== pending.cardId
         ) {
+          // Keep the observation trail even when no candidate can supply
+          // current component facts, freshness, or evidence of restoration.
+          plan.updateTransaction(row.id, {
+            details: {
+              ...row.details,
+              sourceRefs: retainObservations(
+                row.details.sourceRefs,
+                authorizations.flatMap((input) => input.details.sourceRefs),
+              ),
+            },
+          });
           continue;
         }
         observedIds.add(row.id);

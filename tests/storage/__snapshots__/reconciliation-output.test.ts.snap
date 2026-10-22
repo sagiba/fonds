@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`preserves fixed fixture replay output across reconciliation refactors 1`] = `
+exports[`preserves fixed fixture replay under explicitly synthetic completeness 1`] = `
 {
   "cards": [
     {

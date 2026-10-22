@@ -26,6 +26,18 @@ interface Envelope {
   [key: string]: unknown;
 }
 
+// Invented posted completeness exercises the generic engine, not CAL guarantees.
+const comparableCalShape = {
+  ...calAdapter,
+  sourceCoverage: {
+    kind: "account_window" as const,
+    resources: ["cal:recent"],
+    dateField: "transactionDate" as const,
+    days: 60,
+  },
+  rejectEmptyRecentPosted: true,
+};
+
 const connectionId = "synthetic-cal";
 const accountKey = "synthetic-account";
 const endpoint = "synthetic:cal/recent";
@@ -56,7 +68,7 @@ function postedSource(envelope: Envelope, nativeId: string, card = cardA) {
 }
 
 describe.each(backends)(
-  "%s reconciliation scenarios across successive recent captures",
+  "%s synthetic complete CAL-shaped reconciliation scenarios",
   (backend) => {
     let db: Harness;
     beforeEach(async () => {
@@ -81,7 +93,7 @@ describe.each(backends)(
             },
           ],
         },
-        calAdapter,
+        comparableCalShape,
       );
     }
 
@@ -477,7 +489,7 @@ describe.each(backends)(
           );
           expect(archived).toMatchObject({
             status: "failed",
-            parser_version: calAdapter.parserVersion,
+            parser_version: comparableCalShape.parserVersion,
           });
           expect(archived!.applied_at).toBeTruthy();
           expect(archived!.completed_at).toBeTruthy();
@@ -496,7 +508,7 @@ describe.each(backends)(
           );
           expect(JSON.parse(archived!.coverage_json as string)).toEqual([]);
           expect(
-            await db.applyRun(`synthetic-run-${day}`, calAdapter),
+            await db.applyRun(`synthetic-run-${day}`, comparableCalShape),
           ).toMatchObject({
             replayed: true,
             status: "failed",
@@ -536,7 +548,7 @@ describe.each(backends)(
             ],
           },
           {
-            ...calAdapter,
+            ...comparableCalShape,
             extract() {
               throw new Error("Synthetic interruption after archival");
             },
@@ -545,7 +557,7 @@ describe.each(backends)(
       ).rejects.toThrow("Synthetic interruption");
       await baseline();
       const revision = await db.ledgerRevision(connectionId);
-      const apply = () => db.applyRun("pending-archive", calAdapter);
+      const apply = () => db.applyRun("pending-archive", comparableCalShape);
       const results =
         backend === "postgres"
           ? await Promise.all([apply(), apply()])
@@ -562,7 +574,7 @@ describe.each(backends)(
       ]);
       expect(
         await db.applyRun("pending-archive", {
-          ...calAdapter,
+          ...comparableCalShape,
           parserVersion: "future-parser",
           rejectEmptyRecentPosted: false,
           extract() {
@@ -617,7 +629,7 @@ describe.each(backends)(
                 yield* responses;
               },
             },
-            calAdapter,
+            comparableCalShape,
           ),
         ).toMatchObject({
           status: "partial",
@@ -701,7 +713,7 @@ describe.each(backends)(
               },
             ],
           },
-          calAdapter,
+          comparableCalShape,
         ),
       ).toMatchObject({ status: "completed", unlisted: 0 });
       expect(await db.listTransactions()).toEqual(before);
@@ -727,7 +739,7 @@ describe.each(backends)(
             },
           ],
         },
-        { ...calAdapter, rejectEmptyRecentPosted: false },
+        { ...comparableCalShape, rejectEmptyRecentPosted: false },
       );
       const before = await db.listTransactions();
       expect(before.length).toBeGreaterThan(0);

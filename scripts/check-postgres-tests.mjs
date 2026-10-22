@@ -9,8 +9,9 @@ import { checkStorageCoverage } from "./storage-coverage.mjs";
 export const requiredGroups = [
   ["service.test.ts", "service integration: postgres", 32],
   ["source-presence.test.ts", "postgres authoritative source presence", 27],
+  ["cal-coverage.test.ts", "postgres actual CAL omission authority", 8],
   ["posting-overlap.test.ts", "postgres delayed posting overlap", 55],
-  ["source-identity.test.ts", "postgres captured source identity", 10],
+  ["source-identity.test.ts", "postgres captured source identity", 24],
   ["financial-authority.test.ts", "postgres row financial authority", 8],
   [
     "financial-posting-authority.test.ts",
@@ -32,7 +33,7 @@ export const requiredGroups = [
   ["lifecycle.test.ts", "owner-confirmed transaction lifecycle: postgres", 34],
   [
     "lifecycle-sync.test.ts",
-    "collection and owner lifecycle integration: postgres",
+    "synthetic complete-source collection and owner lifecycle integration: postgres",
     23,
   ],
   [

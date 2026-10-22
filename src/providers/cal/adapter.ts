@@ -29,11 +29,12 @@ export const calAdapter: SourceAdapter = {
   recentComparableDays: RECENT_COMPARABLE_DAYS,
   sourceCoverage: {
     kind: "account_window",
+    statuses: ["pending"],
     resources: ["cal:recent"],
     dateField: "transactionDate",
     days: RECENT_COMPARABLE_DAYS,
+    requireOriginMatch: true,
   },
-  rejectEmptyRecentPosted: true,
   resourceKey(endpoint) {
     return endpoint === "synthetic:cal/recent" ||
       endpoint ===

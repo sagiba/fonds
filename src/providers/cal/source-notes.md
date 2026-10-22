@@ -54,15 +54,15 @@ established transaction role and remains unretained, not classified as proven no
   removed. A successful empty yearly search can omit records that its quarterly
   or monthly subdivisions return. The web frontend's 540-day selection limit is
   not a server retention guarantee.
-- **Policy:** the known recent resource declares purchase-date coverage for 60 days
-  through capture day, inclusive, as a safety margin inside the asserted window.
-  This lets the shared engine compare eligible purchases first found in history;
-  unknown resources, month selection and unvalidated filters establish no such
-  coverage. CAL has no booking date. Billed lines are not compared for absence
-  because search selects by purchase date. Search windows are padded by one UTC
-  day because boundaries are unknown. Rejecting implausibly empty recent posted
-  captures protects against incomplete responses but can also block a legitimate
-  full cancellation; source completeness remains unproved.
+- **Policy:** posted omissions establish no financial absence: neither a stated
+  window nor a purchase date proves that a billed transaction must still appear.
+  Pending omissions compare only within the same known unfiltered recent scope,
+  with a 60-day margin; completeness remains an adopted
+  policy, not a server guarantee. Recent reads cannot exclude historical purchases.
+  CAL has no booking date. Billed lines are not compared for absence because search
+  selects by purchase date. Search windows are padded by one UTC day because the
+  boundaries are unknown. Empty posted lists do not cancel retained purchases or
+  prevent independent pending observations from being applied.
 - **Checks:** [collection] "CAL monthly search coverage regression", "pads UTC
   calendar dates…".
 

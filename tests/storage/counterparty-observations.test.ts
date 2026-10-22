@@ -283,22 +283,100 @@ describe.each(backends)("%s counterparty observations", (backend) => {
         expect(retained.sourceEvidence?.identity).toBeUndefined();
         expect(await db.listEvents()).toEqual(events);
       }
-      expect(
-        await capture(absent({ ...transfer(), identityStrength: "weak" })),
-      ).toMatchObject({ created: 1 });
-      const uncertain = (await db.listTransactions()).find(
-        (item) => item.id !== first.id,
-      )!;
-      expect(uncertain).toMatchObject({
-        counterpartyName: null,
-        identityStrength: "ambiguous",
-        annotation: null,
+      const weak = absent({ ...transfer(), identityStrength: "weak" });
+      expect(await capture(weak)).toMatchObject({
+        created: 0,
+        updated: 1,
+        unlisted: 0,
       });
+      expect(await db.listTransactions()).toHaveLength(1);
       expect(await db.getTransaction(first.id)).toMatchObject({
         counterpartyName: "Invented recipient",
+        amountMinor: first.amountMinor,
+        identityStrength: "native",
         annotation,
-        sourceEvidence: { identity: { retiredFromMatching: true } },
+        reviewRequired: true,
+        sourceIssues: ["unverified_legacy_identity"],
       });
+      expect(
+        (await db.getTransaction(first.id))!.sourceEvidence?.identity,
+      ).toBeUndefined();
+      const reviewedEvents = await db.listEvents();
+      expect(
+        reviewedEvents.filter((event) => event.type === "transaction.created"),
+      ).toEqual(events.filter((event) => event.type === "transaction.created"));
+      const retained = await current();
+      for (let repeat = 0; repeat < 2; repeat++) {
+        expect(await capture(weak)).toMatchObject({
+          created: 0,
+          updated: 0,
+          unlisted: 0,
+        });
+        expect(await current()).toEqual(retained);
+        expect(await db.listEvents()).toEqual(reviewedEvents);
+      }
+      expect(
+        await db.raw(
+          "SELECT reason, first_seen_run_id, last_seen_run_id FROM deferred_evidence",
+        ),
+      ).toEqual([
+        {
+          reason: "unverified_legacy_identity",
+          first_seen_run_id: "capture-04",
+          last_seen_run_id: "capture-06",
+        },
+      ]);
+      for (let repeat = 0; repeat < 2; repeat++) {
+        expect(await capture(absent())).toMatchObject({
+          created: 0,
+          updated: 0,
+          unlisted: 0,
+        });
+        expect(await current()).toMatchObject({
+          id: first.id,
+          version: retained.version,
+          counterpartyName: "Invented recipient",
+          amountMinor: first.amountMinor,
+          annotation,
+          sourceIssues: ["unverified_legacy_identity"],
+        });
+        expect((await current()).sourceEvidence?.identity).toBeUndefined();
+        expect(await db.listEvents()).toEqual(reviewedEvents);
+      }
+      const asserted = transfer(
+        comparison === "missing" ? "Invented recipient" : null,
+      );
+      expect(await capture(asserted)).toMatchObject({
+        created: 0,
+        updated: 1,
+        unlisted: 0,
+      });
+      const proved = await current();
+      expect(proved).toMatchObject({
+        id: first.id,
+        counterpartyName: asserted.counterpartyName,
+        amountMinor: first.amountMinor,
+        annotation,
+        sourceIssues: [],
+        sourceEvidence: {
+          identity: { runId: "capture-09", retiredFromMatching: false },
+        },
+      });
+      const provedEvents = await db.listEvents();
+      for (let repeat = 0; repeat < 2; repeat++) {
+        expect(await capture(asserted)).toMatchObject({
+          created: 0,
+          updated: 0,
+          unlisted: 0,
+        });
+        expect(await current()).toMatchObject({
+          id: first.id,
+          version: proved.version,
+          annotation,
+          sourceIssues: [],
+        });
+        expect(await db.listEvents()).toEqual(provedEvents);
+      }
     },
   );
 });

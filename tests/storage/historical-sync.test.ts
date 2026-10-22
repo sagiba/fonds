@@ -947,6 +947,7 @@ for (const backend of backends) {
           ]),
         );
         const before = await db.listTransactions();
+        const totalsBefore = await db.getTotals();
         const paged = JSON.stringify({
           statusCode: 1,
           result: {
@@ -977,11 +978,17 @@ for (const backend of backends) {
             (change) => change.type === "sync.recovered",
           ),
         ).toHaveLength(1);
+        const recovered = await db.listTransactions();
+        expect(recovered.map((row) => row.id).sort()).toEqual(
+          before.map((row) => row.id).sort(),
+        );
         expect(
-          (await db.listTransactions()).filter(
-            (row) => row.presence === "not_returned",
+          recovered.every(
+            (row) => row.presence === "seen" && !row.sourceAbsence,
           ),
-        ).toHaveLength(1);
+        ).toBe(true);
+        expect((await db.getTotals()).includedCount).toBe(2);
+        expect(await db.getTotals()).toEqual(totalsBefore);
       },
     );
 

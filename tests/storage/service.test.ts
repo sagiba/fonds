@@ -455,7 +455,7 @@ for (const backend of backends) {
       ).toContain(weakBefore.id);
     });
 
-    it("excludes unlisted spending while retaining annotation, then restores the same native ID", async () => {
+    it("retains CAL posted money and annotation through omission and reappearance on the same native ID", async () => {
       const recent = (name: string) =>
         fixture(name).replaceAll("2040-05-20", "2040-07-01");
       await capture(
@@ -485,9 +485,14 @@ for (const backend of backends) {
         recent("recent-02"),
       );
       expect(await db.getTransaction(vanished.id)).toMatchObject({
-        presence: "not_returned",
-        version: 2,
+        presence: "seen",
+        amountMinor: -6480,
+        annotation: { data: { notes: "Keep this note" } },
+        version: vanished.version,
       });
+      expect(
+        (await db.getTransaction(vanished.id))!.sourceAbsence,
+      ).toBeUndefined();
       const totalsBeforeReturn = await db.getTotals();
       await capture(
         db,
@@ -499,31 +504,19 @@ for (const backend of backends) {
       );
       expect(await db.getTransaction(vanished.id)).toMatchObject({
         presence: "seen",
-        version: 3,
+        version: vanished.version,
         annotation: { data: { notes: "Keep this note" } },
       });
       const totalsAfterReturn = await db.getTotals();
-      expect(totalsAfterReturn.includedCount).toBe(
-        totalsBeforeReturn.includedCount + 1,
-      );
-      expect(totalsAfterReturn.totals).toEqual(
-        totalsBeforeReturn.totals.map((group) =>
-          group.currency === "ILS" &&
-          group.amountBasis === "purchase_commitment"
-            ? { ...group, amountMinor: group.amountMinor - 6480 }
-            : group,
-        ),
-      );
+      expect(totalsAfterReturn).toEqual(totalsBeforeReturn);
+      expect(
+        (await db.getTransaction(vanished.id))!.sourceAbsence,
+      ).toBeUndefined();
       expect(
         (await db.listEvents())
           .filter((change) => change.transactionId === vanished.id)
           .map((change) => change.type),
-      ).toEqual([
-        "transaction.imported",
-        "annotation.updated",
-        "transaction.unlisted",
-        "transaction.restored",
-      ]);
+      ).toEqual(["transaction.imported", "annotation.updated"]);
     });
 
     it("retains all prior pending listing state when its partition is malformed", async () => {
@@ -887,7 +880,17 @@ for (const backend of backends) {
         JSON.stringify(envelope),
       );
       expect((await db.getTotals()).includedCount).toBe(0);
-      const active = await db.listTransactions({ presence: "seen" });
+      const generations = await db.listTransactions({ presence: "seen" });
+      expect(generations).toHaveLength(3);
+      expect(generations.every((row) => !row.sourceAbsence)).toBe(true);
+      const active = generations.filter(
+        (row) => !row.sourceEvidence?.identity?.retiredFromMatching,
+      );
+      expect(
+        generations.filter(
+          (row) => row.sourceEvidence?.identity?.retiredFromMatching,
+        ),
+      ).toHaveLength(2);
       expect(active).toHaveLength(1);
       expect(active[0]?.identityStrength).toBe("ambiguous");
       expect(

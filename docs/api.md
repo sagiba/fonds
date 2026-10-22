@@ -105,10 +105,14 @@ observation freshness and card-to-account links update without an event.
 
 ## Transaction filters
 
-`list_transactions` and `get_transaction_totals` share these filters. An omitted
-filter imposes no restriction, except the stated `presence`, `includeSuperseded` and
-`perspective` defaults. IDs are nonempty strings of at most 1,024 characters and
-match exactly.
+`list_transactions` and `get_transaction_totals` share these filters. Except for
+`presence`, `includeSuperseded` and `perspective`, omission imposes no restriction.
+IDs match exactly: nonempty strings of at most 1,024 characters.
+
+**Breaking change:** omitted `presence` now means `current`, not all retained
+presence states. Send `presence=all` to recover historical results and exclusion
+diagnostics, not eligibility for absent money. Superseded posting components still require
+`includeSuperseded=true`.
 
 | Input                                          | Value                                                 | Behavior                                                                                                                                                                                                |
 | ---------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -593,18 +597,18 @@ Each [event feed](#lists-and-cursors) entry is:
 values. `summary` appears on `sync.baseline` events as `{transactionCount, historical}`.
 Event IDs are integers, ordered ascending.
 
-| Type                                                               | Meaning                                                                         |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
-| `sync.baseline`                                                    | First successful capture of an account or resource, with a count summary.       |
-| `sync.partial`, `sync.failed`, `sync.recovered`                    | Sync run health.                                                                |
-| `transaction.imported`                                             | A record discovered by an initial or historical import. It is not new spending. |
-| `transaction.created`                                              | A record discovered by a later recent-window refresh.                           |
-| `transaction.updated`                                              | A versioned field changed.                                                      |
-| `transaction.posted`, `transaction.linked`, `transaction.unlinked` | Pending-to-posted transitions.                                                  |
-| `transaction.removed`                                              | The owner confirmed removal.                                                    |
-| `transaction.unlisted`, `transaction.restored`                     | A comparable response omitted or returned the row (presence).                   |
-| `transaction.review_required`, `transaction.review_resolved`       | Review state changed.                                                           |
-| `annotation.updated`                                               | The owner changed an annotation, or undid a change.                             |
+| Type                                                               | Meaning                                                                                                                             |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `sync.baseline`                                                    | First successful capture of an account or resource, with a count summary.                                                           |
+| `sync.partial`, `sync.failed`, `sync.recovered`                    | Sync run health.                                                                                                                    |
+| `transaction.imported`                                             | A discovery from an initial, historical or stale capture, or already contradicted by newer authoritative absence. Not new spending. |
+| `transaction.created`                                              | A discovery from a later fresh recent-window refresh, without newer authoritative absence.                                          |
+| `transaction.updated`                                              | A versioned field changed.                                                                                                          |
+| `transaction.posted`, `transaction.linked`, `transaction.unlinked` | Pending-to-posted transitions.                                                                                                      |
+| `transaction.removed`                                              | The owner confirmed removal.                                                                                                        |
+| `transaction.unlisted`, `transaction.restored`                     | A comparable response omitted or returned the row (presence).                                                                       |
+| `transaction.review_required`, `transaction.review_resolved`       | Review state changed.                                                                                                               |
+| `annotation.updated`                                               | The owner changed an annotation, or undid a change.                                                                                 |
 
 Events are thin. They identify records to refetch in their current state, and carry
 no object snapshot. Neither `created` nor `imported` proves when spending occurred.

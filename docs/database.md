@@ -101,7 +101,8 @@ Candidate IDs and source references inside JSON are references, not foreign keys
   refreshes preserve content. **`transaction_reconciliation`** owns identity,
   interpretation, conflict, rejection and private pending/posted overlap.
   `source_evidence_json` separates captured identity from accepted financial
-  receipts; migration preserves unknown origins.
+  receipts; migration preserves unknown origins. Missing legacy comparisons alone
+  never replace IDs or accepted money; unprovable attribution is deferred for review.
   **`transaction_posting_links`** holds reversible current pending components,
   overlap evidence and split receipts, separate from mapped facts and immutable
   events.

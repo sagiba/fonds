@@ -48,6 +48,7 @@ export type SourceSnapshotCoverage = SnapshotCoverageBase &
         from: string;
         to: string;
         cardKeys?: readonly string[];
+        requireOriginMatch?: boolean;
       }
   );
 
@@ -147,6 +148,9 @@ export function sourceCoverage(
     scopeKey: normalizedScopeKey,
   };
   const policy = adapter.sourceCoverage;
+  if (policy?.statuses && !policy.statuses.includes(partition.status)) {
+    return undefined;
+  }
   if (!policy || policy.kind === "same_origin") {
     const recentCutoff =
       adapter.recentComparableDays === undefined
@@ -213,6 +217,7 @@ export function sourceCoverage(
     from,
     to,
     ...(cardKeys === undefined ? {} : { cardKeys }),
+    ...(policy.requireOriginMatch ? { requireOriginMatch: true } : {}),
   };
 }
 
@@ -231,6 +236,15 @@ export function snapshotContainsRow(
   ) {
     return false;
   }
+  if (
+    (coverage.kind === "same_origin" || coverage.requireOriginMatch) &&
+    (!lastResponse ||
+      lastResponse.accountKey !== coverage.accountKey ||
+      resourceKey(adapter, lastResponse.endpoint) !== coverage.resource ||
+      scopeKey(adapter, lastResponse.scope) !== coverage.scopeKey)
+  ) {
+    return false;
+  }
   if (coverage.kind === "account_window") {
     const date = row[coverage.dateField];
     return (
@@ -242,14 +256,6 @@ export function snapshotContainsRow(
         (providerCardKey != null &&
           coverage.cardKeys.includes(providerCardKey)))
     );
-  }
-  if (
-    !lastResponse ||
-    lastResponse.accountKey !== coverage.accountKey ||
-    resourceKey(adapter, lastResponse.endpoint) !== coverage.resource ||
-    scopeKey(adapter, lastResponse.scope) !== coverage.scopeKey
-  ) {
-    return false;
   }
   const date = row.transactionDate ?? row.bookingDate;
   return (

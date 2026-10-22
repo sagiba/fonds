@@ -61,7 +61,10 @@ export interface AutomaticPostingCapability {
 }
 
 /** Source-declared domains whose omissions can be interpreted by the shared engine. */
-export type SourceCoveragePolicy =
+export type SourceCoveragePolicy = {
+  /** Restrict omission authority independently of positive partition comparison. */
+  statuses?: readonly ("pending" | "posted")[];
+} & (
   | { kind: "same_origin" }
   | {
       kind: "account_window";
@@ -70,7 +73,10 @@ export type SourceCoveragePolicy =
       /** The source date governing membership, never an inferred fallback. */
       dateField: "transactionDate" | "bookingDate" | "billingDate";
       days: number;
-    };
+      /** Intersect the window with the row's retained resource and scope. */
+      requireOriginMatch?: boolean;
+    }
+);
 
 /** Collection owns provider paging; adapters project one captured unit at a time. */
 export interface SourceAdapter {

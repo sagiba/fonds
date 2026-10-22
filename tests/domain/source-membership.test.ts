@@ -465,49 +465,199 @@ describe("conservative same-origin coverage", () => {
 });
 
 describe("CAL coverage declaration", () => {
-  const defaults = {
-    merchantHebName: "",
-    merchantHebCity: "",
-    trnType: 0,
-    fromTrnAmt: "0.00",
-    toTrnAmt: "0.00",
-    transactionsOrigin: 0,
-    transCardPresentInd: 0,
-  };
   const calResponse = response({ endpoint: "synthetic:cal/recent" });
-  const calPartition = partition({ resource: "cal:recent" });
 
-  it("opts in through data and treats normalized explicit filter defaults as unfiltered", () => {
+  it("keeps positive posted comparison separate from omission authority", () => {
+    expect(
+      sourceCoverage(
+        calAdapter,
+        calResponse,
+        partition({ resource: "cal:recent" }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("limits pending absence to the same origin inside its horizon", () => {
     const coverage = sourceCoverage(
       calAdapter,
-      { ...calResponse, scope: { kind: "recent", filters: { cal: defaults } } },
-      calPartition,
+      calResponse,
+      partition({ resource: "cal:recent", status: "pending" }),
     )!;
     expect(coverage).toMatchObject({
       kind: "account_window",
-      dateField: "transactionDate",
       from: "2040-06-03",
       to: "2040-08-02",
+      requireOriginMatch: true,
     });
-    expect(snapshotContainsRow(calAdapter, coverage, row())).toBe(true);
+    const pending = row({ status: "pending" });
+    expect(
+      snapshotContainsRow(calAdapter, coverage, pending, calResponse),
+    ).toBe(true);
+    expect(snapshotContainsRow(calAdapter, coverage, pending)).toBe(false);
+    expect(
+      snapshotContainsRow(calAdapter, coverage, pending, {
+        ...calResponse,
+        endpoint: "history",
+        scope: { kind: "history" },
+      }),
+    ).toBe(false);
   });
 
+  it.each([null, "2040-06-02", "2040-08-03"])(
+    "rejects pending membership with an uncovered purchase date %s",
+    (transactionDate) => {
+      const coverage = sourceCoverage(
+        calAdapter,
+        calResponse,
+        partition({ resource: "cal:recent", status: "pending" }),
+      )!;
+      expect(
+        snapshotContainsRow(
+          calAdapter,
+          coverage,
+          row({
+            status: "pending",
+            transactionDate,
+            bookingDate: "2040-07-01",
+          }),
+          calResponse,
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it.each(["2040-07-09", "2040-07-21"])(
+    "rejects pending dates outside explicit request bounds: %s",
+    (transactionDate) => {
+      const scoped = {
+        ...calResponse,
+        scope: {
+          kind: "recent" as const,
+          from: "2040-07-10",
+          to: "2040-07-20",
+        },
+      };
+      const coverage = sourceCoverage(
+        calAdapter,
+        scoped,
+        partition({ resource: "cal:recent", status: "pending" }),
+      )!;
+      expect(
+        snapshotContainsRow(
+          calAdapter,
+          coverage,
+          row({ status: "pending", transactionDate }),
+          scoped,
+        ),
+      ).toBe(false);
+      expect(
+        snapshotContainsRow(
+          calAdapter,
+          coverage,
+          row({ status: "pending", transactionDate: "2040-07-15" }),
+          scoped,
+        ),
+      ).toBe(true);
+    },
+  );
+
   it.each([
-    { cal: { ...defaults, merchantHebName: "Synthetic Merchant" } },
-    { cal: { ...defaults, fromTrnAmt: "1.00" } },
-    { cal: { ...defaults, unknown: true } },
-    { cal: defaults, unknown: true },
-    { unknown: true },
-  ])(
-    "rejects unknown or nondefault filters without same-origin fallback: %j",
-    (filters) => {
+    { endpoint: "unknown", scope: { kind: "recent" as const } },
+    {
+      endpoint: "synthetic:cal/recent",
+      scope: { kind: "recent" as const, month: "2040-07" },
+    },
+    {
+      endpoint: "synthetic:cal/recent",
+      scope: { kind: "recent" as const, filters: { unknown: true } },
+    },
+    {
+      endpoint: "synthetic:cal/recent",
+      scope: {
+        kind: "recent" as const,
+        filters: {
+          cal: {
+            merchantHebName: "Synthetic Merchant",
+            merchantHebCity: "",
+            trnType: 0,
+            fromTrnAmt: "0.00",
+            toTrnAmt: "0.00",
+            transactionsOrigin: 0,
+            transCardPresentInd: 0,
+          },
+        },
+      },
+    },
+  ])("rejects out-of-domain pending captures: %j", (fields) => {
+    expect(
+      sourceCoverage(
+        calAdapter,
+        response(fields),
+        partition({ resource: fields.endpoint, status: "pending" }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("accepts normalized default filters without widening the origin", () => {
+    const scoped = {
+      ...calResponse,
+      scope: {
+        kind: "recent" as const,
+        filters: {
+          cal: {
+            merchantHebName: "",
+            merchantHebCity: "",
+            trnType: 0,
+            fromTrnAmt: "0.00",
+            toTrnAmt: "0.00",
+            transactionsOrigin: 0,
+            transCardPresentInd: 0,
+          },
+        },
+      },
+    };
+    const coverage = sourceCoverage(
+      calAdapter,
+      scoped,
+      partition({ resource: "cal:recent", status: "pending" }),
+    )!;
+    expect(coverage.kind).toBe("account_window");
+    expect(
+      snapshotContainsRow(
+        calAdapter,
+        coverage,
+        row({ status: "pending" }),
+        calResponse,
+      ),
+    ).toBe(true);
+  });
+
+  it.each(["same_origin", "account_window"] as const)(
+    "applies status restrictions before %s coverage",
+    (kind) => {
+      const restricted: SourceAdapter = {
+        ...adapter,
+        sourceCoverage:
+          kind === "same_origin"
+            ? { kind, statuses: ["pending"] }
+            : {
+                kind,
+                statuses: ["pending"],
+                resources: ["recent"],
+                dateField: "transactionDate",
+                days: 60,
+              },
+      };
+      expect(
+        sourceCoverage(restricted, response(), partition()),
+      ).toBeUndefined();
       expect(
         sourceCoverage(
-          calAdapter,
-          { ...calResponse, scope: { kind: "recent", filters } },
-          calPartition,
+          restricted,
+          response(),
+          partition({ status: "pending" }),
         ),
-      ).toBeUndefined();
+      ).toBeDefined();
     },
   );
 });

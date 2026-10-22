@@ -9,8 +9,9 @@ import { checkStorageCoverage } from "./storage-coverage.mjs";
 export const requiredGroups = [
   ["service.test.ts", "service integration: libsql-http", 32],
   ["source-presence.test.ts", "libsql-http authoritative source presence", 27],
+  ["cal-coverage.test.ts", "libsql-http actual CAL omission authority", 8],
   ["posting-overlap.test.ts", "libsql-http delayed posting overlap", 55],
-  ["source-identity.test.ts", "libsql-http captured source identity", 10],
+  ["source-identity.test.ts", "libsql-http captured source identity", 24],
   ["financial-authority.test.ts", "libsql-http row financial authority", 8],
   [
     "financial-posting-authority.test.ts",
@@ -36,7 +37,7 @@ export const requiredGroups = [
   ],
   [
     "lifecycle-sync.test.ts",
-    "collection and owner lifecycle integration: libsql-http",
+    "synthetic complete-source collection and owner lifecycle integration: libsql-http",
     23,
   ],
   [

@@ -312,14 +312,29 @@ describe.each(backends)("%s linked current pending component", (backend) => {
         await harness.capture(4, [row("posted")]);
       }
       const before = await component(survivor.id);
+      const previous = (await db.getTransaction(survivor.id))!;
       const cursor = await db.latestEventId();
-      await harness.capture(5, [
+      const collision = [
         authorization("pending", { amountMinor: -250 }),
         authorization("pending", { amountMinor: -900 }),
         row("posted"),
-      ]);
-      expect(await component(survivor.id)).toEqual(before);
-      expect(await db.latestEventId()).toBe(cursor);
+      ];
+      for (const day of [5, 5, 6]) {
+        await harness.capture(day, collision);
+        const current = (await db.getTransaction(survivor.id))!;
+        expect(await component(survivor.id)).toEqual(before);
+        expect(current.amountMinor).toBe(previous.amountMinor);
+        expect(current.version).toBe(previous.version);
+        expect(current.annotation).toEqual(previous.annotation);
+        expect(current.details.sourceRefs).toEqual(
+          expect.arrayContaining([
+            { runId: `posting-${day}`, path: "rows[0]" },
+            { runId: `posting-${day}`, path: "rows[1]" },
+            { runId: `posting-${day}`, path: "rows[2]" },
+          ]),
+        );
+        expect(await db.latestEventId()).toBe(cursor);
+      }
     },
   );
 

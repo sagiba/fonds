@@ -193,6 +193,27 @@ describe.skipIf(!d1Enabled)("guarded D1 write batches", () => {
           source_evidence_json: null,
         },
       ]);
+      const receipt =
+        '{"runId":"synthetic-absence","capturedAt":"2040-02-01T00:00:00Z"}';
+      const setAbsence = (value: string | null) =>
+        binding
+          .prepare("UPDATE transactions SET source_absence_json = ?")
+          .bind(value)
+          .run();
+      await setAbsence(receipt);
+      expect((await rows()).results).toEqual([
+        { ...before[0], source_absence_json: receipt },
+      ]);
+      await expect(setAbsence("not-json")).rejects.toThrow(
+        /CHECK constraint failed/i,
+      );
+      expect((await rows()).results).toEqual([
+        { ...before[0], source_absence_json: receipt },
+      ]);
+      await setAbsence(null);
+      expect((await rows()).results).toEqual([
+        { ...before[0], source_absence_json: null },
+      ]);
     } finally {
       await runtime.dispose();
     }

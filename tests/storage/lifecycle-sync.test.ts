@@ -17,6 +17,18 @@ interface Envelope {
   [key: string]: unknown;
 }
 
+// Invented completeness exercises lifecycle mechanics, not CAL provider guarantees.
+const completeCalShape = {
+  ...calAdapter,
+  sourceCoverage: {
+    kind: "account_window" as const,
+    resources: ["cal:recent"],
+    dateField: "transactionDate" as const,
+    days: 60,
+  },
+  rejectEmptyRecentPosted: true,
+};
+
 const accountKey = "synthetic-account";
 const endpoint = "synthetic:cal/recent";
 const pendingKey = "SYNTHETIC-AUTH-PENDING-POSTED";
@@ -58,7 +70,7 @@ function comparablePostedPair(): Envelope {
 }
 
 for (const backend of backends) {
-  describe(`collection and owner lifecycle integration: ${backend}`, () => {
+  describe(`synthetic complete-source collection and owner lifecycle integration: ${backend}`, () => {
     let db: Harness;
     let connectionId: string;
     beforeEach(async () => {
@@ -129,7 +141,7 @@ for (const backend of backends) {
           runId,
           responses: [response(envelope, day)],
         },
-        calAdapter,
+        completeCalShape,
       );
     }
 
@@ -412,7 +424,7 @@ for (const backend of backends) {
               { accountKey: "other-account", endpoint, code: "network_error" },
             ],
           },
-          calAdapter,
+          completeCalShape,
         ),
       ).toMatchObject({ status: "partial" });
       expect(
@@ -422,7 +434,7 @@ for (const backend of backends) {
             runId: "synthetic-first-other-account",
             responses: [response(fixture(), 2, "other-account")],
           },
-          calAdapter,
+          completeCalShape,
         ),
       ).toMatchObject({ status: "completed", created: 21 });
       const secondRunEvents = (await db.listEvents()).filter(
@@ -666,7 +678,7 @@ for (const backend of backends) {
             },
           ],
         };
-        expect(await db.ingestRun(input, calAdapter)).toMatchObject({
+        expect(await db.ingestRun(input, completeCalShape)).toMatchObject({
           status: "failed",
           created: 0,
           updated: 0,
@@ -692,7 +704,7 @@ for (const backend of backends) {
             },
           }),
         ]);
-        expect(await db.ingestRun(input, calAdapter)).toMatchObject({
+        expect(await db.ingestRun(input, completeCalShape)).toMatchObject({
           replayed: true,
         });
         expect(
@@ -732,7 +744,7 @@ for (const backend of backends) {
             response(envelope, 1, "other-account"),
           ],
         },
-        calAdapter,
+        completeCalShape,
       );
       const otherBefore = (await db.listTransactions()).find(
         (row) => row.sourceScope === "other-account",
@@ -749,7 +761,7 @@ for (const backend of backends) {
             { accountKey: "other-account", endpoint, code: "network_error" },
           ],
         },
-        calAdapter,
+        completeCalShape,
       );
       expect(result).toMatchObject({ status: "partial", unlisted: 1 });
       expect(await db.getTransaction(otherBefore.id)).toEqual(otherBefore);
@@ -776,7 +788,7 @@ for (const backend of backends) {
             response(envelope, 3, "other-account"),
           ],
         },
-        calAdapter,
+        completeCalShape,
       );
       expect(
         (await db.listEvents()).filter(
@@ -799,7 +811,7 @@ for (const backend of backends) {
             response(envelope, 1, "other-account"),
           ],
         },
-        calAdapter,
+        completeCalShape,
       );
       expect(
         await db.ingestRun(
@@ -812,7 +824,7 @@ for (const backend of backends) {
               { accountKey: "other-account", endpoint, code: "network_error" },
             ],
           },
-          calAdapter,
+          completeCalShape,
         ),
       ).toMatchObject({ status: "partial" });
       expect(
@@ -827,7 +839,7 @@ for (const backend of backends) {
             runId: "synthetic-unrelated-success",
             responses: [response(envelope, 3)],
           },
-          calAdapter,
+          completeCalShape,
         ),
       ).toMatchObject({ status: "completed" });
       expect(
@@ -842,7 +854,7 @@ for (const backend of backends) {
             runId: "synthetic-other-account-recovered",
             responses: [response(envelope, 4, "other-account")],
           },
-          calAdapter,
+          completeCalShape,
         ),
       ).toMatchObject({ status: "completed" });
       expect(
@@ -892,7 +904,9 @@ for (const backend of backends) {
                 ],
               }),
         };
-        await expect(db.ingestRun(input, calAdapter)).rejects.toMatchObject({
+        await expect(
+          db.ingestRun(input, completeCalShape),
+        ).rejects.toMatchObject({
           cause: {
             message: expect.stringContaining("synthetic event failure"),
           },
@@ -919,7 +933,7 @@ for (const backend of backends) {
         await db.raw(
           `DROP TRIGGER synthetic_event_failure${backend === "postgres" ? " ON events" : ""}`,
         );
-        expect(await db.applyRun(input.runId, calAdapter)).toMatchObject({
+        expect(await db.applyRun(input.runId, completeCalShape)).toMatchObject({
           replayed: false,
           status:
             kind === "sync.failed"

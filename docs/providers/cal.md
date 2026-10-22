@@ -81,13 +81,12 @@ become review candidates.
 
 ## Absence and recovery
 
-An accepted scoped omission records [source absence](../api.md#fields), excluding
-purchases from current reads and totals without proving cancellation or deletion. Billed lines are not absence-comparable. The
-[coverage rationale](../../src/providers/cal/source-notes.md#calwindow-recent-window-and-search-coverage)
-explains the limits. An implausibly empty recent posted capture is rejected as
-`implausible_empty`: the failed run changes no ledger rows. This guard can
-block legitimate disappearance of the last covered posted population. Accounts
-commit independently; invocations can be partial.
+Posted omissions, including empty recent lists, do not establish cancellation or
+[source absence](../api.md#fields): previously observed purchases remain in current
+reads and totals. Supported pending omissions can establish absence within the
+same recent scope. Recent reads cannot exclude purchases imported from history.
+The [coverage rationale](../../src/providers/cal/source-notes.md#calwindow-recent-window-and-search-coverage)
+explains the limits. Accounts commit independently; invocations can be partial.
 
 Authentication challenges, invalid credentials and rate limits stop the refresh,
 and repeated network or invalid-response failures stop after a bounded budget
