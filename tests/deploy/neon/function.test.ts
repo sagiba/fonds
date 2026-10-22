@@ -17,6 +17,11 @@ vi.mock("../../../src/runtime/auth/better-auth.js", async (importOriginal) => ({
   createBetterAuth: () => ({
     provider: {
       issuer: "https://fonds.synthetic.invalid/api/auth",
+      endpoints: {
+        authorization:
+          "https://fonds.synthetic.invalid/api/auth/oauth2/authorize",
+        token: "https://fonds.synthetic.invalid/api/auth/oauth2/token",
+      },
       authenticate: async () => null,
     },
     handlePublicRequest: async () => null,

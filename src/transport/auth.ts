@@ -22,6 +22,11 @@ export interface HostedAuthProvider {
   readonly issuer: string;
   /** Issuer authorization scopes advertised when clients begin an OAuth grant. */
   readonly authorizationScopes?: readonly string[];
+  /** Where an OAuth client obtains access tokens, as the API description states. */
+  readonly endpoints: {
+    readonly authorization: string;
+    readonly token: string;
+  };
   authenticate(request: Request): Promise<TrustedIdentity | null>;
 }
 

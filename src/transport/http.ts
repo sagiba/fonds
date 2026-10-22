@@ -19,6 +19,7 @@ import {
   type TrustedIdentity,
 } from "./auth.js";
 import { createMcpHttpHandler, opensSubscriptionStream } from "./mcp.js";
+import { openApiDocument } from "./openapi.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const LOG_HTTP_METHODS = [
@@ -275,6 +276,27 @@ export function createHttpService(
       ),
     );
   }
+  let apiDocument: ReturnType<typeof openApiDocument> | undefined;
+  // The description holds no owner data; clients import it before they hold a token.
+  app.get("/v1/openapi.json", (context) =>
+    context.json(
+      (apiDocument ??= openApiDocument(
+        application.operations,
+        hosted
+          ? {
+              origin: publicOrigin!,
+              security: {
+                kind: "oauth2",
+                authorizationUrl: options.authProvider.endpoints.authorization,
+                tokenUrl: options.authProvider.endpoints.token,
+                scopes: authorizationScopes,
+                resource,
+              },
+            }
+          : { security: { kind: "bearer" } },
+      )),
+    ),
+  );
   const unauthenticated = (context: Context) => {
     context.header("WWW-Authenticate", challenge);
     return context.json(

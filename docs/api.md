@@ -42,6 +42,12 @@ which runtimes offer refreshes.
 initialization. There are no public operations to create connections or export
 raw source responses; a backfill is a [refresh](#refreshes) with `{from, to}`.
 
+`GET /v1/openapi.json` is an unauthenticated
+[OpenAPI 3.1](https://spec.openapis.org/oas/v3.1.1) description of the `/v1`
+routes this deployment serves, generated from the operation definitions. It
+declares the hosted OAuth flow with each operation's scope, or the local bearer
+token, and carries no owner data.
+
 The [command-line client](guides/local-setup.md#use-the-command-line) runs
 the same operations as kebab-case commands and flags and prints each operation's
 JSON output, embedded on a local database or against this API with `--remote`.
@@ -61,9 +67,10 @@ numbers and booleans instead. Unknown fields are rejected. No operation accepts
 provider credentials or a caller-supplied actor; the service assigns the actor for
 every mutation.
 
-Local HTTP, including `/health` and `/mcp`, requires the private bearer token and
-enforces loopback Host and Origin checks. Trusted local stdio inherits access from
-its parent process. Hosted requests need the owner, client, resource and scope the
+Local HTTP enforces loopback Host and Origin checks, and every route but the API
+description, including `/health` and `/mcp`, requires the private bearer token.
+Trusted local stdio inherits access from its parent process. Hosted requests need
+the owner, client, resource and scope the
 [security model](security-model.md#admission) admits. Financial HTTP responses
 send `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`.
 
