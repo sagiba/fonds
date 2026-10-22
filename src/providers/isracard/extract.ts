@@ -19,7 +19,12 @@ import {
   isracardCaptureSchema,
   isracardCardKey,
 } from "./capture.js";
-import { isracardDetailEvidence, isracardRowEvidence } from "./evidence.js";
+import { approvalPaymentContext, postedPaymentContext } from "./enrichment.js";
+import {
+  isracardDetailEvidence,
+  isracardRowEvidence,
+  mergeIsracardEvidence,
+} from "./evidence.js";
 import { isIsracardDigitalSuccess } from "./transport.js";
 
 type SourceRow = Record<string, unknown>;
@@ -122,18 +127,6 @@ function minor(value: unknown, currency: string | null): number | null {
   } catch {
     return null;
   }
-}
-
-/** Only an explicit wallet name establishes a wallet. */
-function walletFromName(value: unknown): TransactionInput["wallet"] {
-  const name = text(value)?.trim().replace(/\s+/g, " ").toLowerCase();
-  return name === "apple pay"
-    ? "apple_pay"
-    : name === "google pay"
-      ? "google_pay"
-      : name === "samsung pay"
-        ? "samsung_pay"
-        : null;
 }
 
 /** The sign of a decimal source amount, number or numeric string; null otherwise. */
@@ -478,6 +471,14 @@ function collectApprovals(
         if (details.issues.length > 1) {
           success = false;
         }
+        details.merchant.city = cityName(row.cityDescription);
+        const countryCode = text(row.countryCode);
+        details.merchant.countryCode =
+          countryCode !== null && isCountryCode(countryCode)
+            ? countryCode
+            : null;
+        const payment = approvalPaymentContext(row, details.issues);
+        details.issues = [...new Set(details.issues)];
         details.sourceRefs.push({
           runId: context.runId,
           path: `$.responses.digital.data.approvals.approvedTransactions[${index}]`,
@@ -502,7 +503,7 @@ function collectApprovals(
           sourceAliases: [],
           identityStrength: ambiguous ? "ambiguous" : "native",
           status: "pending",
-          description: null,
+          description: text(row.transactionDescription),
           counterpartyName: null,
           kind: "unknown",
           merchantName,
@@ -517,6 +518,8 @@ function collectApprovals(
           originalAmountMinor: null,
           originalCurrency: null,
           installmentCount: null,
+          providerTransactionCode: token(row.transactionCode),
+          ...payment,
           details,
         });
       }
@@ -1373,9 +1376,14 @@ function extractGroup(
       : row.dealSum;
   const originalMinor = minor(rawOriginal, evidenceCurrency);
   details.provider.isracard = {
-    identity: { baseKey, occurrenceCount },
-    rows: observations.map((item) =>
-      isracardRowEvidence(item.row, item.generation),
+    ...mergeIsracardEvidence(
+      {},
+      {
+        identity: { baseKey, occurrenceCount },
+        rows: observations.map((item) =>
+          isracardRowEvidence(item.row, item.generation),
+        ),
+      },
     ),
     observations: observations.map((item) => ({
       generation: item.generation,
@@ -1399,12 +1407,8 @@ function extractGroup(
   const countryCode = digital ? text(row.countryCode) : null;
   details.merchant.countryCode =
     countryCode !== null && isCountryCode(countryCode) ? countryCode : null;
-  // Conservative payment context. `presentCard` true states a presented
-  // physical card, while false states nothing: in-store wallet payments are
-  // false. The security and wallet flags stay raw evidence.
-  const codeType = digitalRow ? token(digitalRow.tranzacCodeType) : null;
   let detailBillingDate: string | null = null;
-  const wallets: TransactionInput["wallet"][] = [];
+  let boundDetail: SourceRow | null = null;
   let counterpartyName: TransactionInput["counterpartyName"] =
     kind === "transfer" ? undefined : null;
   // A detail projects facts only when its own voucher is the requested one;
@@ -1412,12 +1416,11 @@ function extractGroup(
   if (binding !== null) {
     if ("detail" in binding) {
       const { detail } = binding;
+      boundDetail = detail;
       details.merchant.address = text(detail.address);
       details.merchant.phone = text(detail.phoneNumber);
       // The bound voucher's own charge date, unlike a requested billing month.
       detailBillingDate = sourceDate(detail.moedChiuvFull);
-      wallets.push(walletFromName(detail.transactionType));
-      wallets.push(walletFromName(detail.walletPayName));
       // A transfer's bound detail names its other party.
       if (kind === "transfer") {
         counterpartyName = text(detail.motavName)?.trim() || null;
@@ -1431,10 +1434,13 @@ function extractGroup(
       issues.push(binding.issue);
     }
   }
-  const walletNames = [...new Set(wallets.filter((wallet) => wallet !== null))];
-  if (walletNames.length > 1) {
-    issues.push("conflicting_payment_context");
-  }
+  const payment = postedPaymentContext(
+    observations
+      .filter((item) => item.generation === "digital")
+      .map((item) => item.row),
+    boundDetail,
+    issues,
+  );
   const merchantName = text(
     digital
       ? row.businessName
@@ -1503,20 +1509,7 @@ function extractGroup(
       installmentNumber: plan.installmentNumber,
     }),
     // Omitted payment facts have no evidence; null is conflicting evidence.
-    cardPresent: observations.some(
-      (item) => item.generation === "digital" && flagged(item.row.presentCard),
-    )
-      ? true
-      : undefined,
-    authorizationMethod:
-      codeType === "U" || codeType === "V" ? "online" : undefined,
-    wallet:
-      walletNames.length === 1
-        ? walletNames[0]!
-        : walletNames.length > 1
-          ? null
-          : undefined,
-    threeDSecureUsed: codeType === "V" ? true : undefined,
+    ...payment,
     recurring: observations.some((item) =>
       flagged(
         item.generation === "digital"

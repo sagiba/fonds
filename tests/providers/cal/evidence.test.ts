@@ -30,6 +30,47 @@ const row: JsonObject = {
 };
 
 describe("CAL retained evidence", () => {
+  it("retains source classifications and unresolved financial slots without credential or request noise", () => {
+    const facts = {
+      branchCodeDesc: "Synthetic category",
+      superBranchDesc: null,
+      transSource: "SYNTHETIC-ORIGIN",
+      transMahut: "SYNTHETIC-NATURE",
+      crdExtIdNumTypeCode: "SYNTHETIC-TYPE",
+      walletTokenInd: "1",
+      foreignCurrencyWalletType: "0",
+      isCashBackTransaction: false,
+      isImmediateHHKInd: false,
+      isSpreadPaymenstAbroadInd: false,
+      firstPaymentAmount: "0",
+      tpaApprovalAmount: null,
+      transactionsOrigin: "SYNTHETIC-PENDING-ORIGIN",
+      j5Indicator: "SYNTHETIC-AUTHORIZATION-MARKER",
+    };
+    expect(
+      retainCalEvidence({
+        rows: [
+          {
+            ...row,
+            ...facts,
+            tokenNumber: "SYNTHETIC-TOKEN-IDENTITY",
+            tokenNumberPart4: "9999",
+            trnNumaretor: "42",
+            isImmediateCommentInd: true,
+            isMargaritaInd: false,
+            requestTimestamp: "2040-07-01T00:00:00Z",
+            extra: { random: "noise" },
+          },
+        ],
+      }),
+    ).toEqual({ rows: [{ ...row, ...facts }] });
+    expect(
+      retainCalEvidence({
+        rows: [{ ...row, transSource: { requestId: "noise" } }],
+      }),
+    ).toEqual({ rows: [{ ...row, transSource: {} }] });
+  });
+
   it("uses the current whole statement after partial evidence becomes complete and continues to posting", async () => {
     const db = await openDatabase(":memory:");
     try {

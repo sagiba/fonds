@@ -512,12 +512,20 @@ export type StoredTransactionFacts = Omit<
 > &
   Pick<LedgerFacts, PaymentContextField>;
 
-/** Billed lines (a purchase link or an ordinal) are never pending/posted matched. */
-/** A merchant city names a place, so a value without any letter, such as a phone number, is none. */
+/** A city needs a name; phone-only values and explicit web/email addresses are not places. */
 export function isCityName(value: string): boolean {
-  return /\p{L}/u.test(value);
+  // Recognize web hosts without rejecting arbitrary dotted place abbreviations.
+  const webHost =
+    /^(?:[a-z0-9-]+\.)+(?:com|net|org|edu|gov|biz|info|app|dev|shop|store|online|(?:co|com|net|org|gov|ac)\.[a-z]{2})(?::\d+)?(?:[/?#]\S*)?$/i;
+  return (
+    /\p{L}/u.test(value) &&
+    !/^(?:https?:\/\/|www\.)/i.test(value.trim()) &&
+    !webHost.test(value.trim()) &&
+    !/^\S+@\S+\.\S+$/.test(value.trim())
+  );
 }
 
+/** Billed lines (a purchase link or an ordinal) are never pending/posted matched. */
 export function isBilledLine(
   row: Pick<LedgerFacts, "purchaseId" | "installmentNumber">,
 ): boolean {

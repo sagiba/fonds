@@ -285,7 +285,8 @@ A payment-context field (`cardPresent`, `authorizationMethod`, `wallet`,
 `threeDSecureUsed`, `recurring`) is set only from explicit source evidence. When
 two source facts disagree, the typed field is `null` and the record carries
 `conflicting_payment_context`. A stored fact persists through later reads that do
-not mention it, and a history import never changes payment context;
+not mention it. Omitting an optional detail does not resolve a conflict with its
+retained evidence. A history import never changes payment context;
 [sync.ts](../src/domain/plans/sync.ts) owns the merge and conflict-clearing rules.
 
 ### Source issues and review reasons

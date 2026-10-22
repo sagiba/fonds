@@ -1,4 +1,5 @@
 import type { SourceAdapter } from "../../domain/source-adapter.js";
+import { retainedPaymentContext } from "./enrichment.js";
 import {
   mergeIsracardEvidence,
   projectIsracardState,
@@ -11,9 +12,10 @@ import { ISRACARD_ENDPOINTS } from "./transport.js";
 
 export const isracardAdapter: SourceAdapter = {
   provider: "isracard",
-  parserVersion: "isracard-v14",
+  parserVersion: "isracard-v15",
   retainProviderEvidence: retainIsracardEvidence,
   mergeProviderEvidence: mergeIsracardEvidence,
+  paymentContextFromRetainedEvidence: retainedPaymentContext,
   projectProviderState: projectIsracardState,
   extract: extractIsracard,
   validateScope: validateIsracardScope,

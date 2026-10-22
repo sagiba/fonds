@@ -15,6 +15,14 @@ excludes unknown fields and nested noise. Interpretation state and capture conte
 are separate; exact responses require optional raw archives. Overlapping payments
 keep distinct components; a fresh component replaces its earlier evidence.
 
+Source-origin/nature and card-type codes, wallet classifications, merchant category
+labels, named financial-status flags and pending amount/authorization slots remain
+evidence even where their normalized meaning is unresolved. Null, false and zero
+are source assertions, not evidence of refresh noise. `walletTokenInd` classifies
+the payment credential; token identity digits stay excluded. Source sequence and
+redundant comment-presence metadata remain excluded. `isMargaritaInd` has no
+established transaction role and remains unretained, not classified as proven noise.
+
 ## cal.envelope: response shapes
 
 - **Observed:** recent responses carry `result.transactions`,
@@ -73,16 +81,20 @@ keep distinct components; a fresh component replaces its earlier evidence.
 - `transCardPresentInd` is on every row and means "at a terminal": in-store Apple
   Pay is true, and false means remote, not necessarily online.
 - `trnExacWay`: `21` contactless wallet (exactly the rows with the contactless
-  comment), `9` standing order, `12` online without 3-D Secure, `15` and `35`
+  comment), `9` standing order, `12` general online, `15` and `35`
   online with it. `0,1,3,4,5,7,10,13,14,16,17,18,20` are unverified.
 - `walletProviderCode` with `walletProviderDesc`: `3` with `Apple Pay`, `0` none;
   `32`, `2`, `14`, `22` and `85` carry the Hebrew word for internet and look like
-  merchant tokens. Only `32` is reviewed as online.
+  merchant tokens. These internet-labelled codes support online use; `32` works
+  alone too. Named Apple Pay explicitly marked remote
+  is online wallet use, not a terminal tap.
 - **Negative finding:** `posEntryMod` is unusable: in-store Apple Pay rows can
   carry `02`, contradicting ISO 8583.
 - **Policy:** each typed fact needs explicit evidence, and contradicting evidence
-  leaves it unknown with a source issue. Other processor flags stay in provider
-  detail, because a field name alone establishes no financial or security meaning.
+  leaves it unknown with a source issue. Unknown/general execution codes do not
+  negate explicit contactless or secure-online text. Secure-online text establishes
+  online use and 3-D Secure; contactless evidence conflicts. Other security codes
+  remain uninterpreted.
 - **Checks:** [enrichment] "CAL comment templates and payment context", "CAL
   payment context through ingestion"; [source patterns] "makes payment context a
   conflict when a plan's rows disagree…".

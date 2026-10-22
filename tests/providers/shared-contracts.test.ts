@@ -543,14 +543,18 @@ describe.each(providers)("$name shared provider contracts", (provider) => {
     const { first, second, correction, mergedCount, correctedRows } = fixture;
     const merged = provider.merge(first, second);
     expect(merged.rows).toHaveLength(mergedCount);
-    expect(provider.merge(provider.merge(merged, first), second)).toEqual(
-      merged,
-    );
+    expect(
+      provider.retain(provider.merge(provider.merge(merged, first), second)),
+    ).toEqual(provider.retain(merged));
     const corrected = provider.merge(merged, correction);
     expect(corrected.rows).toEqual(correctedRows);
-    expect(provider.merge(corrected, first)).toEqual(corrected);
+    expect(provider.retain(provider.merge(corrected, first))).toEqual(
+      provider.retain(corrected),
+    );
     for (const replay of "replays" in fixture ? fixture.replays : []) {
-      expect(provider.merge(corrected, replay)).toEqual(corrected);
+      expect(provider.retain(provider.merge(corrected, replay))).toEqual(
+        provider.retain(corrected),
+      );
     }
   });
 
