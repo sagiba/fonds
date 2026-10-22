@@ -59,6 +59,7 @@ export interface TransactionReconciliationRow {
   > | null;
   pendingPostingCandidates: string[] | null;
   rejectedPostingKeys: string[] | null;
+  postingOverlap: NonNullable<Details["postingOverlap"]> | null;
   providerIdentity: Record<string, JsonValue> | null;
   providerObservations: Record<string, JsonValue> | null;
   providerMonetaryEvidence: Record<string, JsonValue> | null;
@@ -119,6 +120,7 @@ export function encodeReconciliation(row: Transaction): Reconciliation {
     paymentContextConflicts: row.details.paymentContextConflicts ?? null,
     pendingPostingCandidates: row.details.pendingPostingCandidates ?? null,
     rejectedPostingKeys: row.details.rejectedPostingKeys ?? null,
+    postingOverlap: row.details.postingOverlap ?? null,
     providerIdentity: null,
     providerObservations: null,
     providerMonetaryEvidence: null,
@@ -196,6 +198,9 @@ export function decodeTransaction(input: {
       ...(input.reconciliation.rejectedPostingKeys === null
         ? {}
         : { rejectedPostingKeys: input.reconciliation.rejectedPostingKeys }),
+      ...(input.reconciliation.postingOverlap === null
+        ? {}
+        : { postingOverlap: input.reconciliation.postingOverlap }),
       ...(input.posting.postingLink === null
         ? {}
         : { postingLink: input.posting.postingLink }),

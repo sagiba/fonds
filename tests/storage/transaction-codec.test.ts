@@ -354,6 +354,22 @@ for (const backend of [
             postedKeys: ["retired"],
             evidence: { runId: "run", capturedAt: instant },
           };
+          expected[1]!.details.postingOverlap = {
+            postedId: "tx-2",
+            runId: "run",
+            capturedAt: instant,
+            pendingFingerprint: "synthetic-pending-fingerprint",
+            postedFingerprint: "synthetic-posted-fingerprint",
+          };
+          expected[2]!.details.postingLink = {
+            ...structuredClone(expected[0]!.details.postingLink),
+            automatic: true,
+            evidence: {
+              runId: "run",
+              capturedAt: instant,
+              overlap: expected[1]!.details.postingOverlap,
+            },
+          };
           for (const row of expected) {
             await db.write(row);
           }
@@ -558,12 +574,41 @@ for (const backend of [
           expect((await db.read(original.id))[0]).toEqual(observed);
           const reconciled = structuredClone(observed);
           reconciled.details.rejectedPostingKeys = ["newly-rejected"];
+          reconciled.details.postingOverlap = {
+            postedId: "synthetic-posted",
+            runId: "run",
+            capturedAt: instant,
+            pendingFingerprint: "synthetic-pending-fingerprint",
+            postedFingerprint: "synthetic-posted-fingerprint",
+          };
           reconciled.details.provider.cal!.identity = {
             baseKey: "new-derived-base",
             occurrenceCount: 1,
           };
           await db.write(reconciled, observed);
           expect((await db.read(original.id))[0]).toEqual(reconciled);
+          expect(
+            await db.query(
+              "SELECT posting_overlap_json FROM transaction_reconciliation WHERE transaction_id = ?",
+              [original.id],
+            ),
+          ).toEqual([
+            {
+              posting_overlap_json: JSON.stringify(
+                reconciled.details.postingOverlap,
+              ),
+            },
+          ]);
+          const cleared = structuredClone(reconciled);
+          delete cleared.details.postingOverlap;
+          await db.write(cleared, reconciled);
+          expect((await db.read(original.id))[0]).toEqual(cleared);
+          expect(
+            await db.query(
+              "SELECT posting_overlap_json FROM transaction_reconciliation WHERE transaction_id = ?",
+              [original.id],
+            ),
+          ).toEqual([{ posting_overlap_json: null }]);
           await expect(
             db.write(
               { ...reconciled, description: "Meaningful change" },

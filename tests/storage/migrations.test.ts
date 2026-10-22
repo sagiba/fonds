@@ -253,6 +253,56 @@ for (const [backend, open, enabled] of subjects) {
       }
     });
 
+    it("adds posting overlap state to the initial schema without changing existing rows", async () => {
+      const subject = await open();
+      try {
+        await subject.migrate(subject.migrations.slice(0, 1));
+        await subject.query(sentinel);
+        await subject.query(`
+          INSERT INTO transactions (
+            id, connection_id, source_scope, source_key, source_aliases_json,
+            identity_strength, status, presence, kind, amount_basis,
+            first_seen_at, version, source_issues_json, provider_json
+          ) VALUES (
+            'before-overlap', 'kept', 'account', 'pending-old', '[]',
+            'native', 'pending', 'seen', 'purchase', 'authorization',
+            '2040-01-01T00:00:00Z', 1, '[]', '{}'
+          )
+        `);
+        await subject.query(`
+          INSERT INTO transaction_reconciliation (
+            transaction_id, pending_posting_candidates_json, rejected_posting_keys_json
+          ) VALUES ('before-overlap', '["posted-old"]', '["rejected-old"]')
+        `);
+        const transactions = await subject.query("SELECT * FROM transactions");
+        const reconciliation = await subject.query(
+          "SELECT * FROM transaction_reconciliation",
+        );
+        await subject.query("CREATE TABLE unexpected_layout (id TEXT)");
+        await expect(subject.initialize()).rejects.toThrow("Unsupported");
+        expect(await subject.version()).toBe(1);
+        expect(await subject.query("SELECT * FROM transactions")).toEqual(
+          transactions,
+        );
+        expect(
+          await subject.query("SELECT * FROM transaction_reconciliation"),
+        ).toEqual(reconciliation);
+        await subject.query("DROP TABLE unexpected_layout");
+        await subject.initialize();
+        expect(await subject.version()).toBe(subject.migrations.length);
+        expect(await subject.query("SELECT * FROM transactions")).toEqual(
+          transactions,
+        );
+        expect(
+          await subject.query("SELECT * FROM transaction_reconciliation"),
+        ).toEqual([{ ...reconciliation[0], posting_overlap_json: null }]);
+        await kept(subject);
+        await subject.withoutDdl(() => subject.initialize());
+      } finally {
+        await subject.close();
+      }
+    });
+
     it("applies pending migrations in order, keeping existing rows", async () => {
       const subject = await current();
       try {
@@ -304,7 +354,7 @@ for (const [backend, open, enabled] of subjects) {
       },
     );
 
-    it("refuses an incompatible database at the initial version without resetting its data", async () => {
+    it("refuses an incompatible database at the current version without resetting its data", async () => {
       const subject = await open();
       try {
         const connection =
@@ -316,13 +366,17 @@ for (const [backend, open, enabled] of subjects) {
             ? "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now());"
             : "";
         await subject.migrate([
-          { version: 1, name: "0001_initial", sql: `${connection}\n${marker}` },
+          {
+            version: subject.migrations.length,
+            name: "incompatible",
+            sql: `${connection}\n${marker}`,
+          },
         ]);
         await subject.query(sentinel);
         await subject.withoutDdl(async () => {
           await expect(subject.initialize()).rejects.toThrow("Unsupported");
         });
-        expect(await subject.version()).toBe(1);
+        expect(await subject.version()).toBe(subject.migrations.length);
         await kept(subject);
         await expect(
           subject.query("SELECT id FROM transactions"),

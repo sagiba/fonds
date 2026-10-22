@@ -393,6 +393,16 @@ const splitReceiptSchema = z
   })
   .strict();
 
+const postingOverlapSchema = z
+  .object({
+    postedId: z.string().min(1),
+    runId: z.string().min(1).max(RESOURCE_ID_MAX_LENGTH),
+    capturedAt: z.string(),
+    pendingFingerprint: z.string().min(1),
+    postedFingerprint: z.string().min(1),
+  })
+  .strict();
+
 const postingLinkSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -406,6 +416,7 @@ const postingLinkSchema = z
       .object({
         runId: z.string().min(1).max(RESOURCE_ID_MAX_LENGTH),
         capturedAt: z.string(),
+        overlap: postingOverlapSchema.optional(),
       })
       .strict()
       .nullable(),
@@ -415,6 +426,7 @@ const postingLinkSchema = z
 
 export const detailsSchema = sourceDetailsSchema.extend({
   postingLink: postingLinkSchema.optional(),
+  postingOverlap: postingOverlapSchema.optional(),
 });
 
 export type TransactionDetails = z.infer<typeof detailsSchema>;

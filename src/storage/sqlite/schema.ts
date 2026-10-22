@@ -295,6 +295,9 @@ export const transactionReconciliation = sqliteTable(
     rejectedPostingKeys: text("rejected_posting_keys_json", {
       mode: "json",
     }).$type<string[]>(),
+    postingOverlap: text("posting_overlap_json", { mode: "json" }).$type<
+      NonNullable<TransactionInput["details"]["postingOverlap"]>
+    >(),
     providerIdentity: text("provider_identity_json", { mode: "json" }).$type<
       Record<string, import("../../domain/model.js").JsonValue>
     >(),

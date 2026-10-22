@@ -34,6 +34,36 @@ function bankInput(index = 0): Record<string, unknown> {
 }
 
 describe("shared financial transaction schema", () => {
+  it("accepts optional posting overlap witnesses without changing older detail documents", () => {
+    const legacy = emptyDetails();
+    expect(detailsSchema.parse(legacy)).toEqual(legacy);
+    const postingOverlap = {
+      postedId: "synthetic-posted",
+      runId: "synthetic-overlap-run",
+      capturedAt: "2040-07-01T00:00:00.000Z",
+      pendingFingerprint: "synthetic-pending-fingerprint",
+      postedFingerprint: "synthetic-posted-fingerprint",
+    };
+    expect(detailsSchema.parse({ ...legacy, postingOverlap })).toEqual({
+      ...legacy,
+      postingOverlap,
+    });
+    for (const invalid of [
+      null,
+      {},
+      { ...postingOverlap, postedId: "" },
+      { ...postingOverlap, runId: "" },
+      { ...postingOverlap, capturedAt: null },
+      { ...postingOverlap, pendingFingerprint: "" },
+      { ...postingOverlap, postedFingerprint: "" },
+      { ...postingOverlap, unrelated: true },
+    ]) {
+      expect(
+        detailsSchema.safeParse({ ...legacy, postingOverlap: invalid }).success,
+      ).toBe(false);
+    }
+  });
+
   it("preserves supplied transaction time precision and offset without requiring old detail documents to contain it", () => {
     expect(detailsSchema.parse(emptyDetails())).not.toHaveProperty(
       "transactionDateTime",
@@ -345,21 +375,36 @@ describe("versioned details", () => {
           sourceRefs: [{ runId, path: "/row" }],
         }).success,
       ).toBe(expected);
-      expect(
-        detailsSchema.safeParse({
-          ...emptyDetails(),
-          postingLink: {
-            schemaVersion: 1,
-            policyVersion: "synthetic",
-            automatic: true,
+      for (const evidence of [
+        { runId, capturedAt: "2040-06-01T00:00:00Z" },
+        {
+          runId: "decision-run",
+          capturedAt: "2040-06-02T00:00:00Z",
+          overlap: {
             postedId: "posted",
-            pending,
-            pendingKeys: ["pending"],
-            postedKeys: ["posted"],
-            evidence: { runId, capturedAt: "2040-06-01T00:00:00Z" },
+            runId,
+            capturedAt: "2040-06-01T00:00:00Z",
+            pendingFingerprint: "synthetic-pending-fingerprint",
+            postedFingerprint: "synthetic-posted-fingerprint",
           },
-        }).success,
-      ).toBe(expected);
+        },
+      ]) {
+        expect(
+          detailsSchema.safeParse({
+            ...emptyDetails(),
+            postingLink: {
+              schemaVersion: 1,
+              policyVersion: "synthetic",
+              automatic: true,
+              postedId: "posted",
+              pending,
+              pendingKeys: ["pending"],
+              postedKeys: ["posted"],
+              evidence,
+            },
+          }).success,
+        ).toBe(expected);
+      }
       expect(
         runSchema.safeParse({
           runId,

@@ -112,6 +112,7 @@ export const schemaManifest = [
   "column\ttransaction_posting_links.1\ttransaction_id|text|true||C",
   "column\ttransaction_posting_links.2\tposting_link_json|text|false||C",
   "column\ttransaction_reconciliation.1\ttransaction_id|text|true||C",
+  "column\ttransaction_reconciliation.10\tposting_overlap_json|text|false||C",
   "column\ttransaction_reconciliation.2\tpayment_context_conflicts_json|text|false||C",
   "column\ttransaction_reconciliation.3\tpending_posting_candidates_json|text|false||C",
   "column\ttransaction_reconciliation.4\trejected_posting_keys_json|text|false||C",

@@ -292,6 +292,9 @@ export const transactionReconciliation = pgTable("transaction_reconciliation", {
     "pending_posting_candidates_json",
   ),
   rejectedPostingKeys: jsonText<string[]>()("rejected_posting_keys_json"),
+  postingOverlap: jsonText<
+    NonNullable<TransactionInput["details"]["postingOverlap"]>
+  >()("posting_overlap_json"),
   providerIdentity: jsonText<
     Record<string, import("../../domain/model.js").JsonValue>
   >()("provider_identity_json"),

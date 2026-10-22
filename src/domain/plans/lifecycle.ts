@@ -7,6 +7,9 @@ import {
   detailsSchema,
   isBilledLine,
   paymentContextFields,
+  type ReadPaymentContext,
+  storedPaymentContext,
+  type TransactionDetails,
 } from "../model.js";
 import {
   canonicalJson,
@@ -42,6 +45,7 @@ export interface PostingSplit {
 }
 
 interface AutomaticPosting {
+  overlap?: NonNullable<TransactionDetails["postingOverlap"]>;
   policyVersion: string;
   runId: string;
   capturedAt: string;
@@ -287,7 +291,9 @@ function financialState(row: Transaction) {
   };
 }
 
-function meaningfulAnnotation(data: AnnotationData | undefined): boolean {
+export function meaningfulAnnotation(
+  data: AnnotationData | undefined,
+): boolean {
   return (
     data !== undefined &&
     Boolean(
@@ -440,19 +446,38 @@ export function planPosting(
   }
   const cleanPending = withoutMatchIssue(pending);
   const cleanPosted = withoutMatchIssue(posted);
-  const { postingLink: _previousLink, ...pendingDetails } = pending.details;
+  const {
+    postingLink: _previousLink,
+    postingOverlap: _overlap,
+    ...pendingDetails
+  } = pending.details;
   // The survivor takes the posted row's payment context. A pending conflict
   // stays unless the posted row states that field.
   const { paymentContextConflicts: _postedConflicts, ...postedDetails } =
     cleanPosted.details;
+  const postedContext = storedPaymentContext(
+    automatic?.overlap
+      ? (Object.fromEntries(
+          paymentContextFields.map((field) => [
+            field,
+            posted[field] === null &&
+            !posted.details.paymentContextConflicts?.includes(field)
+              ? undefined
+              : posted[field],
+          ]),
+        ) as ReadPaymentContext)
+      : posted,
+    pending,
+  );
   const conflicts = paymentContextFields.filter(
     (field) =>
       posted.details.paymentContextConflicts?.includes(field) ||
-      (posted[field] === null &&
+      (postedContext[field] === null &&
         pending.details.paymentContextConflicts?.includes(field)),
   );
   const survivor: Transaction = {
     ...posted,
+    ...postedContext,
     id: pending.id,
     firstSeenAt: pending.firstSeenAt,
     version: nextVersion(pending.version),
@@ -481,7 +506,13 @@ export function planPosting(
         pendingKeys: [pending.sourceKey, ...pending.sourceAliases],
         postedKeys: [posted.sourceKey, ...posted.sourceAliases],
         evidence: automatic
-          ? { runId: automatic.runId, capturedAt: automatic.capturedAt }
+          ? {
+              runId: automatic.runId,
+              capturedAt: automatic.capturedAt,
+              ...(automatic.overlap?.postedId === posted.id
+                ? { overlap: automatic.overlap }
+                : {}),
+            }
           : null,
       },
       sourceRefs: retainObservations(

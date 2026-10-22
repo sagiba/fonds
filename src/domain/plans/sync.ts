@@ -62,6 +62,7 @@ import {
   postingRejected,
   refreshDuplicatePlans,
 } from "./lifecycle.js";
+import { postingOverlapPairs } from "./posting-overlap.js";
 import { type DeferredCandidate, FinancialPlan } from "./state.js";
 
 const scopeSchema = z
@@ -185,7 +186,7 @@ export interface SyncResult {
 }
 
 /** Bump when shared reconciliation rules change, independently of archived parser versions. */
-export const RECONCILIATION_POLICY_VERSION = "auto-posting-v11";
+export const RECONCILIATION_POLICY_VERSION = "auto-posting-v12";
 
 export function reconciliationFailure(warnings: readonly string[]) {
   const failureCode = reconciliationFailureCodeSchema.options.find((code) =>
@@ -464,6 +465,9 @@ function retainEvidence(
         },
       },
     };
+  }
+  if (earlier.postingOverlap) {
+    input.details.postingOverlap = earlier.postingOverlap;
   }
   if (earlier.pendingPostingCandidates) {
     input.details.pendingPostingCandidates = [
@@ -864,22 +868,13 @@ interface PostingContinuationOptions {
   baseline: boolean;
 }
 
-function planPostingContinuations({
-  current,
-  inputs,
-  adapter,
-  result,
-  response,
-  history,
-  index,
-  comparableAbsence,
-  baseline,
-}: PostingContinuationOptions) {
-  const empty = new Map<TransactionFacts, Transaction>();
-  if (!adapter.automaticPosting || result.historical || baseline) {
-    return empty;
-  }
-  const freshPartitions = (["posted", "pending"] as const).every((status) => {
+function freshPostingCapture(
+  adapter: SourceAdapter,
+  result: ExtractionResult,
+  response: FinancialResponse,
+  history: ReturnType<typeof indexRunHistory>,
+): boolean {
+  return (["posted", "pending"] as const).every((status) => {
     const latest = (
       status === "pending" ? history.latestComparable : history.latestSuccessful
     ).get(
@@ -901,6 +896,29 @@ function planPostingContinuations({
       )
     );
   });
+}
+
+function planPostingContinuations({
+  current,
+  inputs,
+  adapter,
+  result,
+  response,
+  history,
+  index,
+  comparableAbsence,
+  baseline,
+}: PostingContinuationOptions) {
+  const empty = new Map<TransactionFacts, Transaction>();
+  if (!adapter.automaticPosting || result.historical || baseline) {
+    return empty;
+  }
+  const freshPartitions = freshPostingCapture(
+    adapter,
+    result,
+    response,
+    history,
+  );
   if (!freshPartitions) {
     return empty;
   }
@@ -1646,6 +1664,8 @@ export function planRun(
     // Each input keeps the purchase key it names, if it is a billed line.
     const prepared = result.transactions.map((input) => {
       const resolved = resolveTransaction(plan, input, now, newId);
+      // Overlap is a planner decision, never provider-supplied evidence.
+      delete resolved.details.postingOverlap;
       const purchaseKey = input.purchaseKey ?? null;
       if (purchaseKey !== null) {
         resolved.purchaseId = purchases.resolve(
@@ -2152,6 +2172,71 @@ export function planRun(
           ...financialState(held),
           sourceRefs: held.details.sourceRefs,
         });
+      }
+    }
+    if (adapter.automaticPosting) {
+      const pairs = postingOverlapPairs({
+        plan,
+        before: current,
+        accountKey: response.accountKey,
+        capability: adapter.automaticPosting,
+        runId,
+        capturedAt: response.capturedAt,
+        fresh:
+          !result.historical &&
+          !baselineAccounts.has(response.accountKey) &&
+          freshPostingCapture(adapter, result, response, history),
+        validWitness: (overlapRunId, capturedAt) => {
+          if (overlapRunId === runId) {
+            return capturedAt === response.capturedAt;
+          }
+          const receipt = history.response(overlapRunId, response.accountKey);
+          return (
+            receipt !== undefined &&
+            receipt.capturedAt === capturedAt &&
+            receipt.scope?.kind !== "history" &&
+            resourceKey(adapter, receipt.endpoint) ===
+              resourceKey(adapter, response.endpoint) &&
+            scopeKey(adapter, receipt.scope) ===
+              scopeKey(adapter, response.scope)
+          );
+        },
+        observed: (row) =>
+          row.lastSeenRunId === runId && row.lastSeenAt === response.capturedAt,
+        absent: (row) =>
+          !seenIds.has(row.id) &&
+          comparableAbsence(row) &&
+          !history.historical(row) &&
+          row.lastSeenAt < response.capturedAt,
+      });
+      for (const [posted, pending] of pairs) {
+        planPosting(
+          plan,
+          {
+            pendingId: pending.id,
+            postedId: posted.id,
+            expectedPendingVersion: pending.version,
+            expectedPostedVersion: posted.version,
+            expectedPendingAnnotationVersion:
+              plan.annotation(pending.id)?.version ?? 0,
+            expectedPostedAnnotationVersion:
+              plan.annotation(posted.id)?.version ?? 0,
+            actor: "system",
+            reason:
+              "Observed overlap followed by comparable authorization absence",
+          },
+          now,
+          {
+            policyVersion: RECONCILIATION_POLICY_VERSION,
+            runId,
+            capturedAt: response.capturedAt,
+            overlap: pending.details.postingOverlap!,
+          },
+        );
+        purchases.add(plan.transaction(pending.id)!);
+        markSeen(pending.id);
+        markSeen(posted.id);
+        updated++;
       }
     }
     // Keep authorization presence evidence separate from the posted survivor's presence.

@@ -148,19 +148,24 @@ stay in SQL without database views.
 
 ## Pending-to-posted matching
 
-Automatic matching is a narrow, reversible, opt-in provider capability: a
-disappearing pending authorization keeps its service ID when a new posted identity
-with the same purchase date, card and signed purchase money arrives in a fresh
-capture with comparable pending coverage and successful posted extraction. Shared
-code groups every plausible candidate before testing eligibility; every member
-must pair, and the adapter may reject the whole group using its source evidence.
-An adapter cannot widen the shared safeguards. Where its policy permits twins,
-indistinguishable rows pair in a fixed arbitrary order. No conversion or guessed
-rate is used, and anything uncertain stays in review. One revision
-commits `transaction.posted` and `transaction.linked` with decision evidence, but
-no `transaction.created` or `transaction.unlisted` for the pair. Because this is
-a heuristic, a false link is possible, so explicit split is part of the design;
-similarity alone yields review candidates.
+Automatic matching is a reversible, opt-in provider capability. A disappearing
+pending authorization keeps its ID when a compatible new posted identity arrives
+in a fresh comparable capture. A unique observed overlap can also preserve that
+opportunity: the posted identity arrives after the authorization, both are seen
+together, and a durable witness fixes their attribution facts. Later comparable
+absence and sufficient posted evidence can complete the match without guessing
+from old similarity candidates. Changed facts, competitors or owner decisions
+invalidate that witness; annotated posted rows require owner confirmation.
+
+Both paths require equal purchase date, card and signed purchase money, with
+verified amount bases and compatible roles. Shared code groups all plausible
+candidates before eligibility; provider evidence can only narrow it. No conversion or guessed rate is used. Links retain evidence,
+are reversible and may misattribute an expired authorization to an identical
+purchase. Same-capture twins may pair in fixed arbitrary order where allowed;
+delayed matching requires a singleton. Pending absence changes presence regardless
+of matching, never deletes history or moves annotations. Existing rows without an
+overlap witness stay reviewable. A link commits `transaction.posted` and
+`transaction.linked`; creating a witness is not a financial transition.
 
 Owner decisions carry the current transaction and annotation versions and a
 reason ([API](api.md#pending-to-posted-matching)):
