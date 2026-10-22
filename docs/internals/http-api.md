@@ -62,8 +62,9 @@ handlers and would not remove the mapping from operations to HTTP. Plain Fetch
 handlers would leave routing, middleware order and error handling to Fonds.
 
 `@hono/zod-openapi` and `hono-openapi` generate a document from route
-declarations. Adopting either would make Hono's route definitions a second
-contract beside the operation catalog that MCP and the CLI share, and would move
-input parsing into their validators. The route table keeps one contract and the
-strict parser. Reconsider the framework only for a concrete runtime
-incompatibility, a measured bottleneck or a maintenance or security problem.
+declarations. Those declarations could reuse the catalog's schemas, but the
+catalog, MCP, the CLI, scope checks, output bounds and error policy would remain
+Fonds code, and the strict parser would still have to guard their validators. They
+would replace little beyond `openapi.ts`. Reconsider the framework only for a
+concrete runtime incompatibility, a measured bottleneck or a maintenance or
+security problem.
