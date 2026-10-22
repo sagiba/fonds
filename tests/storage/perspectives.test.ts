@@ -252,6 +252,7 @@ describe.each(backends)("%s continuation and perspectives", (backend) => {
         authorization: 0,
         transferOrIncome: 0,
         retiredOrRemoved: 0,
+        sourceAbsent: 0,
         unresolved: 0,
       },
     });

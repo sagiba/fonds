@@ -71,6 +71,31 @@ function transaction(overrides: Partial<Transaction> = {}): Transaction {
 }
 
 describe("deliberate financial wire projection", () => {
+  it("exposes source absence separately from unclassified historical presence", () => {
+    const sourceAbsence = {
+      runId: "synthetic-absence-run",
+      capturedAt: "2040-08-02T00:00:00Z",
+    };
+    for (const detail of [false, true]) {
+      const historical = presentWireTransaction(
+        presentTransaction(transaction({ presence: "not_returned" }), null),
+        detail,
+      );
+      expect(historical).toMatchObject({
+        presence: "not_returned",
+        sourceAbsence: null,
+      });
+      const absent = presentWireTransaction(
+        presentTransaction(
+          transaction({ presence: "not_returned", sourceAbsence }),
+          null,
+        ),
+        detail,
+      );
+      expect(absent).toMatchObject({ presence: "not_returned", sourceAbsence });
+    }
+  });
+
   it("publishes useful source text, merchant and payment facts without requiring evidence", () => {
     const details = emptyDetails();
     details.additionalInformation = [

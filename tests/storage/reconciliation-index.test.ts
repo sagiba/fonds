@@ -474,6 +474,15 @@ for (const backend of backends) {
     });
 
     it("flags, but never merges, a posted plan restated under another native ID", async () => {
+      let revision = 0;
+      const nextCapture = (runId: string, inputs: TransactionInput[]) =>
+        capture(
+          runId,
+          inputs,
+          bankAdapter(),
+          undefined,
+          `2040-02-01T00:00:0${revision++}Z`,
+        );
       const planRows = (purchaseKey: string, amountMinor = -30000) => [
         entry(purchaseKey, {
           amountBasis: "purchase_commitment",
@@ -493,9 +502,12 @@ for (const backend of backends) {
       ];
       const purchases = async () =>
         (await rows()).filter((row) => row.installmentNumber === null);
-      await capture("first", planRows("plan-a"));
+      await nextCapture("first", planRows("plan-a"));
       const restated = await db.latestEventId();
-      await capture("restated", [...planRows("plan-a"), ...planRows("plan-b")]);
+      await nextCapture("restated", [
+        ...planRows("plan-a"),
+        ...planRows("plan-b"),
+      ]);
       const flagged = await purchases();
       expect(flagged).toHaveLength(2);
       for (const purchase of flagged) {
@@ -513,7 +525,7 @@ for (const backend of backends) {
           .sort(),
       ).toEqual(flagged.map((row) => row.id).sort());
       // A differing whole amount is not a lookalike.
-      await capture("corrected", [
+      await nextCapture("corrected", [
         ...planRows("plan-a"),
         ...planRows("plan-b", -36000),
       ]);
@@ -523,7 +535,10 @@ for (const backend of backends) {
         );
       }
       // Restated again, then the owner removes one twin: the other resolves at once.
-      await capture("again", [...planRows("plan-a"), ...planRows("plan-b")]);
+      await nextCapture("again", [
+        ...planRows("plan-a"),
+        ...planRows("plan-b"),
+      ]);
       const [kept, twin] = await purchases();
       expect(kept!.details.issues).toContain("possible_duplicate_plan");
       const removal = await db.latestEventId();
@@ -875,24 +890,35 @@ for (const backend of backends) {
     );
 
     it("preserves duplicate uncertain identities when reordered, and keeps a changed multiplicity separate", async () => {
+      let revision = 0;
+      const nextCapture = (runId: string, inputs: TransactionInput[]) =>
+        capture(
+          runId,
+          inputs,
+          bankAdapter(),
+          undefined,
+          `2040-02-01T00:00:0${revision++}Z`,
+        );
       const duplicate = entry("weak", { identityStrength: "weak" });
       const different = entry("weak", {
         identityStrength: "weak",
         amountMinor: -2000,
       });
-      await capture("first", [duplicate, duplicate, different]);
+      await nextCapture("first", [duplicate, duplicate, different]);
       const original = await rows();
       expect(original).toHaveLength(3);
       expect(
-        await capture("reordered", [different, duplicate, duplicate]),
+        await nextCapture("reordered", [different, duplicate, duplicate]),
       ).toMatchObject({ created: 0, updated: 0 });
       expect(
         (await rows()).map((row) => [row.id, row.amountMinor]).sort(),
       ).toEqual(original.map((row) => [row.id, row.amountMinor]).sort());
-      expect(await capture("shrunk", [duplicate, different])).toMatchObject({
-        created: 2,
-        updated: 3,
-      });
+      expect(await nextCapture("shrunk", [duplicate, different])).toMatchObject(
+        {
+          created: 2,
+          updated: 3,
+        },
+      );
       const current = (await rows()).filter((row) => row.presence === "seen");
       expect(current).toHaveLength(2);
       expect(current.every((row) => row.identityStrength === "ambiguous")).toBe(
@@ -902,7 +928,7 @@ for (const backend of backends) {
         current.every((row) => !original.some((old) => old.id === row.id)),
       ).toBe(true);
       expect(
-        await capture("shrunk-repeat", [different, duplicate]),
+        await nextCapture("shrunk-repeat", [different, duplicate]),
       ).toMatchObject({
         created: 0,
         updated: 0,

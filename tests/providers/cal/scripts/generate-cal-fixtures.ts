@@ -543,6 +543,7 @@ function scenarios(): Row {
     string,
     number | null,
     string | null,
+    ("purchase_commitment" | "unknown")?,
   ][] = [
     ["REGULAR", -8640, "ILS", "purchase", -8640, "ILS"],
     ["CONVERTED-USD", -22200, "ILS", "purchase", -6000, "USD"],
@@ -553,7 +554,7 @@ function scenarios(): Row {
     ["REFUND", 2500, "ILS", "refund", 2500, "ILS"],
     ["CANCEL", 52500, "ILS", "refund", null, null],
     ["WAIVED-FEE", 0, "ILS", "fee", null, null],
-    ["HISTORY", -84000, "ILS", "purchase", -84000, "ILS"],
+    ["HISTORY", -84000, "ILS", "purchase", -84000, "ILS", "unknown"],
     ["CONTEXT", -3990, "ILS", "purchase", -3990, "ILS"],
     ["UNKNOWN-ORIGINAL-CURRENCY", -2200, "ILS", "purchase", null, null],
     ["REMOTE", -4860, "ILS", "purchase", -4860, "ILS"],
@@ -563,10 +564,10 @@ function scenarios(): Row {
     ["DUPLICATE-B", -1820, "ILS", "purchase", -1820, "ILS"],
   ];
   const projection: Row[] = expectedRows.map(
-    ([name, amount, currency, kind, original, originalCurrency]) => ({
+    ([name, amount, currency, kind, original, originalCurrency, basis]) => ({
       source_identity: { card_key: CARD, native_id: `SYNTHETIC-TXN-${name}` },
       status: "posted",
-      amount_basis: "purchase_commitment",
+      amount_basis: basis ?? "purchase_commitment",
       kind,
       amount_minor: amount,
       currency,

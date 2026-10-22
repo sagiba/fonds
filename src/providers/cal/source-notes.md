@@ -54,10 +54,15 @@ established transaction role and remains unretained, not classified as proven no
   removed. A successful empty yearly search can omit records that its quarterly
   or monthly subdivisions return. The web frontend's 540-day selection limit is
   not a server retention guarantee.
-- **Policy:** recent absence uses a 60-day horizon as a safety margin inside the
-  asserted window. CAL rows have a purchase date and no booking date, and billed
-  lines are not compared for absence because search selects by purchase date.
-  Search windows are padded by one UTC day because the boundaries are unknown.
+- **Policy:** the known recent resource declares purchase-date coverage for 60 days
+  through capture day, inclusive, as a safety margin inside the asserted window.
+  This lets the shared engine compare eligible purchases first found in history;
+  unknown resources, month selection and unvalidated filters establish no such
+  coverage. CAL has no booking date. Billed lines are not compared for absence
+  because search selects by purchase date. Search windows are padded by one UTC
+  day because boundaries are unknown. Rejecting implausibly empty recent posted
+  captures protects against incomplete responses but can also block a legitimate
+  full cancellation; source completeness remains unproved.
 - **Checks:** [collection] "CAL monthly search coverage regression", "pads UTC
   calendar dates…".
 
@@ -163,15 +168,16 @@ established transaction role and remains unretained, not classified as proven no
   count as `עסקה ב-‎N‏ תשלומים` in `transTypeCommentDetails[]` and
   `עסקה ב - N תשלומים` in `onGoingTransactionsComment`, equal wherever both
   appear. The recent route can leave `numOfPayments` and `curPaymentNum` null.
-- **Policy:** these texts supply the planned count when `numOfPayments` is null;
-  any disagreement leaves it unknown with `conflicting_installment_facts`. An
-  ordinal is never derived.
+- **Policy:** texts supply missing `numOfPayments`; disagreement leaves it unknown
+  with `conflicting_installment_facts`. Explicit installment type/ordinal establishes
+  payment despite unknown count. Never derive ordinals.
 - **Cancellations (type 86)** have their own `trnIntId`, share none with a plan
   and carry `refundInd: true`. Their `numOfPayments` describes the original plan,
   which is not linked, and components may have ordinal 0.
 - **Not established:** foreign-currency plans, per-payment original money (`trnAmt`
-  describes the whole plan) and a cancellation's plan. Early repayment and
-  refunds can end a plan before its size.
+  describes the plan), cancellation-to-plan links or summaries missing count/ordinal.
+  Such summaries retain principal with unknown basis, excluded from totals. Early repayment/refunds
+  may shorten plans.
 - **Payment history:** in `paymentsMade[]` (`date`, `num`, `amount`,
   `currency`), `num` is a localized label with directional marks and digit
   groups, not an ordinal. In nonempty examples the parent counts are null and the

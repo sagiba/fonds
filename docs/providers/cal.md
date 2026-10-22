@@ -81,12 +81,13 @@ become review candidates.
 
 ## Absence and recovery
 
-Recent absence is compared over a 60-day horizon inside CAL's 90-day window. A
-missing purchase becomes `not_returned`, which never proves deletion; billed lines
-are never compared for absence. A successful but empty recent posted list is
-rejected as `implausible_empty` when the ledger still holds a recent posted row:
-the run is kept as failed and changes nothing. Accounts commit independently, so
-one invocation can be partial.
+An accepted scoped omission records [source absence](../api.md#fields), excluding
+purchases from current reads and totals without proving cancellation or deletion. Billed lines are not absence-comparable. The
+[coverage rationale](../../src/providers/cal/source-notes.md#calwindow-recent-window-and-search-coverage)
+explains the limits. An implausibly empty recent posted capture is rejected as
+`implausible_empty`: the failed run changes no ledger rows. This guard can
+block legitimate disappearance of the last covered posted population. Accounts
+commit independently; invocations can be partial.
 
 Authentication challenges, invalid credentials and rate limits stop the refresh,
 and repeated network or invalid-response failures stop after a bounded budget

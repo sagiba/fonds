@@ -23,7 +23,9 @@ export const filtersSchema = z
     billingAccountId: z.string().min(1).max(RESOURCE_ID_MAX_LENGTH).optional(),
     cardId: z.string().min(1).max(RESOURCE_ID_MAX_LENGTH).optional(),
     status: transactionStatusSchema.optional(),
-    presence: presenceSchema.optional(),
+    presence: z
+      .enum([...presenceSchema.options, "current", "all"])
+      .default("current"),
     includeSuperseded: z.boolean().default(false),
     merchantName: z.string().min(1).max(CANONICAL_TEXT_MAX_LENGTH).optional(),
     merchantCategoryCode: merchantCategoryCodeSchema.optional(),

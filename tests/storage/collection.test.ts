@@ -35,7 +35,7 @@ const capture: CollectionEvent = {
   type: "capture",
   capture: {
     accountKey: "synthetic-account",
-    endpoint: "synthetic/recent",
+    endpoint: "synthetic:cal/recent",
     capturedAt: "2040-08-01T00:00:00Z",
     responseText,
   },
@@ -44,7 +44,7 @@ const failure: CollectionEvent = {
   type: "failure",
   failure: {
     accountKey: "synthetic-other",
-    endpoint: "synthetic/recent",
+    endpoint: "synthetic:cal/recent",
     code: "network_error",
   },
   fatal: false,

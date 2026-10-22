@@ -265,6 +265,7 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
           "golden-account",
         ],
         "reviewRequiredIds": [
+          "transaction-10",
           "transaction-20",
           "transaction-6",
         ],
@@ -435,9 +436,14 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "actor": "sync",
       "after": {
         "presence": "not_returned",
+        "sourceAbsence": {
+          "capturedAt": "2040-08-02T00:00:00.000Z",
+          "runId": "golden-1",
+        },
       },
       "before": {
         "presence": "seen",
+        "sourceAbsence": null,
       },
       "connectionId": "golden-cal",
       "createdAt": "2040-08-31T00:00:00.000Z",
@@ -669,9 +675,14 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "actor": "sync",
       "after": {
         "presence": "not_returned",
+        "sourceAbsence": {
+          "capturedAt": "2040-08-04T00:00:00.000Z",
+          "runId": "golden-3",
+        },
       },
       "before": {
         "presence": "seen",
+        "sourceAbsence": null,
       },
       "connectionId": "golden-cal",
       "createdAt": "2040-08-31T00:00:00.000Z",
@@ -684,9 +695,14 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "actor": "sync",
       "after": {
         "presence": "not_returned",
+        "sourceAbsence": {
+          "capturedAt": "2040-08-04T00:00:00.000Z",
+          "runId": "golden-3",
+        },
       },
       "before": {
         "presence": "seen",
+        "sourceAbsence": null,
       },
       "connectionId": "golden-cal",
       "createdAt": "2040-08-31T00:00:00.000Z",
@@ -809,13 +825,14 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
           "authorization": 0,
           "pending": 2,
           "retiredOrRemoved": 0,
+          "sourceAbsent": 0,
           "transferOrIncome": 0,
-          "unresolved": 0,
+          "unresolved": 1,
         },
-        "excludedCount": 2,
+        "excludedCount": 3,
         "fxFeeUnknownCount": 1,
         "fxFees": [],
-        "includedCount": 18,
+        "includedCount": 17,
         "totals": [
           {
             "amountBasis": "purchase_commitment",
@@ -824,7 +841,7 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
           },
           {
             "amountBasis": "purchase_commitment",
-            "amountMinor": -186860,
+            "amountMinor": -102860,
             "currency": "ILS",
           },
           {
@@ -849,15 +866,16 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "totals": {
         "excluded": {
           "authorization": 0,
-          "pending": 2,
+          "pending": 1,
           "retiredOrRemoved": 0,
+          "sourceAbsent": 0,
           "transferOrIncome": 0,
-          "unresolved": 0,
+          "unresolved": 1,
         },
         "excludedCount": 2,
         "fxFeeUnknownCount": 1,
         "fxFees": [],
-        "includedCount": 20,
+        "includedCount": 19,
         "totals": [
           {
             "amountBasis": "purchase_commitment",
@@ -866,7 +884,7 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
           },
           {
             "amountBasis": "purchase_commitment",
-            "amountMinor": -202455,
+            "amountMinor": -118455,
             "currency": "ILS",
           },
           {
@@ -891,15 +909,16 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "totals": {
         "excluded": {
           "authorization": 0,
-          "pending": 2,
+          "pending": 1,
           "retiredOrRemoved": 0,
+          "sourceAbsent": 0,
           "transferOrIncome": 0,
-          "unresolved": 0,
+          "unresolved": 1,
         },
         "excludedCount": 2,
         "fxFeeUnknownCount": 1,
         "fxFees": [],
-        "includedCount": 20,
+        "includedCount": 19,
         "totals": [
           {
             "amountBasis": "purchase_commitment",
@@ -908,7 +927,7 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
           },
           {
             "amountBasis": "purchase_commitment",
-            "amountMinor": -202455,
+            "amountMinor": -118455,
             "currency": "ILS",
           },
           {
@@ -933,15 +952,16 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "totals": {
         "excluded": {
           "authorization": 0,
-          "pending": 2,
+          "pending": 1,
           "retiredOrRemoved": 0,
+          "sourceAbsent": 0,
           "transferOrIncome": 0,
-          "unresolved": 0,
+          "unresolved": 1,
         },
         "excludedCount": 2,
         "fxFeeUnknownCount": 1,
         "fxFees": [],
-        "includedCount": 21,
+        "includedCount": 18,
         "totals": [
           {
             "amountBasis": "purchase_commitment",
@@ -950,7 +970,7 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
           },
           {
             "amountBasis": "purchase_commitment",
-            "amountMinor": -206635,
+            "amountMinor": -107390,
             "currency": "ILS",
           },
           {
@@ -975,15 +995,16 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "totals": {
         "excluded": {
           "authorization": 0,
-          "pending": 2,
+          "pending": 1,
           "retiredOrRemoved": 0,
+          "sourceAbsent": 0,
           "transferOrIncome": 0,
-          "unresolved": 0,
+          "unresolved": 1,
         },
         "excludedCount": 2,
         "fxFeeUnknownCount": 1,
         "fxFees": [],
-        "includedCount": 22,
+        "includedCount": 19,
         "totals": [
           {
             "amountBasis": "purchase_commitment",
@@ -992,7 +1013,7 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
           },
           {
             "amountBasis": "purchase_commitment",
-            "amountMinor": -326635,
+            "amountMinor": -227390,
             "currency": "ILS",
           },
           {
@@ -1017,15 +1038,16 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "totals": {
         "excluded": {
           "authorization": 0,
-          "pending": 2,
+          "pending": 1,
           "retiredOrRemoved": 0,
+          "sourceAbsent": 0,
           "transferOrIncome": 0,
-          "unresolved": 0,
+          "unresolved": 1,
         },
         "excludedCount": 2,
         "fxFeeUnknownCount": 1,
         "fxFees": [],
-        "includedCount": 22,
+        "includedCount": 19,
         "totals": [
           {
             "amountBasis": "purchase_commitment",
@@ -1034,7 +1056,7 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
           },
           {
             "amountBasis": "purchase_commitment",
-            "amountMinor": -326635,
+            "amountMinor": -227390,
             "currency": "ILS",
           },
           {
@@ -1175,6 +1197,18 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "purchaseId": null,
       "recurring": null,
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "runId": "golden-2",
+        },
+        "identity": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"purchase_commitment","amountMinor":-8640,"billingDate":"2040-06-10","bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"רגילה","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":null,"installmentNumber":null,"kind":"purchase","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי REGULAR","merchantProviderId":"SYNTHETIC-MERCHANT-REGULAR","originalAmountMinor":-8640,"originalCurrency":"ILS","purchaseKey":null,"status":"posted","transactionDate":"2040-05-20"}",
+          "retiredFromMatching": false,
+          "runId": "golden-2",
+        },
+      },
       "sourceKey": "cal:posted:purchase:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-REGULAR"]",
       "sourceScope": "golden-account",
       "status": "posted",
@@ -1312,6 +1346,18 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "purchaseId": null,
       "recurring": null,
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "runId": "golden-2",
+        },
+        "identity": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"purchase_commitment","amountMinor":-22200,"billingDate":"2040-06-10","bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"רגילה","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":null,"installmentNumber":null,"kind":"purchase","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי CONVERTED-USD","merchantProviderId":"SYNTHETIC-MERCHANT-CONVERTED-USD","originalAmountMinor":-6000,"originalCurrency":"USD","purchaseKey":null,"status":"posted","transactionDate":"2040-05-20"}",
+          "retiredFromMatching": false,
+          "runId": "golden-2",
+        },
+      },
       "sourceKey": "cal:posted:purchase:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-CONVERTED-USD"]",
       "sourceScope": "golden-account",
       "status": "posted",
@@ -1449,6 +1495,18 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "purchaseId": null,
       "recurring": null,
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "runId": "golden-2",
+        },
+        "identity": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"purchase_commitment","amountMinor":-4500,"billingDate":"2040-06-10","bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"USD","currencyExchange":null,"description":"רגילה","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":null,"installmentNumber":null,"kind":"purchase","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי BILLED-USD","merchantProviderId":"SYNTHETIC-MERCHANT-BILLED-USD","originalAmountMinor":-4500,"originalCurrency":"USD","purchaseKey":null,"status":"posted","transactionDate":"2040-05-20"}",
+          "retiredFromMatching": false,
+          "runId": "golden-2",
+        },
+      },
       "sourceKey": "cal:posted:purchase:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-BILLED-USD"]",
       "sourceScope": "golden-account",
       "status": "posted",
@@ -1586,6 +1644,18 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "purchaseId": null,
       "recurring": null,
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "runId": "golden-2",
+        },
+        "identity": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"purchase_commitment","amountMinor":-3750,"billingDate":"2040-06-10","bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"EUR","currencyExchange":null,"description":"רגילה","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":null,"installmentNumber":null,"kind":"purchase","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי BILLED-EUR","merchantProviderId":"SYNTHETIC-MERCHANT-BILLED-EUR","originalAmountMinor":-3750,"originalCurrency":"EUR","purchaseKey":null,"status":"posted","transactionDate":"2040-05-20"}",
+          "retiredFromMatching": false,
+          "runId": "golden-2",
+        },
+      },
       "sourceKey": "cal:posted:purchase:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-BILLED-EUR"]",
       "sourceScope": "golden-account",
       "status": "posted",
@@ -1722,6 +1792,18 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "purchaseId": null,
       "recurring": null,
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "runId": "golden-2",
+        },
+        "identity": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"purchase_commitment","amountMinor":-120000,"billingDate":null,"bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"תשלומים","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":12,"installmentNumber":null,"kind":"purchase","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי INSTALLMENTS","merchantProviderId":"SYNTHETIC-MERCHANT-INSTALLMENTS","originalAmountMinor":-120000,"originalCurrency":"ILS","purchaseKey":null,"status":"posted","transactionDate":"2040-05-20"}",
+          "retiredFromMatching": false,
+          "runId": "golden-2",
+        },
+      },
       "sourceKey": "cal:posted:purchase:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-INSTALLMENTS"]",
       "sourceScope": "golden-account",
       "status": "posted",
@@ -1860,6 +1942,18 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "purchaseId": null,
       "recurring": null,
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "runId": "golden-2",
+        },
+        "identity": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"purchase_commitment","amountMinor":30000,"billingDate":null,"bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"ביטול תשלומים","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":null,"installmentNumber":null,"kind":"refund","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי UNKNOWN-PLAN","merchantProviderId":"SYNTHETIC-MERCHANT-UNKNOWN-PLAN","originalAmountMinor":null,"originalCurrency":null,"purchaseKey":null,"status":"posted","transactionDate":"2040-05-20"}",
+          "retiredFromMatching": false,
+          "runId": "golden-2",
+        },
+      },
       "sourceKey": "cal:posted:purchase:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-UNKNOWN-PLAN"]",
       "sourceScope": "golden-account",
       "status": "posted",
@@ -1997,6 +2091,18 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "purchaseId": null,
       "recurring": null,
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "runId": "golden-2",
+        },
+        "identity": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"purchase_commitment","amountMinor":2500,"billingDate":"2040-06-10","bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"זיכוי","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":null,"installmentNumber":null,"kind":"refund","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי REFUND","merchantProviderId":"SYNTHETIC-MERCHANT-REFUND","originalAmountMinor":2500,"originalCurrency":"ILS","purchaseKey":null,"status":"posted","transactionDate":"2040-05-20"}",
+          "retiredFromMatching": false,
+          "runId": "golden-2",
+        },
+      },
       "sourceKey": "cal:posted:purchase:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-REFUND"]",
       "sourceScope": "golden-account",
       "status": "posted",
@@ -2208,6 +2314,18 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "purchaseId": null,
       "recurring": null,
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "runId": "golden-2",
+        },
+        "identity": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"purchase_commitment","amountMinor":52500,"billingDate":null,"bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"ביטול תשלומים","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":null,"installmentNumber":null,"kind":"refund","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי CANCEL","merchantProviderId":"SYNTHETIC-MERCHANT-CANCEL","originalAmountMinor":null,"originalCurrency":null,"purchaseKey":null,"status":"posted","transactionDate":"2040-05-20"}",
+          "retiredFromMatching": false,
+          "runId": "golden-2",
+        },
+      },
       "sourceKey": "cal:posted:purchase:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-CANCEL"]",
       "sourceScope": "golden-account",
       "status": "posted",
@@ -2345,6 +2463,18 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "purchaseId": null,
       "recurring": null,
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "runId": "golden-2",
+        },
+        "identity": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"purchase_commitment","amountMinor":0,"billingDate":"2040-06-10","bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"דמי חבר","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":null,"installmentNumber":null,"kind":"fee","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי WAIVED-FEE","merchantProviderId":"SYNTHETIC-MERCHANT-WAIVED-FEE","originalAmountMinor":null,"originalCurrency":null,"purchaseKey":null,"status":"posted","transactionDate":"2040-05-20"}",
+          "retiredFromMatching": false,
+          "runId": "golden-2",
+        },
+      },
       "sourceKey": "cal:posted:purchase:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-WAIVED-FEE"]",
       "sourceScope": "golden-account",
       "status": "posted",
@@ -2355,7 +2485,7 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "wallet": null,
     },
     {
-      "amountBasis": "purchase_commitment",
+      "amountBasis": "unknown",
       "amountMinor": -84000,
       "authorizationMethod": null,
       "billingDate": null,
@@ -2367,7 +2497,9 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "currency": "ILS",
       "description": "תשלומים",
       "details": {
-        "issues": [],
+        "issues": [
+          "unresolved_installment_role",
+        ],
         "merchant": {
           "address": "רחוב הדוגמה 1, עיר הדוגמה",
           "phone": "000-000-0000",
@@ -2523,6 +2655,14 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "purchaseId": null,
       "recurring": null,
       "sourceAliases": [],
+      "sourceEvidence": {
+        "identity": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"unknown","amountMinor":-84000,"billingDate":null,"bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"תשלומים","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":null,"installmentNumber":null,"kind":"purchase","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי HISTORY","merchantProviderId":"SYNTHETIC-MERCHANT-HISTORY","originalAmountMinor":-84000,"originalCurrency":"ILS","purchaseKey":null,"status":"posted","transactionDate":"2040-05-20"}",
+          "retiredFromMatching": false,
+          "runId": "golden-2",
+        },
+      },
       "sourceKey": "cal:posted:purchase:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-HISTORY"]",
       "sourceScope": "golden-account",
       "status": "posted",
@@ -2703,6 +2843,18 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "purchaseId": null,
       "recurring": true,
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "runId": "golden-2",
+        },
+        "identity": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"purchase_commitment","amountMinor":-3990,"billingDate":"2040-06-10","bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"הוראת קבע","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":null,"installmentNumber":null,"kind":"purchase","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי CONTEXT","merchantProviderId":"SYNTHETIC-MERCHANT-CONTEXT","originalAmountMinor":-3990,"originalCurrency":"ILS","purchaseKey":null,"status":"posted","transactionDate":"2040-05-20"}",
+          "retiredFromMatching": false,
+          "runId": "golden-2",
+        },
+      },
       "sourceKey": "cal:posted:purchase:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-CONTEXT"]",
       "sourceScope": "golden-account",
       "status": "posted",
@@ -2840,6 +2992,18 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "purchaseId": null,
       "recurring": null,
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "runId": "golden-2",
+        },
+        "identity": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"purchase_commitment","amountMinor":-2200,"billingDate":"2040-06-10","bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"רגילה","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":null,"installmentNumber":null,"kind":"purchase","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי UNKNOWN-ORIGINAL-CURRENCY","merchantProviderId":"SYNTHETIC-MERCHANT-UNKNOWN-ORIGINAL-CURRENCY","originalAmountMinor":null,"originalCurrency":null,"purchaseKey":null,"status":"posted","transactionDate":"2040-05-20"}",
+          "retiredFromMatching": false,
+          "runId": "golden-2",
+        },
+      },
       "sourceKey": "cal:posted:purchase:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-UNKNOWN-ORIGINAL-CURRENCY"]",
       "sourceScope": "golden-account",
       "status": "posted",
@@ -2977,6 +3141,18 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "purchaseId": null,
       "recurring": null,
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "runId": "golden-2",
+        },
+        "identity": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"purchase_commitment","amountMinor":-4860,"billingDate":"2040-06-10","bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"רגילה","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":null,"installmentNumber":null,"kind":"purchase","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי REMOTE","merchantProviderId":"SYNTHETIC-MERCHANT-REMOTE","originalAmountMinor":-4860,"originalCurrency":"ILS","purchaseKey":null,"status":"posted","transactionDate":"2040-05-20"}",
+          "retiredFromMatching": false,
+          "runId": "golden-2",
+        },
+      },
       "sourceKey": "cal:posted:purchase:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-REMOTE"]",
       "sourceScope": "golden-account",
       "status": "posted",
@@ -3114,6 +3290,18 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "purchaseId": null,
       "recurring": null,
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "runId": "golden-2",
+        },
+        "identity": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"purchase_commitment","amountMinor":-6480,"billingDate":"2040-06-10","bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"רגילה","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":null,"installmentNumber":null,"kind":"purchase","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי VANISH","merchantProviderId":"SYNTHETIC-MERCHANT-VANISH","originalAmountMinor":-6480,"originalCurrency":"ILS","purchaseKey":null,"status":"posted","transactionDate":"2040-05-20"}",
+          "retiredFromMatching": false,
+          "runId": "golden-2",
+        },
+      },
       "sourceKey": "cal:posted:purchase:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-VANISH"]",
       "sourceScope": "golden-account",
       "status": "posted",
@@ -3251,6 +3439,18 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "purchaseId": null,
       "recurring": null,
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "runId": "golden-2",
+        },
+        "identity": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"purchase_commitment","amountMinor":-7560,"billingDate":"2040-06-10","bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"רגילה","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":null,"installmentNumber":null,"kind":"purchase","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי CORRECTED","merchantProviderId":"SYNTHETIC-MERCHANT-CORRECTED","originalAmountMinor":-7560,"originalCurrency":"ILS","purchaseKey":null,"status":"posted","transactionDate":"2040-05-20"}",
+          "retiredFromMatching": false,
+          "runId": "golden-2",
+        },
+      },
       "sourceKey": "cal:posted:purchase:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-CORRECTED"]",
       "sourceScope": "golden-account",
       "status": "posted",
@@ -3388,6 +3588,18 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "purchaseId": null,
       "recurring": null,
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "runId": "golden-2",
+        },
+        "identity": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"purchase_commitment","amountMinor":-1820,"billingDate":"2040-06-10","bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"רגילה","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":null,"installmentNumber":null,"kind":"purchase","merchantCategoryCode":"5411","merchantName":"בית קפה סינתטי","merchantProviderId":"SYNTHETIC-CAFE","originalAmountMinor":-1820,"originalCurrency":"ILS","purchaseKey":null,"status":"posted","transactionDate":"2040-05-20"}",
+          "retiredFromMatching": false,
+          "runId": "golden-2",
+        },
+      },
       "sourceKey": "cal:posted:purchase:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-DUPLICATE-A"]",
       "sourceScope": "golden-account",
       "status": "posted",
@@ -3525,6 +3737,18 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "purchaseId": null,
       "recurring": null,
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "runId": "golden-2",
+        },
+        "identity": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"purchase_commitment","amountMinor":-1820,"billingDate":"2040-06-10","bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"רגילה","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":null,"installmentNumber":null,"kind":"purchase","merchantCategoryCode":"5411","merchantName":"בית קפה סינתטי","merchantProviderId":"SYNTHETIC-CAFE","originalAmountMinor":-1820,"originalCurrency":"ILS","purchaseKey":null,"status":"posted","transactionDate":"2040-05-20"}",
+          "retiredFromMatching": false,
+          "runId": "golden-2",
+        },
+      },
       "sourceKey": "cal:posted:purchase:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-DUPLICATE-B"]",
       "sourceScope": "golden-account",
       "status": "posted",
@@ -3662,6 +3886,18 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "purchaseId": null,
       "recurring": null,
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "runId": "golden-2",
+        },
+        "identity": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"purchase_commitment","amountMinor":-8640,"billingDate":"2040-06-10","bookingDate":null,"cardKey":"SYNTHETIC-CARD-B","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"רגילה","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":null,"installmentNumber":null,"kind":"purchase","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי REGULAR","merchantProviderId":"SYNTHETIC-MERCHANT-REGULAR","originalAmountMinor":-8640,"originalCurrency":"ILS","purchaseKey":null,"status":"posted","transactionDate":"2040-05-20"}",
+          "retiredFromMatching": false,
+          "runId": "golden-2",
+        },
+      },
       "sourceKey": "cal:posted:purchase:["SYNTHETIC-CARD-B","SYNTHETIC-TXN-REGULAR"]",
       "sourceScope": "golden-account",
       "status": "posted",
@@ -3750,7 +3986,23 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "providerTransactionCode": "5",
       "purchaseId": null,
       "recurring": null,
+      "sourceAbsence": {
+        "capturedAt": "2040-08-03T00:00:00.000Z",
+        "runId": "golden-2",
+      },
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-01T00:00:00.000Z",
+          "runId": "golden-0",
+        },
+        "identity": {
+          "capturedAt": "2040-08-01T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"authorization","amountMinor":-5875,"billingDate":null,"bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"רגילה","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":null,"installmentNumber":null,"kind":"purchase","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי PENDING-POSTED","merchantProviderId":null,"originalAmountMinor":null,"originalCurrency":null,"purchaseKey":null,"status":"pending","transactionDate":"2040-06-11"}",
+          "retiredFromMatching": false,
+          "runId": "golden-0",
+        },
+      },
       "sourceKey": "cal:pending:["SYNTHETIC-CARD-A","SYNTHETIC-AUTH-PENDING-POSTED"]",
       "sourceScope": "golden-account",
       "status": "pending",
@@ -3842,6 +4094,18 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "purchaseId": null,
       "recurring": null,
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "runId": "golden-2",
+        },
+        "identity": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"authorization","amountMinor":-2940,"billingDate":null,"bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"רגילה","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":null,"installmentNumber":null,"kind":"purchase","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי LEGACY-PENDING","merchantProviderId":null,"originalAmountMinor":null,"originalCurrency":null,"purchaseKey":null,"status":"pending","transactionDate":"2040-06-11"}",
+          "retiredFromMatching": false,
+          "runId": "golden-2",
+        },
+      },
       "sourceKey": "cal:pending:weak:["SYNTHETIC-CARD-A","2040-06-11T11:00:00","בית עסק סינתטי LEGACY-PENDING","29.4","₪"]",
       "sourceScope": "golden-account",
       "status": "pending",
@@ -3978,6 +4242,18 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "purchaseId": "transaction-5",
       "recurring": null,
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "runId": "golden-2",
+        },
+        "identity": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"booked_entry","amountMinor":-10000,"billingDate":"2040-06-10","bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"תשלומים","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":12,"installmentNumber":3,"kind":"purchase","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי INSTALLMENTS","merchantProviderId":"SYNTHETIC-MERCHANT-INSTALLMENTS","originalAmountMinor":null,"originalCurrency":null,"purchaseKey":"cal:posted:purchase:[\\"SYNTHETIC-CARD-A\\",\\"SYNTHETIC-TXN-INSTALLMENTS\\"]","status":"posted","transactionDate":"2040-05-20"}",
+          "retiredFromMatching": false,
+          "runId": "golden-2",
+        },
+      },
       "sourceKey": "cal:posted:line:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-INSTALLMENTS",3]",
       "sourceScope": "golden-account",
       "status": "posted",
@@ -4119,7 +4395,23 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "providerTransactionCode": "5",
       "purchaseId": null,
       "recurring": null,
+      "sourceAbsence": {
+        "capturedAt": "2040-08-04T00:00:00.000Z",
+        "runId": "golden-3",
+      },
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "runId": "golden-2",
+        },
+        "identity": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"purchase_commitment","amountMinor":-5875,"billingDate":"2040-06-10","bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"רגילה","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":null,"installmentNumber":null,"kind":"purchase","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי PENDING-POSTED","merchantProviderId":"SYNTHETIC-MERCHANT-PENDING-POSTED","originalAmountMinor":-5875,"originalCurrency":"ILS","purchaseKey":null,"status":"posted","transactionDate":"2040-06-12"}",
+          "retiredFromMatching": false,
+          "runId": "golden-2",
+        },
+      },
       "sourceKey": "cal:posted:purchase:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-PENDING-POSTED"]",
       "sourceScope": "golden-account",
       "status": "posted",
@@ -4256,7 +4548,23 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "providerTransactionCode": "5",
       "purchaseId": null,
       "recurring": null,
+      "sourceAbsence": {
+        "capturedAt": "2040-08-04T00:00:00.000Z",
+        "runId": "golden-3",
+      },
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "runId": "golden-2",
+        },
+        "identity": {
+          "capturedAt": "2040-08-03T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"purchase_commitment","amountMinor":-9370,"billingDate":"2040-06-10","bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"רגילה","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":null,"installmentNumber":null,"kind":"purchase","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי NEW","merchantProviderId":"SYNTHETIC-MERCHANT-NEW","originalAmountMinor":-9370,"originalCurrency":"ILS","purchaseKey":null,"status":"posted","transactionDate":"2040-07-11"}",
+          "retiredFromMatching": false,
+          "runId": "golden-2",
+        },
+      },
       "sourceKey": "cal:posted:purchase:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-NEW"]",
       "sourceScope": "golden-account",
       "status": "posted",
@@ -4389,6 +4697,18 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "purchaseId": null,
       "recurring": null,
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-04T00:00:00.000Z",
+          "runId": "golden-3",
+        },
+        "identity": {
+          "capturedAt": "2040-08-04T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"purchase_commitment","amountMinor":-4180,"billingDate":"2040-06-10","bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"רגילה","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":null,"installmentNumber":null,"kind":"purchase","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי PARTIAL","merchantProviderId":"SYNTHETIC-MERCHANT-PARTIAL","originalAmountMinor":-4180,"originalCurrency":"ILS","purchaseKey":null,"status":"posted","transactionDate":"2040-05-20"}",
+          "retiredFromMatching": false,
+          "runId": "golden-3",
+        },
+      },
       "sourceKey": "cal:posted:purchase:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-PARTIAL"]",
       "sourceScope": "golden-account",
       "status": "posted",
@@ -4662,6 +4982,18 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "purchaseId": null,
       "recurring": null,
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-05T00:00:00.000Z",
+          "runId": "golden-4",
+        },
+        "identity": {
+          "capturedAt": "2040-08-05T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"purchase_commitment","amountMinor":-120000,"billingDate":null,"bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"תשלומים","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":12,"installmentNumber":null,"kind":"purchase","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי LEGACY-INSTALLMENTS","merchantProviderId":"SYNTHETIC-MERCHANT-LEGACY-INSTALLMENTS","originalAmountMinor":-120000,"originalCurrency":"ILS","purchaseKey":null,"status":"posted","transactionDate":"2040-01-15"}",
+          "retiredFromMatching": false,
+          "runId": "golden-4",
+        },
+      },
       "sourceKey": "cal:posted:purchase:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-LEGACY-INSTALLMENTS"]",
       "sourceScope": "golden-account",
       "status": "posted",
@@ -4791,6 +5123,18 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "purchaseId": "transaction-25",
       "recurring": null,
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-05T00:00:00.000Z",
+          "runId": "golden-4",
+        },
+        "identity": {
+          "capturedAt": "2040-08-05T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"booked_entry","amountMinor":-10000,"billingDate":"2040-02-10","bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"תשלומים","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":12,"installmentNumber":1,"kind":"purchase","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי LEGACY-INSTALLMENTS","merchantProviderId":"SYNTHETIC-MERCHANT-LEGACY-INSTALLMENTS","originalAmountMinor":null,"originalCurrency":null,"purchaseKey":"cal:posted:purchase:[\\"SYNTHETIC-CARD-A\\",\\"SYNTHETIC-TXN-LEGACY-INSTALLMENTS\\"]","status":"posted","transactionDate":"2040-01-15"}",
+          "retiredFromMatching": false,
+          "runId": "golden-4",
+        },
+      },
       "sourceKey": "cal:posted:line:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-LEGACY-INSTALLMENTS",1]",
       "sourceScope": "golden-account",
       "status": "posted",
@@ -4920,6 +5264,18 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "purchaseId": "transaction-25",
       "recurring": null,
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-05T00:00:00.000Z",
+          "runId": "golden-4",
+        },
+        "identity": {
+          "capturedAt": "2040-08-05T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"booked_entry","amountMinor":-10000,"billingDate":"2040-03-10","bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"תשלומים","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":12,"installmentNumber":2,"kind":"purchase","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי LEGACY-INSTALLMENTS","merchantProviderId":"SYNTHETIC-MERCHANT-LEGACY-INSTALLMENTS","originalAmountMinor":null,"originalCurrency":null,"purchaseKey":"cal:posted:purchase:[\\"SYNTHETIC-CARD-A\\",\\"SYNTHETIC-TXN-LEGACY-INSTALLMENTS\\"]","status":"posted","transactionDate":"2040-01-15"}",
+          "retiredFromMatching": false,
+          "runId": "golden-4",
+        },
+      },
       "sourceKey": "cal:posted:line:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-LEGACY-INSTALLMENTS",2]",
       "sourceScope": "golden-account",
       "status": "posted",
@@ -5049,6 +5405,18 @@ exports[`preserves fixed fixture replay output across reconciliation refactors 1
       "purchaseId": "transaction-25",
       "recurring": null,
       "sourceAliases": [],
+      "sourceEvidence": {
+        "financial": {
+          "capturedAt": "2040-08-05T00:00:00.000Z",
+          "runId": "golden-4",
+        },
+        "identity": {
+          "capturedAt": "2040-08-05T00:00:00.000Z",
+          "financialFingerprint": "{"amountBasis":"booked_entry","amountMinor":-10000,"billingDate":"2040-04-10","bookingDate":null,"cardKey":"SYNTHETIC-CARD-A","counterpartyName":null,"currency":"ILS","currencyExchange":null,"description":"תשלומים","fxFeeCurrency":null,"fxFeeMinor":null,"installmentCount":12,"installmentNumber":3,"kind":"purchase","merchantCategoryCode":"5411","merchantName":"בית עסק סינתטי LEGACY-INSTALLMENTS","merchantProviderId":"SYNTHETIC-MERCHANT-LEGACY-INSTALLMENTS","originalAmountMinor":null,"originalCurrency":null,"purchaseKey":"cal:posted:purchase:[\\"SYNTHETIC-CARD-A\\",\\"SYNTHETIC-TXN-LEGACY-INSTALLMENTS\\"]","status":"posted","transactionDate":"2040-01-15"}",
+          "retiredFromMatching": false,
+          "runId": "golden-4",
+        },
+      },
       "sourceKey": "cal:posted:line:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-LEGACY-INSTALLMENTS",3]",
       "sourceScope": "golden-account",
       "status": "posted",

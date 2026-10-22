@@ -216,13 +216,15 @@ async function seedConnection(db: string, id: string, provider: string) {
   return success("connect", provider, "--name", id, "--offline", "--db", db);
 }
 
-/** Every row of every perspective, as list_transactions returns it. */
+/** Explicit historical inspection across every perspective. */
 async function listRows(dbPath: string, ...args: string[]) {
   const page = await success<Page<WireTransaction>>(
     "list",
     "--db",
     dbPath,
     "--perspective",
+    "all",
+    "--presence",
     "all",
     ...args,
   );
@@ -462,6 +464,7 @@ describe("offline CLI", () => {
       "authorization",
       "pending",
       "retiredOrRemoved",
+      "sourceAbsent",
       "transferOrIncome",
       "unresolved",
     ]);
@@ -1099,6 +1102,27 @@ describe("offline CLI", () => {
     const initial = await listRows(dbPath);
     expect(initial).toHaveLength(2);
     expect(initial.every((row) => row.presence === "not_returned")).toBe(true);
+    expect(
+      (await success<Page<WireTransaction>>("list", "--db", dbPath)).data,
+    ).toHaveLength(2);
+    expect(
+      (
+        await success<Page<WireTransaction>>(
+          "list",
+          "--db",
+          dbPath,
+          "--presence",
+          "not_returned",
+        )
+      ).data,
+    ).toHaveLength(2);
+    expect(
+      await success("totals", "--db", dbPath, "--presence", "all"),
+    ).toMatchObject({
+      includedCount: 1,
+      excluded: { sourceAbsent: 0 },
+    });
+
     expect(
       await success(
         ...args,

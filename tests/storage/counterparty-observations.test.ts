@@ -86,19 +86,75 @@ describe.each(backends)("%s counterparty observations", (backend) => {
       notes: "Owner note",
     });
     const events = await db.listEvents();
-    await capture(absent());
-    expect(await current()).toMatchObject({
-      id: first.id,
-      counterpartyName: "Invented recipient",
-      version: first.version,
-      annotation: { data: { notes: "Owner note" } },
-    });
+    for (let repeat = 0; repeat < 2; repeat++) {
+      expect(await capture(absent())).toMatchObject({
+        created: 0,
+        updated: 0,
+        unchanged: 1,
+      });
+      const retained = await current();
+      expect(retained).toMatchObject({
+        id: first.id,
+        counterpartyName: "Invented recipient",
+        version: first.version,
+        annotation: { data: { notes: "Owner note" } },
+      });
+      expect(retained.sourceEvidence!.identity!.financialFingerprint).toBe(
+        first.sourceEvidence!.identity!.financialFingerprint,
+      );
+    }
     expect(
       (await db.listEvents()).filter(
         (event) => event.type === "transaction.updated",
       ),
     ).toEqual(events.filter((event) => event.type === "transaction.updated"));
   });
+
+  it.each([
+    { amountMinor: -12000 },
+    { originalAmountMinor: -3000, originalCurrency: "USD" },
+    { fxFeeMinor: 125, fxFeeCurrency: "ILS" },
+  ])(
+    "does not retain other captured financial identity facts when a name is absent: %j",
+    async (changed) => {
+      await capture(transfer());
+      const first = await current();
+      const changedInput = absent({ ...transfer(), ...changed });
+      expect(await capture(changedInput)).toMatchObject({
+        created: 0,
+        updated: 1,
+      });
+      const corrected = await current();
+      expect(corrected).toMatchObject({
+        ...changed,
+        id: first.id,
+        counterpartyName: "Invented recipient",
+        version: first.version + 1,
+      });
+      expect(corrected.sourceEvidence!.identity!.financialFingerprint).not.toBe(
+        first.sourceEvidence!.identity!.financialFingerprint,
+      );
+      const events = await db.listEvents();
+      for (let repeat = 0; repeat < 2; repeat++) {
+        expect(await capture(changedInput)).toMatchObject({
+          created: 0,
+          updated: 0,
+          unchanged: 1,
+        });
+        expect(await current()).toMatchObject({
+          id: first.id,
+          version: corrected.version,
+          sourceEvidence: {
+            identity: {
+              financialFingerprint:
+                corrected.sourceEvidence!.identity!.financialFingerprint,
+            },
+          },
+        });
+        expect(await db.listEvents()).toEqual(events);
+      }
+    },
+  );
 
   it("applies a new explicit name and clears explicit unknown without losing owner annotations", async () => {
     await capture(transfer());
@@ -182,6 +238,69 @@ describe.each(backends)("%s counterparty observations", (backend) => {
       annotation: { data: { notes: "Earlier native identity" } },
     });
   });
+
+  it.each(["missing", "unsupported"] as const)(
+    "does not infer a retained legacy name's comparison when captured state is %s",
+    async (comparison) => {
+      await capture(transfer());
+      const first = await current();
+      const annotation = await db.editAnnotation({
+        transactionId: first.id,
+        expectedVersion: 0,
+        notes: "Legacy native identity",
+      });
+      await db.raw(
+        "UPDATE transaction_reconciliation SET source_evidence_json = ? WHERE transaction_id = ?",
+        [
+          JSON.stringify({
+            financial: first.sourceEvidence!.financial,
+            ...(comparison === "missing"
+              ? {}
+              : {
+                  identity: {
+                    ...first.sourceEvidence!.identity,
+                    financialFingerprint: "unknown-comparison-format",
+                  },
+                }),
+          }),
+          first.id,
+        ],
+      );
+      const events = await db.listEvents();
+      for (let repeat = 0; repeat < 2; repeat++) {
+        expect(await capture(absent())).toMatchObject({
+          created: 0,
+          updated: 0,
+          unchanged: 1,
+        });
+        const retained = await current();
+        expect(retained).toMatchObject({
+          id: first.id,
+          counterpartyName: "Invented recipient",
+          version: first.version,
+          annotation,
+        });
+        expect(retained.sourceEvidence?.identity).toBeUndefined();
+        expect(await db.listEvents()).toEqual(events);
+      }
+      expect(
+        await capture(absent({ ...transfer(), identityStrength: "weak" })),
+      ).toMatchObject({ created: 1 });
+      const uncertain = (await db.listTransactions()).find(
+        (item) => item.id !== first.id,
+      )!;
+      expect(uncertain).toMatchObject({
+        counterpartyName: null,
+        identityStrength: "ambiguous",
+        annotation: null,
+      });
+      expect(await db.getTransaction(first.id)).toMatchObject({
+        counterpartyName: "Invented recipient",
+        annotation,
+        sourceEvidence: { identity: { retiredFromMatching: true } },
+      });
+    },
+  );
 });
 describe.each(backends)(
   "%s bound Isracard counterparty evidence",

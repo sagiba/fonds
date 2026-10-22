@@ -450,7 +450,11 @@ describe("authenticated local HTTP service", () => {
     const after = await (
       await request("/v1/transactions?connectionId=synthetic-cal")
     ).json();
-    expect(after.data).toHaveLength(22);
+    expect(after.data).toHaveLength(21);
+    const history = await (
+      await request("/v1/transactions?connectionId=synthetic-cal&presence=all")
+    ).json();
+    expect(history.data).toHaveLength(22);
     expect(
       (await request("/v1/transactions/totals?connectionId=synthetic-cal"))
         .status,

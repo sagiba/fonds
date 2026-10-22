@@ -170,6 +170,39 @@ function pairs(
   ).pairs;
 }
 
+function prior(
+  id: string,
+  day: number,
+  coverage: {
+    status: "pending" | "posted";
+    success: boolean;
+    comparable: boolean;
+  }[],
+  priorScope?: CollectionScope,
+): PriorRun {
+  return {
+    id,
+    status: "completed",
+    startedAt: `2040-07-0${day}T00:00:00Z`,
+    coverage: coverage.map((partition) => ({
+      ...partition,
+      accountKey: "account",
+      resource: "synthetic:fake/recent",
+      ...(priorScope ? { scope: priorScope } : {}),
+    })),
+    snapshot: {
+      responses: [
+        {
+          accountKey: "account",
+          endpoint: "synthetic:fake/recent",
+          capturedAt: `2040-07-0${day}T00:00:00Z`,
+          ...(priorScope ? { scope: priorScope } : {}),
+        },
+      ],
+    },
+  };
+}
+
 function capturePlan(
   rows: Transaction[],
   inputs: TransactionInput[],
@@ -199,7 +232,21 @@ function capturePlan(
     },
     rows,
     annotations: [],
-    priorRuns: options.priorRuns ?? [],
+    priorRuns:
+      options.priorRuns ??
+      (rows.length
+        ? [
+            prior(
+              "first",
+              2,
+              [
+                { status: "pending", success: true, comparable: true },
+                { status: "posted", success: true, comparable: true },
+              ],
+              options.scope,
+            ),
+          ]
+        : []),
     removals: options.removals ?? [],
     catalog,
   });
@@ -865,7 +912,11 @@ describe("automatic posting candidate graph", () => {
       },
       rows: [authorization],
       annotations: [],
-      priorRuns: [],
+      priorRuns: [
+        prior("first", 2, [
+          { status: "pending", success: true, comparable: true },
+        ]),
+      ],
       removals: [],
       catalog,
     });
@@ -963,39 +1014,6 @@ describe("provider-neutral continuation admission and freshness", () => {
       details: { ...emptyDetails(), issues: ["synthetic_provenance"] },
     });
 
-  function prior(
-    id: string,
-    day: number,
-    coverage: {
-      status: "pending" | "posted";
-      success: boolean;
-      comparable: boolean;
-    }[],
-    priorScope?: CollectionScope,
-  ): PriorRun {
-    return {
-      id,
-      status: "completed",
-      startedAt: `2040-07-0${day}T00:00:00Z`,
-      coverage: coverage.map((partition) => ({
-        ...partition,
-        accountKey: "account",
-        resource: "synthetic:fake/recent",
-        ...(priorScope ? { scope: priorScope } : {}),
-      })),
-      snapshot: {
-        responses: [
-          {
-            accountKey: "account",
-            endpoint: "synthetic:fake/recent",
-            capturedAt: `2040-07-0${day}T00:00:00Z`,
-            ...(priorScope ? { scope: priorScope } : {}),
-          },
-        ],
-      },
-    };
-  }
-
   it("allows an adapter-evidenced unknown pending kind and informational issue with positive noncomparable posting", () => {
     const plan = capturePlan([authorization()], [row("posted")], 3, true, {
       adapter: { automaticPosting: singleton, extract: partialPosted },
@@ -1076,6 +1094,12 @@ describe("provider-neutral continuation admission and freshness", () => {
         scope,
         priorRuns: [
           prior(
+            "first",
+            2,
+            [{ status: "pending", success: true, comparable: true }],
+            scope,
+          ),
+          prior(
             "later",
             day,
             [{ status: "posted", success: true, comparable: false }],
@@ -1095,6 +1119,9 @@ describe("provider-neutral continuation admission and freshness", () => {
       const plan = capturePlan([authorization()], [row("posted")], 3, true, {
         adapter: { automaticPosting: singleton, extract: partialPosted },
         priorRuns: [
+          prior("first", 2, [
+            { status: "pending", success: true, comparable: true },
+          ]),
           prior("later", day, [
             { status: "posted", success: true, comparable: false },
           ]),
@@ -1114,6 +1141,12 @@ describe("provider-neutral continuation admission and freshness", () => {
         scope,
         priorRuns: [
           prior(
+            "first",
+            2,
+            [{ status: "pending", success: true, comparable: true }],
+            scope,
+          ),
+          prior(
             "later",
             day,
             [{ status: "pending", success: true, comparable: true }],
@@ -1126,6 +1159,21 @@ describe("provider-neutral continuation admission and freshness", () => {
       ).toBe(false);
     },
   );
+
+  it("does not infer disappearance when the prior origin receipt is unavailable", () => {
+    const plan = capturePlan([authorization()], [row("posted")], 3, true, {
+      adapter: { automaticPosting: singleton, extract: partialPosted },
+      scope,
+      priorRuns: [],
+    });
+    expect(plan.transaction("pending")).toMatchObject({
+      status: "pending",
+      presence: "seen",
+    });
+    expect(
+      plan.events.some((event) => event.type === "transaction.posted"),
+    ).toBe(false);
+  });
 
   it("does not treat an unscoped historical pending observation as a disappearing current authorization", () => {
     const plan = capturePlan([authorization()], [row("posted")], 3, true, {

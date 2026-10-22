@@ -8,6 +8,21 @@ import { checkStorageCoverage } from "./storage-coverage.mjs";
 // Update these floors only when deliberately removing/reorganizing coverage.
 export const requiredGroups = [
   ["service.test.ts", "service integration: postgres", 32],
+  ["source-presence.test.ts", "postgres authoritative source presence", 27],
+  ["posting-overlap.test.ts", "postgres delayed posting overlap", 55],
+  ["source-identity.test.ts", "postgres captured source identity", 10],
+  ["financial-authority.test.ts", "postgres row financial authority", 8],
+  [
+    "financial-posting-authority.test.ts",
+    "postgres financial authority and posting",
+    4,
+  ],
+  [
+    "linked-component-current.test.ts",
+    "postgres linked current pending component",
+    13,
+  ],
+  ["installment-role.test.ts", "postgres installment role without count", 2],
   [
     "collection.test.ts",
     "streamed collection application boundary: postgres",

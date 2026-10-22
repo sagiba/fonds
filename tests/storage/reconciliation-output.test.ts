@@ -61,6 +61,57 @@ it("preserves fixed fixture replay output across reconciliation refactors", asyn
     const rows = (
       await Promise.all(storedRows.map((row) => transaction(db.orm, row.id)))
     ).flat();
+    // The valid posted partition can establish absence even when pending is malformed.
+    // These two purchases total 15,245 ILS minor units; neither belongs in current spending.
+    expect(
+      rows
+        .filter((row) => row.sourceAbsence && row.status === "posted")
+        .map((row) => ({
+          amountMinor: row.amountMinor,
+          sourceKey: row.sourceKey,
+          sourceAbsence: row.sourceAbsence,
+        })),
+    ).toEqual([
+      {
+        amountMinor: -5875,
+        sourceKey:
+          'cal:posted:purchase:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-PENDING-POSTED"]',
+        sourceAbsence: {
+          capturedAt: "2040-08-04T00:00:00.000Z",
+          runId: "golden-3",
+        },
+      },
+      {
+        amountMinor: -9370,
+        sourceKey:
+          'cal:posted:purchase:["SYNTHETIC-CARD-A","SYNTHETIC-TXN-NEW"]',
+        sourceAbsence: {
+          capturedAt: "2040-08-04T00:00:00.000Z",
+          runId: "golden-3",
+        },
+      },
+    ]);
+    expect(await db.getTotals({ presence: "all" })).toMatchObject({
+      includedCount: 19,
+      excluded: { sourceAbsent: 3, pending: 1 },
+      totals: [
+        {
+          amountBasis: "purchase_commitment",
+          amountMinor: -3750,
+          currency: "EUR",
+        },
+        {
+          amountBasis: "purchase_commitment",
+          amountMinor: -227390,
+          currency: "ILS",
+        },
+        {
+          amountBasis: "purchase_commitment",
+          amountMinor: -4500,
+          currency: "USD",
+        },
+      ],
+    });
     const cardRows = await db.orm
       .select()
       .from(cards)

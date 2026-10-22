@@ -262,13 +262,13 @@ for (const backend of backends) {
           responses: [
             {
               accountKey: "other",
-              endpoint: "synthetic",
+              endpoint: "synthetic:semantic",
               capturedAt: "2040-08-02T00:00:00Z",
               responseText: JSON.stringify([invalid]),
             },
             {
               accountKey: "account",
-              endpoint: "synthetic",
+              endpoint: "synthetic:semantic",
               capturedAt: "2040-08-02T00:00:00Z",
               responseText: "[]",
             },

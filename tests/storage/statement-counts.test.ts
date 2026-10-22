@@ -296,6 +296,7 @@ for (const backend of backends) {
           connectionId,
           limit: 200,
           includeSuperseded: true,
+          presence: "all",
         })
       ).transactions.length;
       expect(counts.writes).toBeLessThanOrEqual(

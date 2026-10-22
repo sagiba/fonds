@@ -215,7 +215,7 @@ describe.each(backends)("%s stateful reconciliation scenarios", (backend) => {
       "comparable response omits line and extra",
       { rows: [purchase()] },
       (state) => {
-        both(state);
+        accounting(state, -18600, -3100, ["purchase"], ["line-1"]);
         expect(only(state, "extra").presence).toBe("not_returned");
         expect(only(state, "line-1").purchaseId).toBe(
           only(state, "purchase").id,
@@ -235,7 +235,7 @@ describe.each(backends)("%s stateful reconciliation scenarios", (backend) => {
       (state) => {
         expect(only(state, "line-1").presence).toBe("removed");
         expect(state.billing.totals).toEqual([
-          { currency: "ILS", amountBasis: null, amountMinor: -19100 },
+          { currency: "ILS", amountBasis: null, amountMinor: -18600 },
         ]);
       },
     );
@@ -245,7 +245,7 @@ describe.each(backends)("%s stateful reconciliation scenarios", (backend) => {
       (state) => {
         expect(only(state, "line-1").presence).toBe("removed");
         expect(state.billing.totals).toEqual([
-          { currency: "ILS", amountBasis: null, amountMinor: -19100 },
+          { currency: "ILS", amountBasis: null, amountMinor: -18600 },
         ]);
       },
     );
@@ -630,13 +630,7 @@ describe.each(backends)("%s stateful reconciliation scenarios", (backend) => {
         expect(state.rows.map((row) => row.id)).toEqual(
           expect.arrayContaining(partial.rows.map((row) => row.id)),
         );
-        accounting(
-          state,
-          -19050,
-          -3550,
-          ["purchase", "retry"],
-          ["line-1", "retry"],
-        );
+        accounting(state, -450, -3550, ["retry"], ["line-1", "retry"]);
       },
     );
   });

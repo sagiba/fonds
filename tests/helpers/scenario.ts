@@ -18,7 +18,13 @@ export interface Capture {
 
 /** Observation receipts may advance on replay; financial state must not. */
 function semantic(row: TransactionView) {
-  const { lastSeenAt: _last, lastSeenRunId: _run, details, ...facts } = row;
+  const {
+    lastSeenAt: _last,
+    lastSeenRunId: _run,
+    sourceEvidence: _sourceEvidence,
+    details,
+    ...facts
+  } = row;
   const { sourceRefs: _refs, ...retained } = details;
   // currentRows is capture bookkeeping. Keep the retained provider evidence,
   // but not its indices into the current observation (including an empty shell).
@@ -63,12 +69,20 @@ export async function scenario(db: Harness, backend: Backend) {
       spending: await db.getTotals({ connectionId, perspective: "spending" }),
       billing: await db.getTotals({ connectionId, perspective: "billing" }),
       spendingMembers: (
-        await db.listTransactions({ connectionId, perspective: "spending" })
+        await db.listTransactions({
+          connectionId,
+          perspective: "spending",
+          presence: "current",
+        })
       )
         .map((row) => row.id)
         .sort(),
       billingMembers: (
-        await db.listTransactions({ connectionId, perspective: "billing" })
+        await db.listTransactions({
+          connectionId,
+          perspective: "billing",
+          presence: "current",
+        })
       )
         .map((row) => row.id)
         .sort(),
@@ -175,7 +189,45 @@ export async function scenario(db: Harness, backend: Backend) {
         command,
         apply,
         async (after, before) => {
-          expect(after).toEqual(previous);
+          const expected = structuredClone(previous);
+          for (const row of after.rows) {
+            const old = expected.rows.find((item) => item.id === row.id);
+            if (!old) {
+              continue;
+            }
+            const pairs = [
+              [old, row],
+              [
+                old.details.postingLink?.pending,
+                row.details.postingLink?.pending,
+              ],
+            ] as const;
+            for (const [beforeReceipt, afterReceipt] of pairs) {
+              if (
+                !beforeReceipt?.sourceAbsence ||
+                !afterReceipt?.sourceAbsence
+              ) {
+                continue;
+              }
+              if (
+                afterReceipt.sourceAbsence.capturedAt !==
+                beforeReceipt.sourceAbsence.capturedAt
+              ) {
+                expect(
+                  afterReceipt.sourceAbsence.capturedAt >
+                    beforeReceipt.sourceAbsence.capturedAt,
+                ).toBe(true);
+                expect(afterReceipt.sourceAbsence).toEqual({
+                  runId: `scenario-${serial}`,
+                  capturedAt: new Date(
+                    Date.UTC(2040, 6, 1, 12, serial),
+                  ).toISOString(),
+                });
+                beforeReceipt.sourceAbsence = afterReceipt.sourceAbsence;
+              }
+            }
+          }
+          expect(after).toEqual(expected);
           await check(after, before);
         },
       );

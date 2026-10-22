@@ -31,6 +31,20 @@ export interface ExtractionResult {
   historical: boolean;
 }
 
+/** One current observation's authority over its complete financial interpretation. */
+export type FinancialAuthority =
+  | {
+      kind: "asserted" | "conflicting";
+      /** Opaque equality witness for an ordinary corroborating source component. */
+      continuitySignature?: string;
+    }
+  | {
+      kind: "incomplete";
+      /** Explicit missing source support, never inferred from nullable facts. */
+      reason: string;
+      continuitySignature?: string;
+    };
+
 /** Amount roles whose normalized purchase money supports automatic continuation. */
 export interface AutomaticPostingCapability {
   pendingAmountBasis: TransactionInput["amountBasis"];
@@ -46,6 +60,18 @@ export interface AutomaticPostingCapability {
   ): boolean;
 }
 
+/** Source-declared domains whose omissions can be interpreted by the shared engine. */
+export type SourceCoveragePolicy =
+  | { kind: "same_origin" }
+  | {
+      kind: "account_window";
+      /** Canonical resources, after resourceKey normalization. */
+      resources: readonly string[];
+      /** The source date governing membership, never an inferred fallback. */
+      dateField: "transactionDate" | "bookingDate" | "billingDate";
+      days: number;
+    };
+
 /** Collection owns provider paging; adapters project one captured unit at a time. */
 export interface SourceAdapter {
   provider: string;
@@ -56,10 +82,22 @@ export interface SourceAdapter {
   validateScope?(scope: CollectionScope): CollectionScope | void;
   /** Normalize equivalent request criteria only for health/precedence comparison. */
   normalizeScope?(scope: CollectionScope): CollectionScope;
+  /**
+   * Declare row-local authority from pristine current facts, before retained
+   * evidence or planner holds are applied. Absence means asserted, including
+   * explicit unknown classifications. The same pure projection may identify a
+   * unique retained component for legacy rows without a financial receipt.
+   */
+  financialAuthority?(
+    input: Readonly<TransactionFacts>,
+    extraction: Pick<ExtractionResult, "warnings">,
+  ): FinancialAuthority;
   /** Similarity can suggest an owner-reviewed posting link. */
   pendingPostingCandidates?: boolean;
   /** Opt in to narrow, reversible same-capture purchase/refund continuation. */
   automaticPosting?: AutomaticPostingCapability;
+  /** Omitted declarations retain conservative same-resource, same-scope coverage. */
+  sourceCoverage?: SourceCoveragePolicy;
   /** Compare recent absence only within this many days of capture (UTC dates). */
   recentComparableDays?: number;
   /** Reject a successful empty recent posted partition if comparable posted rows exist. */

@@ -233,7 +233,9 @@ generations; a fresh component replaces its earlier evidence.
 - **Policy:** a reconciled same-currency bill of a mapped kind is a purchase
   commitment, as for CAL's posted rows; a posted row does not establish an
   account booking. A same-currency row that does not reconcile keeps its
-  original money unknown.
+  original money unknown. Unavailable DigitalV3 support preserves money through
+  unchanged legacy financial evidence, never guessed `dealSum` semantics.
+  Retention is reviewable; provenance may be unknown.
 - **Unknown:** the billed side of a cross-currency row (for example whether a
   waived conversion commission is inside the bill), so no rate is computed;
   `txnInfo` rows' source role; parallel `ilsAmount` and `usdAmount`; discount

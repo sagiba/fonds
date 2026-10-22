@@ -18,7 +18,7 @@ interface Envelope {
 }
 
 const accountKey = "synthetic-account";
-const endpoint = "/synthetic-financial-response";
+const endpoint = "synthetic:cal/recent";
 const pendingKey = "SYNTHETIC-AUTH-PENDING-POSTED";
 const postedKey = "SYNTHETIC-TXN-PENDING-POSTED";
 
@@ -236,7 +236,7 @@ for (const backend of backends) {
         status: "posted",
         sourceKey: survivor.sourceKey,
         presence: "seen",
-        version: survivor.version,
+        version: survivor.version + 1,
       });
       expect(
         (await db.getTransaction(pending.id))!.details.sourceRefs.some(
@@ -320,8 +320,8 @@ for (const backend of backends) {
       ).toEqual([
         expect.objectContaining({
           transactionId: row.id,
-          before: { presence: "removed" },
-          after: { presence: "seen" },
+          before: { presence: "removed", sourceAbsence: null },
+          after: { presence: "seen", sourceAbsence: null },
         }),
       ]);
     });

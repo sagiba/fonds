@@ -995,6 +995,6 @@ describe("CAL automatic posting capability", () => {
       pendingAmountBasis: "authorization",
       postedAmountBasis: "purchase_commitment",
     });
-    expect(calAdapter.parserVersion).toBe("cal-v14");
+    expect(calAdapter.parserVersion).toBe("cal-v15");
   });
 });

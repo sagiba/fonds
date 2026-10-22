@@ -21,7 +21,7 @@ import { CAL_ENDPOINTS } from "../../src/providers/cal/transport.js";
 import { backends, type Harness, open } from "../helpers/storage-harness.js";
 
 const accountKey = "synthetic-account";
-const endpoint = "/synthetic-financial-response";
+const endpoint = "synthetic:cal/recent";
 const baseline = JSON.parse(
   readFileSync(
     new URL("../providers/cal/fixtures/recent-01.json", import.meta.url),

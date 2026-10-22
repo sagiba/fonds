@@ -15,6 +15,7 @@ import {
   presenceSchema,
   refreshFailureCodeSchema,
   RESOURCE_ID_MAX_LENGTH,
+  sourceAbsenceSchema,
   transactionDateTimeSchema,
   transactionStatusSchema,
   walletSchema,
@@ -122,6 +123,7 @@ export const transactionOutputSchema = z
       "Source report status; posted does not establish an account booking.",
     ),
     presence: presenceSchema,
+    sourceAbsence: sourceAbsenceSchema.nullable(),
     kind: kindSchema,
     amountBasis: amountBasisSchema,
     amount: moneyOutputSchema
@@ -287,6 +289,7 @@ export function presentWireTransaction(
     cardId: row.cardId,
     status: row.status,
     presence: row.presence,
+    sourceAbsence: row.sourceAbsence ?? null,
     kind: row.kind,
     amountBasis: row.amountBasis,
     amount: presentMoney(row.amountMinor, row.currency),
@@ -719,6 +722,7 @@ export const totalsOutputSchema = z
         pending: versionSchema,
         transferOrIncome: versionSchema,
         retiredOrRemoved: versionSchema,
+        sourceAbsent: versionSchema,
         unresolved: versionSchema,
         authorization: versionSchema,
       })

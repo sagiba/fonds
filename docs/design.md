@@ -58,8 +58,9 @@ Declared evidence without a safe transaction identity is retained separately.
 Input digests preserve run-ID immutability after body removal; applied replay is
 quiet. Recovery needs the staged body and matching parser. Historical
 reinterpretation is unsupported. Retained row evidence could support re-deriving
-individual rows, but not identity grouping, pending-to-posted linking or absence
-decisions, which need whole responses.
+individual rows, but not identity grouping or pending-to-posted linking, which
+need whole responses. Retained coverage receipts support source membership
+without recovering raw bodies.
 
 - **Backfill** requests a bounded historical range (about seven years is enough).
   Providers own windowing, paging, overlap and budgets; partial results are kept
@@ -116,51 +117,78 @@ partitions source identity and absence comparison and is never public.
 
 ## Identity, corrections and absence
 
-Native-key collisions and legitimate duplicate-looking purchases keep their
-multiplicity. Changed multiplicity or ambiguous candidates stay reviewable and
-never inherit annotations by row order. Older evidence never overwrites newer
-facts. One declaration governs content retention and versioned changes, including mapped
-facts and provider evidence; posting keeps its lifecycle events. Observation state
-is separate. Named columns hold mapped facts/lists; provider evidence stays private.
-The [API](api.md#versioned-fields) owns notifications.
+Native-key collisions and legitimate duplicate-looking purchases retain
+multiplicity. Ambiguous candidates or changed multiplicity stay reviewable, never
+inheriting annotations by row order. Older evidence cannot overwrite newer facts. One declaration governs
+retention/versioning of mapped facts and private provider evidence; posting
+retains lifecycle events. Observations remain separate; mapped facts/lists use
+named columns. The [API](api.md#versioned-fields) owns notifications.
+Source identity compares captured facts, never held projections or service
+associations. Replaced uncertain generations retire only from matching, retaining
+evidence and annotations. Captured financial changes remain versioned under
+accounting holds.
 
-`not_returned` means a comparable successful response omitted a known identity,
-not that it was cancelled or removed; failed partitions cannot unlist rows, and
-unlisted posted spending stays in totals. Explicit removal keeps record,
-annotations and evidence while excluding the row from spending, and only a fresh
-reappearance undoes it. An adapter may set a recent absence horizon and reject an
-implausibly empty recent posted capture while eligible posted rows remain; the
-rejection is a failed, applied `implausible_empty` run that writes nothing else
-and cannot be replayed into the ledger. Provider guides say which adapters do.
+Observation is not financial authority. Explicitly unavailable required components
+can retain a compatible supported ordinary bundle atomically, with its original
+receipt and review reason. Contradictory or unsupported interpretations cannot
+revive older bundles; retained support is not fresh posting-match evidence. Legacy
+receipt origins remain unknown until fresh support is observed.
+
+Source membership is independent of posting links. Only accepted successful
+comparable coverage proves absence. The shared engine applies adapter-declared
+coverage across collection origins when covered; failed, incomplete or
+out-of-domain captures cannot exclude valid money. Newer retained coverage also
+governs historical discovery: later imports cannot resurrect proven omissions,
+while out-of-window history stays eligible. Billed lines are not
+absence-comparable; observed components can support synthesized purchases.
+
+Absence retains records, annotations and evidence without implying
+cancellation/refund, but excludes current reads/totals. Unknown membership,
+including `not_returned`, does not exclude. Only strictly newer recent positive
+evidence clears absence; equal-time absence wins. Repeated omissions update
+receipts without version/event churn. Owner removal is separate: reappearance
+must postdate its decision. [API fields](api.md#fields) owns inspectable state and
+queries.
+
+Adapters may reject an implausibly empty recent posted capture while covered,
+eligible rows remain. This is a failed, applied `implausible_empty` run that
+cannot be replayed into the ledger. It can also block legitimate disappearance
+of the last posted population until provider completeness is established; it is
+not proof that every cancellation is reconciled.
 
 ## Purchases and billed lines
 
-An installment plan is one **purchase** row carrying the whole commitment plus one
-**billed line** per payment, all ordinary transaction rows. One purchase exists per
-plan, created from any observed row. Conflicts are flagged
-and leave values unknown rather than split a plan. A total is never computed by
-multiplying a payment and no schedule is generated. A purchase restated as a
-non-plan keeps the plan's facts, so a purchase and its lines are never both
-counted. The [API](api.md#purchases-and-billed-lines) owns the fields, issue codes
-and [perspectives](api.md#perspectives). Billed-line associations prevent
-double-counting even when purchase metadata is unknown; selection and paging
-stay in SQL without database views.
+An installment plan has one **purchase** for its whole commitment and one
+**billed line** per observed payment, all ordinary transaction rows. Any observed
+row can create the purchase. Conflicts leave flagged values unknown, never split
+plans. Never infer totals by multiplying payments; no schedule is generated. A non-plan restatement retains plan facts,
+preventing double-counting with its lines. The
+[API](api.md#purchases-and-billed-lines) owns fields, issues and
+[perspectives](api.md#perspectives). Billed-line associations prevent
+double-counting even with unknown purchase metadata; SQL handles selection/paging
+without views.
 
 ## Pending-to-posted matching
 
-Automatic matching is a narrow, reversible, opt-in provider capability: a
-disappearing pending authorization keeps its service ID when a new posted identity
-with the same purchase date, card and signed purchase money arrives in a fresh
-capture with comparable pending coverage and successful posted extraction. Shared
-code groups every plausible candidate before testing eligibility; every member
-must pair, and the adapter may reject the whole group using its source evidence.
-An adapter cannot widen the shared safeguards. Where its policy permits twins,
-indistinguishable rows pair in a fixed arbitrary order. No conversion or guessed
-rate is used, and anything uncertain stays in review. One revision
-commits `transaction.posted` and `transaction.linked` with decision evidence, but
-no `transaction.created` or `transaction.unlisted` for the pair. Because this is
-a heuristic, a false link is possible, so explicit split is part of the design;
-similarity alone yields review candidates.
+Automatic matching is a reversible provider opt-in. A disappearing authorization
+retains its ID when a compatible new posted identity arrives in a fresh comparable
+capture. A unique observed overlap can preserve that opportunity: posting arrives
+later, both coexist, and a durable witness fixes attribution facts. Later
+comparable absence with sufficient posted evidence can complete matching without
+relying on old similarity candidates. Changed facts, competitors or owner
+decisions invalidate witnesses; annotated posted rows require owner confirmation.
+
+Both paths require equal purchase date, card and signed purchase money, verified
+bases and compatible roles. Shared code groups all plausible candidates before
+eligibility; provider evidence only narrows. Neither conversion nor guessed rates
+are used. Links retain evidence and reversibility but may misattribute expired
+authorizations to identical purchases. Same-capture twins may pair in fixed
+arbitrary order where allowed; delayed matching requires a singleton. Pending
+absence independently affects presence, never history or annotations. Unwitnessed
+existing rows stay reviewable. Linked authorizations accept fresh corrections
+without changing posted money or immutable link history; splitting restores both
+current components. A link commits `transaction.posted` and `transaction.linked`;
+creating a witness is not a financial transition.
 
 Owner decisions carry the current transaction and annotation versions and a
 reason ([API](api.md#pending-to-posted-matching)):
@@ -176,7 +204,7 @@ reason ([API](api.md#pending-to-posted-matching)):
 
 Providers opt in through [source-adapter.ts](../src/domain/source-adapter.ts), and
 each guide says whether it does. Provider code owns keys, mappings,
-comparability, horizons and source compatibility; shared code owns grouping,
+comparability, coverage and source compatibility; shared code owns membership, grouping,
 freshness, eligibility, lifecycle and annotation ownership and never branches on
 provider name. The matching rules live
 in [auto-posting.ts](../src/domain/plans/auto-posting.ts) and its tests.

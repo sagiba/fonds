@@ -48,7 +48,7 @@ async function capture(
   day = 1,
   runId = `${name}-${day}`,
   responseText = fixture(name),
-  endpoint = "/synthetic-financial-response",
+  endpoint = "synthetic:cal/recent",
 ) {
   return await db.ingestRun(
     {
@@ -231,7 +231,7 @@ for (const backend of backends) {
               responses: [
                 {
                   accountKey,
-                  endpoint: "/synthetic-financial-response",
+                  endpoint: "synthetic:cal/recent",
                   capturedAt: `2040-08-0${index + 1}T00:00:00Z`,
                   responseText: JSON.stringify({
                     statusCode: 1,
@@ -455,7 +455,7 @@ for (const backend of backends) {
       ).toContain(weakBefore.id);
     });
 
-    it("retains spending and annotation while unlisted, then restores the same native ID", async () => {
+    it("excludes unlisted spending while retaining annotation, then restores the same native ID", async () => {
       const recent = (name: string) =>
         fixture(name).replaceAll("2040-05-20", "2040-07-01");
       await capture(
@@ -502,7 +502,18 @@ for (const backend of backends) {
         version: 3,
         annotation: { data: { notes: "Keep this note" } },
       });
-      expect(await db.getTotals()).toEqual(totalsBeforeReturn);
+      const totalsAfterReturn = await db.getTotals();
+      expect(totalsAfterReturn.includedCount).toBe(
+        totalsBeforeReturn.includedCount + 1,
+      );
+      expect(totalsAfterReturn.totals).toEqual(
+        totalsBeforeReturn.totals.map((group) =>
+          group.currency === "ILS" &&
+          group.amountBasis === "purchase_commitment"
+            ? { ...group, amountMinor: group.amountMinor - 6480 }
+            : group,
+        ),
+      );
       expect(
         (await db.listEvents())
           .filter((change) => change.transactionId === vanished.id)

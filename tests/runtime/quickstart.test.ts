@@ -158,12 +158,12 @@ describe("quickstart", () => {
       expect(await main(["demo"])).toBe(0);
       const first = String(write.mock.calls.map((call) => call[0]).join(""));
       expect(first).toMatch(/synthetic CAL data, not real transactions/);
-      expect(first).toMatch(/Transactions: +22 on connection "demo"/);
+      expect(first).toMatch(/Transactions: +21 on connection "demo"/);
       const before = await events();
       write.mockClear();
       expect(await main(["demo"])).toBe(0);
       expect(String(write.mock.calls.map((call) => call[0]).join(""))).toMatch(
-        /Transactions: +22/,
+        /Transactions: +21/,
       );
       expect(await events()).toBe(before);
     } finally {

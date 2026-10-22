@@ -8,6 +8,21 @@ import { checkStorageCoverage } from "./storage-coverage.mjs";
 // Update these floors only when deliberately removing/reorganizing coverage.
 export const requiredGroups = [
   ["service.test.ts", "service integration: libsql-http", 32],
+  ["source-presence.test.ts", "libsql-http authoritative source presence", 27],
+  ["posting-overlap.test.ts", "libsql-http delayed posting overlap", 55],
+  ["source-identity.test.ts", "libsql-http captured source identity", 10],
+  ["financial-authority.test.ts", "libsql-http row financial authority", 8],
+  [
+    "financial-posting-authority.test.ts",
+    "libsql-http financial authority and posting",
+    4,
+  ],
+  [
+    "linked-component-current.test.ts",
+    "libsql-http linked current pending component",
+    13,
+  ],
+  ["installment-role.test.ts", "libsql-http installment role without count", 2],
   [
     "collection.test.ts",
     "streamed collection application boundary: libsql-http",
