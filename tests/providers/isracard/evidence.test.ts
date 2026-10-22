@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  latestIsracardDigitalRows,
   mergeIsracardEvidence,
   projectIsracardState,
   retainIsracardEvidence,
@@ -282,6 +283,7 @@ describe("Isracard retained evidence", () => {
           baseKey: "synthetic-base",
           occurrenceCount: 1,
           currentRows: [2, 0],
+          latestDigitalRows: [2],
           noise: "discard",
         },
         observations: [
@@ -306,6 +308,7 @@ describe("Isracard retained evidence", () => {
         baseKey: "synthetic-base",
         occurrenceCount: 1,
         currentRows: [2, 0],
+        latestDigitalRows: [2],
       },
       observations: [{ generation: "digital", path: "capture-path" }],
       monetaryEvidence: {
@@ -388,5 +391,33 @@ describe("Isracard retained evidence", () => {
     expect(retainIsracardEvidence({ rows: [null, "malformed"] })).toEqual({
       rows: ["malformed", null],
     });
+  });
+
+  it("never guesses the latest digital statement from unordered retained versions", () => {
+    const earlier = { seqVoucherNumber: "SYNTHETIC-1", presentCard: true };
+    const later = {
+      seqVoucherNumber: "SYNTHETIC-1",
+      presentCard: false,
+      moreInfo: "Synthetic optional description",
+    };
+    const rows = [earlier, later];
+    expect(latestIsracardDigitalRows({ rows })).toEqual([]);
+    expect(
+      latestIsracardDigitalRows({ rows, identity: { currentRows: [1] } }),
+    ).toEqual([later]);
+    expect(
+      latestIsracardDigitalRows({
+        rows,
+        identity: { currentRows: [0], latestDigitalRows: [1] },
+      }),
+    ).toEqual([later]);
+    for (const latestDigitalRows of [[], [99], [1, 1], "malformed"]) {
+      expect(
+        latestIsracardDigitalRows({
+          rows,
+          identity: { currentRows: [0], latestDigitalRows },
+        }),
+      ).toEqual([]);
+    }
   });
 });

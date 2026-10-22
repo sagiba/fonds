@@ -20,7 +20,11 @@ import {
   isracardCardKey,
 } from "./capture.js";
 import { approvalPaymentContext, postedPaymentContext } from "./enrichment.js";
-import { isracardDetailEvidence, isracardRowEvidence } from "./evidence.js";
+import {
+  isracardDetailEvidence,
+  isracardRowEvidence,
+  mergeIsracardEvidence,
+} from "./evidence.js";
 import { isIsracardDigitalSuccess } from "./transport.js";
 
 type SourceRow = Record<string, unknown>;
@@ -1372,9 +1376,14 @@ function extractGroup(
       : row.dealSum;
   const originalMinor = minor(rawOriginal, evidenceCurrency);
   details.provider.isracard = {
-    identity: { baseKey, occurrenceCount },
-    rows: observations.map((item) =>
-      isracardRowEvidence(item.row, item.generation),
+    ...mergeIsracardEvidence(
+      {},
+      {
+        identity: { baseKey, occurrenceCount },
+        rows: observations.map((item) =>
+          isracardRowEvidence(item.row, item.generation),
+        ),
+      },
     ),
     observations: observations.map((item) => ({
       generation: item.generation,

@@ -444,11 +444,12 @@ function retainEvidence(
       earlier.provider[adapter.provider] ?? {},
       input.details.provider[adapter.provider] ?? {},
     );
+    const mergedIdentity = merged.identity ?? state.identity;
     const identity =
-      state.identity &&
-      typeof state.identity === "object" &&
-      !Array.isArray(state.identity)
-        ? state.identity
+      mergedIdentity &&
+      typeof mergedIdentity === "object" &&
+      !Array.isArray(mergedIdentity)
+        ? mergedIdentity
         : {};
     input.details.provider = {
       [adapter.provider]: {

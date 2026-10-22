@@ -368,6 +368,116 @@ describe.each(backends)("%s Isracard semantic evidence", (backend) => {
     },
   );
 
+  it.each(["added", "removed"])(
+    "keeps a payment correction resolved after an optional digital field is %s and the feed disappears",
+    async (fieldChange) => {
+      const source = JSON.parse(
+        readFileSync(
+          new URL(
+            "../providers/isracard/fixtures/card-month.json",
+            import.meta.url,
+          ),
+          "utf8",
+        ),
+      ) as IsracardCapture;
+      const digital = JSON.parse(source.responses.digital!);
+      const row =
+        digital.data.israelAbroadVouchers.vouchers.israelAbroadVouchersList[0];
+      Object.assign(row, {
+        tranzacCodeType: "R",
+        tranzacCodeDescription: "רגיל",
+        presentCard: true,
+      });
+      if (fieldChange === "removed") {
+        row.moreInfo = "Synthetic optional description";
+      } else {
+        delete row.moreInfo;
+      }
+      source.responses.digital = JSON.stringify(digital);
+      const entry = source.responses.details![0]!;
+      source.responses.details = [
+        {
+          ...entry,
+          responseText: JSON.stringify({
+            Header: { Status: "1" },
+            PirteyIska_204Bean: {
+              voucherNumberRatz: entry.voucherNumber,
+              clearingData: "לא הוצג",
+              walletPayName: "APPLE PAY",
+            },
+          }),
+        },
+      ];
+      await ingestCapture(1, source);
+      const original = (await db.listTransactions({ perspective: "all" })).find(
+        (transaction) => transaction.details.provider.isracard?.detail,
+      )!;
+      expect(original.cardPresent).toBeNull();
+      expect(original.sourceIssues).toContain("conflicting_payment_context");
+
+      Object.assign(row, {
+        tranzacCodeType: "U",
+        tranzacCodeDescription: "עסקת אינטרנט",
+        presentCard: false,
+      });
+      if (fieldChange === "added") {
+        row.moreInfo = "Synthetic optional description";
+      } else {
+        delete row.moreInfo;
+      }
+      source.responses.digital = JSON.stringify(digital);
+      await ingestCapture(2, source);
+      const corrected = (await db.getTransaction(original.id))!;
+      expect(corrected).toMatchObject({
+        cardPresent: false,
+        authorizationMethod: "online",
+      });
+      expect(corrected.sourceIssues).not.toContain(
+        "conflicting_payment_context",
+      );
+
+      delete source.responses.digital;
+      for (const day of [3, 4, 5]) {
+        if (day === 5) {
+          delete source.responses.details;
+        }
+        await ingestCapture(day, source);
+        const current = (await db.getTransaction(original.id))!;
+        expect(current).toMatchObject({
+          id: original.id,
+          sourceKey: original.sourceKey,
+          amountMinor: original.amountMinor,
+          currency: original.currency,
+          cardPresent: false,
+          authorizationMethod: "online",
+          wallet: "apple_pay",
+        });
+        expect(current.sourceIssues).not.toContain(
+          "conflicting_payment_context",
+        );
+        expect(current.details.paymentContextConflicts).toBeUndefined();
+      }
+      const rows = await db.raw("SELECT * FROM transactions WHERE id = ?", [
+        original.id,
+      ]);
+      const events = (await db.listEvents()).filter(
+        (event) => event.transactionId === original.id,
+      );
+      expect(await ingestCapture(6, source)).toMatchObject({
+        created: 0,
+        updated: 0,
+      });
+      expect(
+        await db.raw("SELECT * FROM transactions WHERE id = ?", [original.id]),
+      ).toEqual(rows);
+      expect(
+        (await db.listEvents()).filter(
+          (event) => event.transactionId === original.id,
+        ),
+      ).toEqual(events);
+    },
+  );
+
   it("retains bound detail descriptions without versioning UI labels or request metadata", async () => {
     const source = JSON.parse(
       readFileSync(

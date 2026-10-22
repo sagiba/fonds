@@ -1,6 +1,8 @@
 import type { JsonObject, JsonValue } from "../../domain/model.js";
 import { canonicalJson } from "../../domain/observations.js";
 import {
+  currentSourceRowIndices,
+  currentSourceRows,
   evidenceList,
   evidenceObject,
   type EvidenceShape,
@@ -115,6 +117,7 @@ export const isracardStateShape: EvidenceShape = {
   identity: {
     ...scalarFields("baseKey occurrenceCount"),
     currentRows: ["scalar"],
+    latestDigitalRows: ["scalar"],
   },
   observations: [scalarFields("generation path")],
   monetaryEvidence: {
@@ -219,8 +222,43 @@ export function mergeIsracardEvidence(
   previous: JsonObject,
   incoming: JsonObject,
 ): JsonObject {
-  return mergeDeclaredEvidence(previous, incoming, {
+  const merged = mergeDeclaredEvidence(previous, incoming, {
     project: retainIsracardEvidence,
     componentKey,
   });
+  const digital = evidenceList(retainIsracardEvidence(incoming).rows).filter(
+    (row) => isracardEvidenceGeneration(row) === "digital",
+  );
+  const identity = projectIsracardState(incoming).identity;
+  return {
+    ...merged,
+    identity: {
+      ...(identity && typeof identity === "object" && !Array.isArray(identity)
+        ? identity
+        : {}),
+      latestDigitalRows: currentSourceRowIndices(
+        evidenceList(merged.rows),
+        digital.length > 0 ? digital : latestIsracardDigitalRows(previous),
+      ),
+    },
+  };
+}
+
+/** Row shape is an evidence boundary, not chronology; only the last observation supplies fallback facts. */
+export function latestIsracardDigitalRows(namespace: JsonObject): JsonValue[] {
+  const identity = namespace.identity;
+  if (!identity || typeof identity !== "object" || Array.isArray(identity)) {
+    return [];
+  }
+  const indices = Object.hasOwn(identity, "latestDigitalRows")
+    ? identity.latestDigitalRows
+    : identity.currentRows;
+  // Older records can recover only their last capture's rows, never all retained versions.
+  if (indices === undefined) {
+    return [];
+  }
+  return currentSourceRows({
+    rows: namespace.rows ?? [],
+    identity: { currentRows: indices },
+  }).filter((row) => isracardEvidenceGeneration(row) === "digital");
 }

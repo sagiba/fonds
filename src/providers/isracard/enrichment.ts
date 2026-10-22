@@ -3,11 +3,11 @@ import type {
   TransactionFacts,
   TransactionInput,
 } from "../../domain/model.js";
+import { currentSourceRows } from "../../domain/provider-evidence.js";
 import {
-  currentSourceRows,
-  evidenceList,
-} from "../../domain/provider-evidence.js";
-import { isracardEvidenceGeneration } from "./evidence.js";
+  isracardEvidenceGeneration,
+  latestIsracardDigitalRows,
+} from "./evidence.js";
 
 type SourceRow = Record<string, unknown>;
 
@@ -155,7 +155,7 @@ export function retainedPaymentContext(
     (row) => isracardEvidenceGeneration(row) === "digital",
   );
   // An omitted feed does not retract its latest statement for this voucher.
-  const retainedDigital = evidenceList(namespace.rows).filter(
+  const retainedDigital = latestIsracardDigitalRows(namespace).filter(
     (row): row is JsonObject =>
       row !== null &&
       typeof row === "object" &&
