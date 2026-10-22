@@ -34,6 +34,10 @@ vi.mock("../../src/runtime/auth/better-auth.js", async (importOriginal) => ({
   createBetterAuth: () => ({
     provider: {
       issuer: `${origin}/api/auth`,
+      endpoints: {
+        authorization: `${origin}/api/auth/oauth2/authorize`,
+        token: `${origin}/api/auth/oauth2/token`,
+      },
       authenticate: async () => ({
         source: "synthetic",
         subject: ownerId,

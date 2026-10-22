@@ -121,6 +121,10 @@ describe("optional owner refresh interfaces and request diagnostics", () => {
       ownerId: "owner",
       authProvider: {
         issuer: `${origin}/api/auth`,
+        endpoints: {
+          authorization: `${origin}/api/auth/oauth2/authorize`,
+          token: `${origin}/api/auth/oauth2/token`,
+        },
         async authenticate(request) {
           const bearer = request.headers.get("authorization")?.slice(7);
           const scopes =

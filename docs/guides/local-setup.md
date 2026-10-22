@@ -127,7 +127,8 @@ fonds serve --db <the demo database demo printed>
 
 HTTP listens at `http://127.0.0.1:8787`; MCP is `http://127.0.0.1:8787/mcp`.
 `--port` selects another port; `--port 0` selects an available one and prints
-its actual URL. Stop with Ctrl-C. Every endpoint, including `/health`, requires
+its actual URL. Stop with Ctrl-C. Every endpoint except the
+[API description](../api.md#operations), including `/health`, requires
 `Authorization: Bearer <token>`: `FONDS_API_TOKEN` in the
 [state directory](../database.md#state-directory-and-backup)'s `fonds.env`,
 whose path the server prints (never the token). Back it up with the database.

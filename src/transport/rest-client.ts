@@ -1,55 +1,7 @@
 import { isPathAddressable } from "../application/financial-store.js";
 import type { OperationInvoker } from "../application/operations.js";
 import { isHttpsOrLoopback, LOOPBACK_HOSTS } from "./auth.js";
-
-/** Each operation's `/v1` route; `:name` segments are taken from the input. */
-const routes: Readonly<
-  Record<string, { method: "GET" | "POST" | "PATCH"; path: string }>
-> = {
-  list_connections: { method: "GET", path: "/v1/connections" },
-  get_connection: { method: "GET", path: "/v1/connections/:connectionId" },
-  list_cards: { method: "GET", path: "/v1/cards" },
-  get_card: { method: "GET", path: "/v1/cards/:cardId" },
-  list_accounts: { method: "GET", path: "/v1/accounts" },
-  get_account: { method: "GET", path: "/v1/accounts/:accountId" },
-  list_transactions: { method: "GET", path: "/v1/transactions" },
-  get_transaction: {
-    method: "GET",
-    path: "/v1/transactions/:transactionId",
-  },
-  get_transaction_totals: { method: "GET", path: "/v1/transactions/totals" },
-  list_events: { method: "GET", path: "/v1/events" },
-  list_sync_runs: {
-    method: "GET",
-    path: "/v1/connections/:connectionId/sync-runs",
-  },
-  update_annotation: {
-    method: "PATCH",
-    path: "/v1/transactions/:transactionId/annotation",
-  },
-  refresh_connection: {
-    method: "POST",
-    path: "/v1/connections/:connectionId/refreshes",
-  },
-  get_refresh: { method: "GET", path: "/v1/refreshes/:refreshId" },
-  list_refreshes: {
-    method: "GET",
-    path: "/v1/connections/:connectionId/refreshes",
-  },
-  undo_annotation: { method: "POST", path: "/v1/annotations/undo" },
-  link_pending_transaction: {
-    method: "POST",
-    path: "/v1/transactions/:transactionId/link-pending",
-  },
-  unlink_pending_transaction: {
-    method: "POST",
-    path: "/v1/transactions/:transactionId/unlink-pending",
-  },
-  confirm_removal: {
-    method: "POST",
-    path: "/v1/transactions/:transactionId/removal",
-  },
-};
+import { pathInputs, REST_ROUTES } from "./rest-routes.js";
 
 /** A failed remote call: the service's public error code and message only. */
 export class RemoteOperationError extends Error {
@@ -150,12 +102,16 @@ export function createRestClient(options: {
   const send = options.fetch ?? fetch;
   return {
     async invoke(name, input) {
-      // Without a connection, refresh_connection starts every connection's.
+      const values = { ...(input as Record<string, unknown>) };
+      const routes = REST_ROUTES.filter((entry) => entry.operation === name);
+      // Of several routes, the one whose path the input fills and whose
+      // refused inputs it omits, e.g. refreshing one connection or all.
       const route =
-        name === "refresh_connection" &&
-        (input as { connectionId?: unknown }).connectionId === undefined
-          ? { method: "POST" as const, path: "/v1/refreshes" }
-          : routes[name];
+        routes.find(
+          (entry) =>
+            pathInputs(entry).every((key) => values[key] !== undefined) &&
+            !entry.excluded?.some((key) => values[key] !== undefined),
+        ) ?? routes[0];
       if (!route) {
         throw new RemoteOperationError(
           0,
@@ -163,7 +119,6 @@ export function createRestClient(options: {
           "Operation unavailable.",
         );
       }
-      const values = { ...(input as Record<string, unknown>) };
       const path = route.path.replace(/:([A-Za-z]+)/g, (_, key: string) => {
         const value = values[key];
         delete values[key];

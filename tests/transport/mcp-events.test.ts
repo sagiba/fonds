@@ -72,6 +72,10 @@ function setup(events: EventService = mockEvents()) {
       events,
       authProvider: {
         issuer: `${origin}/api/auth`,
+        endpoints: {
+          authorization: `${origin}/api/auth/oauth2/authorize`,
+          token: `${origin}/api/auth/oauth2/token`,
+        },
         authenticate: async (request) => {
           const bearer = request.headers.get("authorization");
           if (!bearer) {

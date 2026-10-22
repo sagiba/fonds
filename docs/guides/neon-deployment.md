@@ -62,18 +62,19 @@ private env file outside Git:
 FONDS_ENV=/absolute/private/neon.env
 ```
 
-| Variable                                           | Source                                                                                   |
-| -------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `FONDS_PUBLIC_ORIGIN`                              | The Function URL's origin (printed by `neon functions get fonds` after the first deploy) |
-| `FONDS_NEON_GOOGLE_AUTH_URL`                       | The branch's managed Neon Auth URL                                                       |
-| `FONDS_GOOGLE_OWNER_EMAIL`                         | The single allowed Google email                                                          |
-| `FONDS_AUTH_SECRET`                                | Generated once by setup; signs Better Auth state                                         |
-| `FONDS_OWNER_ID`                                   | Generated once by setup; the sole Fonds owner ID                                         |
-| `FONDS_CONNECTION_ID`                              | Explicit stored connection ID (examples use `primary`)                                   |
-| `FONDS_CONNECTION_PROVIDER`                        | Provider ID from the runtime composition, currently `cal` or `isracard`                  |
-| `FONDS_REFRESH_SECRET`                             | Generated once by setup; bearer for the operator refresh route                           |
-| `FONDS_REFRESH_SCHEDULE`, `FONDS_REFRESH_TIMEZONE` | Optional [schedule](hosted-service.md#scheduling); scheduled refresh is off without it   |
-| `FONDS_REFRESH_TIME`                               | Generated once by setup: this installation's random `HH:MM`; set it only to pin the time |
+| Variable                                           | Source                                                                                                                   |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `FONDS_PUBLIC_ORIGIN`                              | The Function URL's origin (printed by `neon functions get fonds` after the first deploy)                                 |
+| `FONDS_NEON_GOOGLE_AUTH_URL`                       | The branch's managed Neon Auth URL                                                                                       |
+| `FONDS_GOOGLE_OWNER_EMAIL`                         | The single allowed Google email                                                                                          |
+| `FONDS_AUTH_SECRET`                                | Generated once by setup; signs Better Auth state                                                                         |
+| `FONDS_OWNER_ID`                                   | Generated once by setup; the sole Fonds owner ID                                                                         |
+| `FONDS_CONNECTION_ID`                              | Explicit stored connection ID (examples use `primary`)                                                                   |
+| `FONDS_CONNECTION_PROVIDER`                        | Provider ID from the runtime composition, currently `cal` or `isracard`                                                  |
+| `FONDS_REFRESH_SECRET`                             | Generated once by setup; bearer for the operator refresh route                                                           |
+| `FONDS_REFRESH_SCHEDULE`, `FONDS_REFRESH_TIMEZONE` | Optional [schedule](hosted-service.md#scheduling); scheduled refresh is off without it                                   |
+| `FONDS_PUBLIC_API_DESCRIPTION`                     | Optional `1` publishes the [API description](hosted-service.md#configuration); every deploy declares it, `0` when absent |
+| `FONDS_REFRESH_TIME`                               | Generated once by setup: this installation's random `HH:MM`; set it only to pin the time                                 |
 
 The file is this installation's [state](../database.md#state-directory-and-backup),
 bound to its database. Treat the whole file as a secret: an owned regular `0600`

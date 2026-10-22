@@ -83,6 +83,8 @@ export const hostedEnvironmentSchema = z.object({
   FONDS_GITHUB_CLIENT_SECRET: z.string().min(1).max(512).optional(),
   // Decrypts per-connection credentials stored by `connect`.
   FONDS_CREDENTIALS_KEY: z.string().optional(),
+  // 1 serves /v1/openapi.json without authentication; 0 or unset does not.
+  FONDS_PUBLIC_API_DESCRIPTION: z.enum(["0", "1"]).optional(),
 });
 
 /** Names variables only; never includes received values. */
@@ -166,6 +168,9 @@ export function hostedConfiguration(
     ownerEmail: OWNER_ACCOUNT_EMAIL,
     ...(Object.keys(socialLogin).length && { socialLogin }),
     ...(credentialsKey && { credentialsKey }),
+    ...(values.FONDS_PUBLIC_API_DESCRIPTION === "1" && {
+      publicApiDescription: true,
+    }),
     ...(manualSecret && {
       collection: {
         manualSecret,
@@ -399,6 +404,7 @@ export function createHostedService(
       publicOrigin: config.publicOrigin,
       ownerId: config.ownerId,
       authProvider: issuer.provider,
+      ...(config.publicApiDescription && { publicApiDescription: true }),
       ...(routes &&
         options.scheduler?.internalIngress && {
           platformRoutes: async (request: Request) =>

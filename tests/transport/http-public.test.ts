@@ -30,7 +30,14 @@ function setup() {
   const service = createHttpService(application, {
     publicOrigin,
     ownerId: "synthetic-owner",
-    authProvider: { issuer: `${publicOrigin}/auth`, authenticate },
+    authProvider: {
+      issuer: `${publicOrigin}/auth`,
+      endpoints: {
+        authorization: `${publicOrigin}/auth/authorize`,
+        token: `${publicOrigin}/auth/token`,
+      },
+      authenticate,
+    },
     publicRoutes,
   });
   services.push(service);

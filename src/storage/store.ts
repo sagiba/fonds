@@ -1169,9 +1169,6 @@ function buildStore<Db>(
       await checkScope(filters);
       const rows = await db.execute(statements.totals(db.root, filters));
       await checkEmpty(rows, filters.connectionId);
-      if (filters.perspective === "all") {
-        throw new InvalidInputError("Totals cannot use the all perspective");
-      }
       return calculateTotals(rows, filters.perspective);
     },
     listEvents: async (input) => {
