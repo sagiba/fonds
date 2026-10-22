@@ -530,11 +530,17 @@ describe("Neon configuration", () => {
           String(value),
         ).toBe(declared);
       }
-      vi.stubEnv("FONDS_PUBLIC_API_DESCRIPTION", "yes");
-      vi.resetModules();
-      await expect(import("../../../neon.js")).rejects.toThrow(
-        "FONDS_PUBLIC_API_DESCRIPTION must be 0 or 1",
-      );
+      for (const invalid of ["", "yes"]) {
+        vi.stubEnv("FONDS_PUBLIC_API_DESCRIPTION", invalid);
+        vi.resetModules();
+        const error = await import("../../../neon.js").then(
+          () => undefined,
+          (rejection: unknown) => rejection as Error,
+        );
+        expect(error?.message, JSON.stringify(invalid)).toBe(
+          "FONDS_PUBLIC_API_DESCRIPTION must be 0 or 1",
+        );
+      }
     } finally {
       vi.unstubAllEnvs();
       vi.resetModules();
