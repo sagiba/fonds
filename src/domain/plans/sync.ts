@@ -298,6 +298,25 @@ function withFinancialState(
 
 const POSTING_MATCH_ISSUE = "possible_pending_posted_match";
 
+/** Both rows state a native identity that no capture has marked ambiguous. */
+function unambiguousNative(
+  current: TransactionFacts,
+  previous: TransactionFacts,
+): boolean {
+  return [current, previous].every(
+    (row) =>
+      row.identityStrength === "native" &&
+      !row.details.issues.includes("ambiguous_identity"),
+  );
+}
+
+function ownsSourceKey(
+  row: Pick<Transaction, "sourceKey" | "sourceAliases">,
+  sourceKey: string,
+): boolean {
+  return row.sourceKey === sourceKey || row.sourceAliases.includes(sourceKey);
+}
+
 const DAY_MILLISECONDS = 86_400_000;
 
 function withIssue(issues: readonly string[], issue: string): string[] {
@@ -1877,22 +1896,23 @@ export function planRun(
         changedFacts,
         fingerprints,
       } = index.groups.get(base)!;
-      const knownNative = knownGroup.length === 1 ? knownGroup[0] : undefined;
-      const newerNativeFacts =
-        !result.historical &&
-        input.identityStrength === "native" &&
+      const matches = index.matches(input.sourceKey);
+      // The capture states this native key once and one stored row owns it.
+      const uniqueNative = (facts: TransactionFacts, row: TransactionFacts) =>
+        matches.count === 1 &&
         newGroup.length === 1 &&
-        knownNative?.identityStrength === "native" &&
-        !knownNative.supersededById &&
-        (history.historical(knownNative) ||
-          knownNative.lastSeenAt < response.capturedAt) &&
-        index.matches(input.sourceKey).count === 1 &&
-        !input.details.issues.includes("ambiguous_identity") &&
-        !knownNative.details.issues.includes("ambiguous_identity") &&
-        (knownNative.sourceKey === input.sourceKey ||
-          knownNative.sourceAliases.includes(input.sourceKey));
+        unambiguousNative(facts, row);
+      const knownNative = knownGroup.length === 1 ? knownGroup[0] : undefined;
       // Snapshot chronology does not invalidate independently newer native facts.
       // Historical captures still cannot replace current facts.
+      const newerNativeFacts =
+        !result.historical &&
+        knownNative !== undefined &&
+        !knownNative.supersededById &&
+        ownsSourceKey(knownNative, input.sourceKey) &&
+        uniqueNative(input, knownNative) &&
+        (history.historical(knownNative) ||
+          knownNative.lastSeenAt < response.capturedAt);
       if (
         (result.historical ||
           (stalePartitions.has(input.status) && !newerNativeFacts)) &&
@@ -1910,8 +1930,7 @@ export function planRun(
           knownGroup.length === 1 &&
           known.identityStrength === "native" &&
           !known.supersededById &&
-          (known.sourceKey === input.sourceKey ||
-            known.sourceAliases.includes(input.sourceKey));
+          ownsSourceKey(known, input.sourceKey);
         if (enrichesKnownIdentity) {
           observedIds.add(known.id);
           const previous = plan.transaction(known.id)!;
@@ -1960,7 +1979,6 @@ export function planRun(
       }
       const uncertain = input.identityStrength !== "native" || oldUncertain;
       const changedUncertainSet = uncertain && changedFacts;
-      const matches = index.matches(input.sourceKey);
       // Within an unchanged uncertain set, match facts, never an array ordinal.
       const sameFacts = fingerprints.get(
         identityFingerprint(input, includeSource, adapter),
@@ -1981,16 +1999,13 @@ export function planRun(
           : matches.count === 1
             ? matches.first
             : undefined;
+      // A retained omission at or after this capture binds unless these facts
+      // uniquely continue the native identity; newer current facts always win.
       if (
         previous &&
         ((previous.sourceAbsence !== undefined &&
           previous.sourceAbsence.capturedAt >= response.capturedAt &&
-          (input.identityStrength !== "native" ||
-            previous.identityStrength !== "native" ||
-            matches.count !== 1 ||
-            newGroup.length !== 1 ||
-            input.details.issues.includes("ambiguous_identity") ||
-            previous.details.issues.includes("ambiguous_identity"))) ||
+          !uniqueNative(input, previous)) ||
           (!history.historical(previous) &&
             previous.lastSeenAt > response.capturedAt))
       ) {
@@ -2279,10 +2294,7 @@ export function planRun(
         };
         if (
           counterpartyAbsent &&
-          accepted.identityStrength === "native" &&
-          previous.identityStrength === "native" &&
-          !accepted.details.issues.includes("ambiguous_identity") &&
-          !previous.details.issues.includes("ambiguous_identity") &&
+          unambiguousNative(accepted, previous) &&
           accepted.kind === "transfer" &&
           previous.kind === "transfer"
         ) {
@@ -2296,15 +2308,9 @@ export function planRun(
         // A complete snapshot newer than the last positive receipt omitted this
         // native identity even if its old facts lay outside that snapshot's window.
         // An equal-time receipt cannot distinguish omission from observation.
-        const sourceAbsence =
-          accepted.identityStrength === "native" &&
-          previous.identityStrength === "native" &&
-          matches.count === 1 &&
-          newGroup.length === 1 &&
-          !accepted.details.issues.includes("ambiguous_identity") &&
-          !previous.details.issues.includes("ambiguous_identity")
-            ? absence.reconciled(accepted, previous)
-            : undefined;
+        const sourceAbsence = uniqueNative(accepted, previous)
+          ? absence.reconciled(accepted, previous)
+          : undefined;
         const presence = sourceAbsence ? "not_returned" : "seen";
         const presenceChanged =
           previous.presence !== presence ||
@@ -2495,18 +2501,14 @@ export function planRun(
             (candidate) =>
               !candidate.supersededById &&
               !candidate.sourceEvidence?.identity?.retiredFromMatching &&
-              (candidate.sourceKey === authorization.sourceKey ||
-                candidate.sourceAliases.includes(authorization.sourceKey)),
+              ownsSourceKey(candidate, authorization.sourceKey),
           );
         // A collision is not a choice of component, nor proof of its absence.
         if (
           authorizations.length !== 1 ||
           owners.length !== 1 ||
           owners[0]!.id !== row.id ||
-          authorization.identityStrength !== "native" ||
-          pending.identityStrength !== "native" ||
-          authorization.details.issues.includes("ambiguous_identity") ||
-          pending.details.issues.includes("ambiguous_identity") ||
+          !unambiguousNative(authorization, pending) ||
           authorization.sourceScope !== pending.sourceScope ||
           authorization.cardId !== pending.cardId
         ) {
