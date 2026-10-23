@@ -1,10 +1,8 @@
 # Database reference
 
-The database holds declared financial evidence, current transactions, independent
-owner annotations, the durable event feed and operational state. This page owns
-table ownership, relationships, commit boundaries, the reasons for dialect
-differences, migration compatibility, the installation binding and backup and
-recovery. The [API reference](api.md) owns what clients see.
+This page covers table ownership, relationships, commit boundaries, dialect
+differences, migrations, installation binding, backup and recovery. The
+[API reference](api.md) owns client-visible meanings.
 
 ## Ownership and physical layout
 
@@ -100,9 +98,11 @@ Candidate IDs and source references inside JSON are references, not foreign keys
 - **`transaction_observations`** owns latest scoped freshness/references; unchanged
   refreshes preserve content. **`transaction_reconciliation`** owns identity,
   interpretation, conflict, rejection and private pending/posted overlap.
-  `source_evidence_json` separates captured identity from accepted financial
-  receipts; migration preserves unknown origins. Missing legacy comparisons alone
-  never replace IDs or accepted money; unprovable attribution is deferred for review.
+  `source_evidence_json` separates captured identity and accepted financial receipts.
+  Unprovable legacy groups can remain deferred indefinitely, including new charges,
+  making totals incomplete. Retrying alone cannot repair provenance. IDs, money
+  and annotations remain; explicit owner removal and recollection admit distinct
+  identities without transferring annotations.
   **`transaction_posting_links`** holds reversible current pending components,
   overlap evidence and split receipts, separate from mapped facts and immutable
   events.

@@ -878,6 +878,100 @@ describe.each(backends)("%s captured source identity", (backend) => {
     await quiet([first, second], sourceRowsAdapter);
   });
 
+  it.each(["weak", "ambiguous"] as const)(
+    "admits a fresh generation after the owner removes all indistinguishable legacy %s twins",
+    async (identityStrength) => {
+      const first = evidencedRow("removed-twin-a", {
+        amountMinor: -1250,
+        identityStrength,
+      });
+      const second = { ...first, sourceKey: "removed-twin-b" };
+      await capture([first, second], sourceRowsAdapter);
+      const originals = await rows();
+      const annotations = new Map<string, unknown>();
+      for (const original of originals) {
+        annotations.set(
+          original.id,
+          await db.editAnnotation({
+            transactionId: original.id,
+            expectedVersion: 0,
+            notes: `Historical note for ${original.sourceKey}.`,
+          }),
+        );
+      }
+      await forgetComparisons(originals.map((item) => item.id));
+      expect(await capture([second, first], sourceRowsAdapter)).toMatchObject({
+        created: 0,
+        unlisted: 0,
+      });
+      for (const original of originals) {
+        const deferred = (await db.getTransaction(original.id))!;
+        expect(deferred).toMatchObject({
+          presence: "seen",
+          sourceIssues: ["unverified_legacy_identity"],
+          annotation: annotations.get(original.id),
+        });
+        await db.confirmRemoval({
+          transactionId: original.id,
+          expectedVersion: deferred.version,
+          reason:
+            "Invented owner reconciliation of the disputed legacy population.",
+        });
+      }
+      expect(await db.listTransactions({ presence: "current" })).toHaveLength(
+        0,
+      );
+      const cursor = await db.latestEventId();
+      expect(await capture([first, second], sourceRowsAdapter)).toMatchObject({
+        created: 2,
+        unlisted: 0,
+      });
+      const current = await db.listTransactions({ presence: "current" });
+      expect(current).toHaveLength(2);
+      const originalIds = new Set(originals.map((item) => item.id));
+      for (const item of current) {
+        expect(originalIds.has(item.id)).toBe(false);
+        expect(item).toMatchObject({
+          amountMinor: -1250,
+          presence: "seen",
+          annotation: null,
+        });
+        expect(item.sourceIssues).not.toContain("unverified_legacy_identity");
+      }
+      for (const original of originals) {
+        expect(await db.getTransaction(original.id)).toMatchObject({
+          id: original.id,
+          presence: "removed",
+          amountMinor: -1250,
+          annotation: annotations.get(original.id),
+        });
+      }
+      expect(await rows()).toHaveLength(4);
+      expect(await db.getTotals()).toMatchObject({
+        includedCount: identityStrength === "weak" ? 2 : 0,
+        excluded: { unresolved: identityStrength === "ambiguous" ? 2 : 0 },
+        totals:
+          identityStrength === "weak"
+            ? [
+                {
+                  currency: "ILS",
+                  amountBasis: "purchase_commitment",
+                  amountMinor: -2500,
+                },
+              ]
+            : [],
+      });
+      const created = (await db.listEvents({ after: cursor })).filter(
+        (event) => event.type === "transaction.created",
+      );
+      expect(created).toHaveLength(2);
+      expect(new Set(created.map((event) => event.transactionId))).toEqual(
+        new Set(current.map((item) => item.id)),
+      );
+      await quiet([first, second], sourceRowsAdapter);
+    },
+  );
+
   it.each(["history-only", "confirmed absent", "owner removed"] as const)(
     "distinguishes unknown legacy membership from an intentionally separate weak reappearance: %s",
     async (membership) => {

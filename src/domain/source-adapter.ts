@@ -98,6 +98,8 @@ export interface SourceAdapter {
     input: Readonly<TransactionFacts>,
     extraction: Pick<ExtractionResult, "warnings">,
   ): FinancialAuthority;
+  /** Kinds for which the source name denotes a counterparty, after reconciliation. */
+  counterpartyKinds?: readonly TransactionFacts["kind"][];
   /** Similarity can suggest an owner-reviewed posting link. */
   pendingPostingCandidates?: boolean;
   /** Opt in to narrow, reversible same-capture purchase/refund continuation. */

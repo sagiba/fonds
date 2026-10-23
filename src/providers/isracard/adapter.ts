@@ -20,6 +20,7 @@ export const isracardAdapter: SourceAdapter = {
   projectProviderState: projectIsracardState,
   extract: extractIsracard,
   financialAuthority: isracardFinancialAuthority,
+  counterpartyKinds: ["transfer", "unknown"],
   validateScope: validateIsracardScope,
   normalizeScope: normalizeIsracardScope,
   sourceCoverage: { kind: "same_origin", statuses: ["pending"] },

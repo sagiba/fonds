@@ -2398,6 +2398,7 @@ export function planRun(
       }
       if (!previous) {
         const financial = reconcileFinancialBundle({
+          counterpartyKinds: adapter.counterpartyKinds,
           input,
           authority: financialAuthority,
           receipt: { runId, capturedAt: response.capturedAt },
@@ -2565,6 +2566,7 @@ export function planRun(
           );
         }
         const financial = reconcileFinancialBundle({
+          counterpartyKinds: adapter.counterpartyKinds,
           previous,
           currentOverHistorical:
             !result.historical && history.historical(previous),
@@ -2862,6 +2864,7 @@ export function planRun(
         ) {
           const accepted = structuredClone(authorization);
           const financial = reconcileFinancialBundle({
+            counterpartyKinds: adapter.counterpartyKinds,
             previous: pending,
             input: accepted,
             authority: adapter.financialAuthority?.(accepted, result) ?? {

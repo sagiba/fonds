@@ -67,6 +67,7 @@ function conflicted(row: TransactionFacts): boolean {
 function copyBundle(
   input: TransactionFacts,
   previous: TransactionFacts,
+  counterpartyKinds?: readonly TransactionFacts["kind"][],
 ): TransactionFacts {
   const { currencyExchange: _incoming, ...details } = input.details;
   const bundle = Object.fromEntries(
@@ -75,6 +76,12 @@ function copyBundle(
   return {
     ...input,
     ...bundle,
+    // Source names can have classification-dependent meanings. Reinterpreting
+    // money must not promote a merchant-side label into a named counterparty.
+    counterpartyName:
+      counterpartyKinds && !counterpartyKinds.includes(previous.kind)
+        ? null
+        : input.counterpartyName,
     details: {
       ...details,
       ...(previous.details.currencyExchange === undefined
@@ -119,6 +126,7 @@ export function reconcileFinancialBundle(options: {
   retainEligible: boolean;
   /** Caller accepted current-source priority over a historical-only import. */
   currentOverHistorical?: boolean;
+  counterpartyKinds?: readonly TransactionFacts["kind"][] | undefined;
 }): {
   facts: TransactionFacts;
   financialReceipt: FinancialReceipt | undefined;
@@ -166,7 +174,7 @@ export function reconcileFinancialBundle(options: {
     !conflicted(input) &&
     compatibleAssertions(input, previous);
   if (retain) {
-    const facts = copyBundle(input, previous);
+    const facts = copyBundle(input, previous, options.counterpartyKinds);
     facts.details.issues = [
       ...new Set([...facts.details.issues, RETAINED_FINANCIAL_EVIDENCE]),
     ];

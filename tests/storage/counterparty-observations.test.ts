@@ -564,6 +564,44 @@ describe.each(backends)(
       );
     }
 
+    it("does not project a bound merchant-side name when retained support restores a purchase kind", async () => {
+      await capture("Invented merchant-side name", { transactionCode: 1 });
+      const first = (await db.listTransactions())[0]!;
+      expect(first).toMatchObject({ kind: "purchase", counterpartyName: null });
+      const annotation = await db.editAnnotation({
+        transactionId: first.id,
+        expectedVersion: 0,
+        notes: "Keep the purchase annotation",
+      });
+      await capture("Invented merchant-side name", { missingDigital: true });
+      const retained = (await db.getTransaction(first.id))!;
+      expect(retained).toMatchObject({
+        kind: "purchase",
+        counterpartyName: null,
+        amountMinor: -8640,
+        amountBasis: "purchase_commitment",
+        annotation,
+      });
+      const cursor = await db.latestEventId();
+      await capture("Invented merchant-side name", { missingDigital: true });
+      expect(await db.getTransaction(first.id)).toMatchObject({
+        version: retained.version,
+        counterpartyName: null,
+      });
+      expect(
+        (await db.listEvents({ after: cursor })).filter((event) =>
+          event.type.startsWith("transaction."),
+        ),
+      ).toEqual([]);
+      await capture("Invented merchant-side name", { transactionCode: 1 });
+      expect(await db.getTransaction(first.id)).toMatchObject({
+        kind: "purchase",
+        counterpartyName: null,
+        amountMinor: -8640,
+        annotation,
+      });
+    });
+
     it("retains a transfer counterparty when missing Digital support restores its kind from retained money", async () => {
       await capture("Invented recipient");
       const first = (await db.listTransactions())[0]!;

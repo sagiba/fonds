@@ -81,13 +81,14 @@ become review candidates.
 
 ## Absence and recovery
 
-Posted omissions prove neither cancellation nor [source absence](../api.md#fields):
-purchases retain observation state, current reads and totals, including
-history imports. Pending omissions can establish absence within recent scope.
-A wholly empty response with covered pending rows fails with
-`implausible_empty` without membership changes; retry. This may delay final expiry; leaving coverage does not itself prove disappearance.
-See [coverage rationale](../../src/providers/cal/source-notes.md#calwindow-recent-window-and-search-coverage)
-for limits. Accounts commit independently; invocations can be partial.
+Posted omissions change neither observation state nor totals. Pending omissions
+establish absence only within declared coverage. Wholly empty responses with
+covered pending rows fail `implausible_empty`; quiet cards can retain stale pending
+rows indefinitely, after out-of-window refreshes succeed. Verify
+against CAL before using [`confirm_removal`](../api.md#operations): history and
+annotations remain, but removal is an owner decision, not provider-proven
+cancellation. Retries and age alone prove nothing.
+See [coverage rationale](../../src/providers/cal/source-notes.md#calwindow-recent-window-and-search-coverage).
 
 Authentication challenges, invalid credentials and rate limits stop the refresh,
 and repeated network or invalid-response failures stop after a bounded budget

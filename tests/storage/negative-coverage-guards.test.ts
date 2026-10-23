@@ -86,7 +86,11 @@ describe.each(backends)("%s negative coverage guards", (backend) => {
     day: number,
     transactions: Record<string, unknown>[],
     clearanceRequests: Record<string, unknown>[] = [],
-    options: { result?: Record<string, unknown>; httpStatus?: number } = {},
+    options: {
+      result?: Record<string, unknown>;
+      httpStatus?: number;
+      capturedAt?: string;
+    } = {},
   ) {
     return db.ingestRun(
       {
@@ -96,7 +100,9 @@ describe.each(backends)("%s negative coverage guards", (backend) => {
           {
             accountKey: "account",
             endpoint: "synthetic:cal/recent",
-            capturedAt: `2040-07-${String(day).padStart(2, "0")}T12:00:00Z`,
+            capturedAt:
+              options.capturedAt ??
+              `2040-07-${String(day).padStart(2, "0")}T12:00:00Z`,
             responseText: JSON.stringify({
               statusCode: 1,
               result: {
@@ -220,6 +226,58 @@ describe.each(backends)("%s negative coverage guards", (backend) => {
       expect(await db.latestEventId()).toBe(cursor);
     },
   );
+
+  it("keeps quiet-card membership unproven through failed empties and window expiry until an owner decides", async () => {
+    await calCapture("only-pending", 1, [], [authorization]);
+    const original = (await db.listTransactions())[0]!;
+    const annotation = await db.editAnnotation({
+      transactionId: original.id,
+      expectedVersion: 0,
+      notes: "Keep this authorization's history",
+    });
+    for (const day of [2, 3]) {
+      expect(await calCapture(`empty-${day}`, day, [])).toMatchObject({
+        status: "failed",
+        failureCode: "implausible_empty",
+        unlisted: 0,
+      });
+    }
+    // A later response is still admissible, but its rolling coverage cannot
+    // turn the old rejected empty response into proof about an expired window.
+    expect(
+      await calCapture("outside-window", 4, [], [], {
+        capturedAt: "2040-09-01T12:00:00Z",
+      }),
+    ).toMatchObject({ status: "completed", unlisted: 0 });
+    const retained = (await db.getTransaction(original.id))!;
+    expect(retained).toMatchObject({
+      status: "pending",
+      presence: "seen",
+      version: original.version,
+      lastSeenAt: original.lastSeenAt,
+      annotation,
+    });
+    expect(retained.sourceAbsence).toBeUndefined();
+    expect(await db.listTransactions({ presence: "current" })).toHaveLength(1);
+    expect(await db.getTotals()).toMatchObject({
+      includedCount: 0,
+      totals: [],
+    });
+    await db.confirmRemoval({
+      transactionId: original.id,
+      expectedVersion: retained.version,
+      reason:
+        "Owner independently verified this invented authorization expired",
+    });
+    expect(await db.listTransactions({ presence: "current" })).toEqual([]);
+    expect(await db.getTransaction(original.id)).toMatchObject({
+      presence: "removed",
+      annotation,
+    });
+    expect(
+      (await db.getTransaction(original.id))!.sourceAbsence,
+    ).toBeUndefined();
+  });
 
   async function linkedCal() {
     await calCapture("initial", 1, [purchase], [authorization]);

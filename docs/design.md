@@ -50,9 +50,9 @@ marker together, so a failure leaves the evidence for retry. Provider calls neve
 run inside financial write transactions.
 
 Normal operation retains declared transaction evidence and capture receipts.
-Raw bodies are staged for recovery, then released with application unless
-bounded debugging retention was requested. Legacy archives remain. Unknown fields
-are discarded; recollection cannot recover vanished values or expired periods.
+Raw bodies are staged for recovery, then released with application unless bounded
+debugging retention was requested. Legacy archives remain. Unknown fields are
+discarded; recollection cannot recover vanished values or expired periods.
 Declared evidence without a safe transaction identity is retained separately.
 
 Input digests preserve run-ID immutability after body removal; applied replay is

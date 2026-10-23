@@ -77,6 +77,25 @@ const incomplete = {
 };
 
 describe("atomic financial authority", () => {
+  it.each(["purchase", "refund", "fee", "transfer"] as const)(
+    "respects a source-declared counterparty domain after retaining %s classification",
+    (kind) => {
+      const result = reconcileFinancialBundle({
+        previous: previous({ kind }),
+        input: partial({ counterpartyName: "Invented bound name" }),
+        authority: incomplete,
+        receipt,
+        retainEligible: true,
+        counterpartyKinds: ["transfer", "unknown"],
+      });
+      expect(result.retained).toBe(true);
+      expect(result.facts.kind).toBe(kind);
+      expect(result.facts.counterpartyName).toBe(
+        kind === "transfer" ? "Invented bound name" : null,
+      );
+    },
+  );
+
   it("retains the whole supported financial interpretation but accepts current nonfinancial display facts", () => {
     const before = previous({
       fxFeeMinor: -100,
