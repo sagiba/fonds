@@ -2,6 +2,8 @@ import {
   detailsSchema,
   type JsonValue,
   providerStateFields,
+  sourceAbsenceSchema,
+  sourceEvidenceSchema,
 } from "../domain/model.js";
 import { canonicalJson } from "../domain/observations.js";
 import type { FinancialPlan } from "../domain/plans/state.js";
@@ -28,8 +30,13 @@ type Details = Transaction["details"];
 
 export type StoredTransactionRow = Omit<
   Transaction,
-  "details" | "lastSeenAt" | "lastSeenRunId"
+  | "details"
+  | "lastSeenAt"
+  | "lastSeenRunId"
+  | "sourceAbsence"
+  | "sourceEvidence"
 > & {
+  sourceAbsence: NonNullable<Transaction["sourceAbsence"]> | null;
   transactionDateTime: string | null;
   merchantAddressLine: string | null;
   merchantPhone: string | null;
@@ -54,11 +61,13 @@ type Observation = TransactionObservationRow;
 
 export interface TransactionReconciliationRow {
   transactionId: string;
+  sourceEvidence: NonNullable<Transaction["sourceEvidence"]> | null;
   paymentContextConflicts: NonNullable<
     Details["paymentContextConflicts"]
   > | null;
   pendingPostingCandidates: string[] | null;
   rejectedPostingKeys: string[] | null;
+  postingOverlap: NonNullable<Details["postingOverlap"]> | null;
   providerIdentity: Record<string, JsonValue> | null;
   providerObservations: Record<string, JsonValue> | null;
   providerMonetaryEvidence: Record<string, JsonValue> | null;
@@ -80,6 +89,7 @@ export function encodeTransaction(row: Transaction): StoredRow {
     details,
     lastSeenAt: _lastSeenAt,
     lastSeenRunId: _lastSeenRunId,
+    sourceEvidence: _sourceEvidence,
     ...facts
   } = row;
   const provider = structuredClone(details.provider);
@@ -90,6 +100,9 @@ export function encodeTransaction(row: Transaction): StoredRow {
   }
   return {
     ...facts,
+    sourceAbsence: row.sourceAbsence
+      ? sourceAbsenceSchema.parse(row.sourceAbsence)
+      : null,
     transactionDateTime: details.transactionDateTime ?? null,
     merchantAddressLine: details.merchant.address,
     merchantPhone: details.merchant.phone,
@@ -116,9 +129,13 @@ export function encodeObservation(row: Transaction): Observation {
 export function encodeReconciliation(row: Transaction): Reconciliation {
   const result: Reconciliation = {
     transactionId: row.id,
+    sourceEvidence: row.sourceEvidence
+      ? sourceEvidenceSchema.parse(row.sourceEvidence)
+      : null,
     paymentContextConflicts: row.details.paymentContextConflicts ?? null,
     pendingPostingCandidates: row.details.pendingPostingCandidates ?? null,
     rejectedPostingKeys: row.details.rejectedPostingKeys ?? null,
+    postingOverlap: row.details.postingOverlap ?? null,
     providerIdentity: null,
     providerObservations: null,
     providerMonetaryEvidence: null,
@@ -142,6 +159,7 @@ export function decodeTransaction(input: {
   posting: PostingLink;
 }): Transaction {
   const {
+    sourceAbsence,
     transactionDateTime,
     merchantAddressLine,
     merchantPhone,
@@ -163,6 +181,16 @@ export function decodeTransaction(input: {
   }
   return {
     ...facts,
+    ...(sourceAbsence === null
+      ? {}
+      : { sourceAbsence: sourceAbsenceSchema.parse(sourceAbsence) }),
+    ...(input.reconciliation.sourceEvidence == null
+      ? {}
+      : {
+          sourceEvidence: sourceEvidenceSchema.parse(
+            input.reconciliation.sourceEvidence,
+          ),
+        }),
     lastSeenAt: input.observation.lastSeenAt,
     lastSeenRunId: input.observation.lastSeenRunId,
     details: detailsSchema.parse({
@@ -196,6 +224,9 @@ export function decodeTransaction(input: {
       ...(input.reconciliation.rejectedPostingKeys === null
         ? {}
         : { rejectedPostingKeys: input.reconciliation.rejectedPostingKeys }),
+      ...(input.reconciliation.postingOverlap === null
+        ? {}
+        : { postingOverlap: input.reconciliation.postingOverlap }),
       ...(input.posting.postingLink === null
         ? {}
         : { postingLink: input.posting.postingLink }),

@@ -8,6 +8,32 @@ import { checkStorageCoverage } from "./storage-coverage.mjs";
 // Update these floors only when deliberately removing/reorganizing coverage.
 export const requiredGroups = [
   ["service.test.ts", "service integration: libsql-http", 32],
+  ["source-presence.test.ts", "libsql-http authoritative source presence", 51],
+  [
+    "negative-coverage-guards.test.ts",
+    "libsql-http negative coverage guards",
+    21,
+  ],
+  [
+    "counterparty-observations.test.ts",
+    "libsql-http bound Isracard counterparty evidence",
+    12,
+  ],
+  ["cal-coverage.test.ts", "libsql-http actual CAL omission authority", 8],
+  ["posting-overlap.test.ts", "libsql-http delayed posting overlap", 55],
+  ["source-identity.test.ts", "libsql-http captured source identity", 31],
+  ["financial-authority.test.ts", "libsql-http row financial authority", 8],
+  [
+    "financial-posting-authority.test.ts",
+    "libsql-http financial authority and posting",
+    4,
+  ],
+  [
+    "linked-component-current.test.ts",
+    "libsql-http linked current pending component",
+    15,
+  ],
+  ["installment-role.test.ts", "libsql-http installment role without count", 2],
   [
     "collection.test.ts",
     "streamed collection application boundary: libsql-http",
@@ -21,7 +47,7 @@ export const requiredGroups = [
   ],
   [
     "lifecycle-sync.test.ts",
-    "collection and owner lifecycle integration: libsql-http",
+    "synthetic complete-source collection and owner lifecycle integration: libsql-http",
     23,
   ],
   [

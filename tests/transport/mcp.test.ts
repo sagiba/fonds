@@ -215,6 +215,23 @@ describe("MCP SDK v2 over HTTP", () => {
           expectedTransactionVersion: { type: "integer" },
         },
       });
+      for (const name of ["list_transactions", "get_transaction_totals"]) {
+        expect(
+          tools.find((tool) => tool.name === name)?.inputSchema,
+        ).toMatchObject({
+          properties: {
+            presence: {
+              enum: ["seen", "not_returned", "removed", "current", "all"],
+              default: "current",
+            },
+          },
+        });
+        const historical = await client.callTool({
+          name,
+          arguments: { presence: "all" },
+        });
+        expect(historical.isError).not.toBe(true);
+      }
       const annotationTool = tools.find(
         (tool) => tool.name === "update_annotation",
       )!;

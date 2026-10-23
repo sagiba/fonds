@@ -89,6 +89,28 @@ describe("asynchronous application storage contract", () => {
     });
   }
 
+  it("accepts explicit historical presence in HTTP reads and rejects unknown selectors", async () => {
+    for (const path of ["/v1/transactions", "/v1/transactions/totals"]) {
+      for (const presence of [
+        "current",
+        "seen",
+        "all",
+        "not_returned",
+        "removed",
+      ]) {
+        const response = await request(`${path}?presence=${presence}`);
+        expect(response.status).toBe(200);
+        const body = await response.json();
+        if (path.endsWith("totals")) {
+          expect(body.excluded).toHaveProperty("sourceAbsent", 0);
+        } else if (presence === "not_returned" || presence === "removed") {
+          expect(body.data).toEqual([]);
+        }
+      }
+      expect((await request(`${path}?presence=missing`)).status).toBe(400);
+    }
+  });
+
   it("awaits list/detail and versioned edits with public field names", async () => {
     const page = await (
       await request(`/v1/transactions?connectionId=${connectionId}&limit=1`)

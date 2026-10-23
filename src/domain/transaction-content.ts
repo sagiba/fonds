@@ -95,7 +95,10 @@ export const transactionChangedFields = {
     ]: (typeof transactionDetailContent)[Key]["name"];
   }),
   providerEvidence: "evidence",
+  sourceFinancialEvidence: "evidence",
+  pendingSourceEvidence: "evidence",
   presence: "presence",
+  sourceAbsence: "sourceAbsence",
   supersededById: "supersededById",
 } as const;
 

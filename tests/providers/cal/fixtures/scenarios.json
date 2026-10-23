@@ -335,7 +335,7 @@
         "native_id": "SYNTHETIC-TXN-HISTORY"
       },
       "status": "posted",
-      "amount_basis": "purchase_commitment",
+      "amount_basis": "unknown",
       "kind": "purchase",
       "amount_minor": -84000,
       "currency": "ILS",

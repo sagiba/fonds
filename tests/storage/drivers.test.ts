@@ -189,8 +189,12 @@ describe.skipIf(!postgresUrl)(
         await pending;
       }
       expect(
-        (await db.listTransactionPage({ connectionId: "synthetic" }))
-          .transactions,
+        (
+          await db.listTransactionPage({
+            connectionId: "synthetic",
+            presence: "all",
+          })
+        ).transactions,
       ).toHaveLength(2);
       const stored = await db.pool.query(
         "SELECT config_json FROM connections WHERE id='synthetic'",

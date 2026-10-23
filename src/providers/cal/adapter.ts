@@ -8,9 +8,12 @@ import { extractCal } from "./extract.js";
 import { compatibleCalPostingGroups } from "./posting-evidence.js";
 import { normalizeCalScope, validateCalScope } from "./scope.js";
 
+// Hypothesis-based margin inside the asserted 90 days; governing dates are unvalidated.
+const RECENT_COMPARABLE_DAYS = 60;
+
 export const calAdapter: SourceAdapter = {
   provider: "cal",
-  parserVersion: "cal-v14",
+  parserVersion: "cal-v15",
   retainProviderEvidence: retainCalEvidence,
   mergeProviderEvidence: mergeCalEvidence,
   projectProviderState: projectCalState,
@@ -23,9 +26,16 @@ export const calAdapter: SourceAdapter = {
     pendingAmountBasis: "authorization",
     postedAmountBasis: "purchase_commitment",
   },
-  // Hypothesis-based margin inside the asserted 90 days; governing dates are unvalidated.
-  recentComparableDays: 60,
-  rejectEmptyRecentPosted: true,
+  recentComparableDays: RECENT_COMPARABLE_DAYS,
+  rejectEmptyRecent: true,
+  sourceCoverage: {
+    kind: "account_window",
+    statuses: ["pending"],
+    resources: ["cal:recent"],
+    dateField: "transactionDate",
+    days: RECENT_COMPARABLE_DAYS,
+    requireOriginMatch: true,
+  },
   resourceKey(endpoint) {
     return endpoint === "synthetic:cal/recent" ||
       endpoint ===

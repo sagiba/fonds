@@ -10,6 +10,7 @@ import {
   isNull,
   lt,
   lte,
+  ne,
   or,
   sql,
   type Table,
@@ -24,10 +25,13 @@ import type { Connection, Transaction } from "../domain/records.js";
 
 export type PlanScope = { transactionId: string } | { accountOf: string };
 
-type Columns<T> = { [Key in keyof T]: AnyColumn };
+type Columns<T> = { [Key in keyof T]-?: AnyColumn };
 
 type TransactionColumns = Columns<
-  Omit<Transaction, "details" | "lastSeenAt" | "lastSeenRunId">
+  Omit<
+    Transaction,
+    "details" | "lastSeenAt" | "lastSeenRunId" | "sourceEvidence"
+  >
 >;
 
 const dateColumns = {
@@ -147,9 +151,11 @@ export function transactionFilter(
       : eq(table.amountBasis, filters.amountBasis),
     filters.kind === undefined ? undefined : eq(table.kind, filters.kind),
     filters.status === undefined ? undefined : eq(table.status, filters.status),
-    filters.presence === undefined
+    filters.presence === "all"
       ? undefined
-      : eq(table.presence, filters.presence),
+      : filters.presence === "current"
+        ? and(isNull(table.sourceAbsence), ne(table.presence, "removed"))
+        : eq(table.presence, filters.presence),
     filters.merchantName === undefined
       ? undefined
       : eq(table.merchantName, filters.merchantName),
@@ -207,6 +213,7 @@ export function totalsColumns<T extends TransactionColumns>(
   T,
   | "supersededById"
   | "presence"
+  | "sourceAbsence"
   | "status"
   | "kind"
   | "amountMinor"
@@ -220,6 +227,7 @@ export function totalsColumns<T extends TransactionColumns>(
   return {
     supersededById: table.supersededById,
     presence: table.presence,
+    sourceAbsence: table.sourceAbsence,
     status: table.status,
     kind: table.kind,
     amountMinor: table.amountMinor,

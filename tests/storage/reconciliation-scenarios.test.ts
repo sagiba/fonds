@@ -26,9 +26,23 @@ interface Envelope {
   [key: string]: unknown;
 }
 
+// Invented posted completeness exercises the generic engine, not CAL guarantees.
+const comparableCalShape = {
+  ...calAdapter,
+  sourceCoverage: {
+    kind: "account_window" as const,
+    statuses: ["pending", "posted"] as const,
+    resources: ["cal:recent"],
+    dateField: "transactionDate" as const,
+    days: 60,
+  },
+  rejectEmptyRecentPosted: true,
+  rejectEmptyRecent: false,
+};
+
 const connectionId = "synthetic-cal";
 const accountKey = "synthetic-account";
-const endpoint = "/synthetic-financial-response";
+const endpoint = "synthetic:cal/recent";
 const cardA = "SYNTHETIC-CARD-A";
 const legacyPendingMerchant = "בית עסק סינתטי LEGACY-PENDING";
 
@@ -56,7 +70,7 @@ function postedSource(envelope: Envelope, nativeId: string, card = cardA) {
 }
 
 describe.each(backends)(
-  "%s reconciliation scenarios across successive recent captures",
+  "%s synthetic complete CAL-shaped reconciliation scenarios",
   (backend) => {
     let db: Harness;
     beforeEach(async () => {
@@ -81,7 +95,7 @@ describe.each(backends)(
             },
           ],
         },
-        calAdapter,
+        comparableCalShape,
       );
     }
 
@@ -224,6 +238,18 @@ describe.each(backends)(
         ...purchase,
         lastSeenAt: "2040-07-02T00:00:00.000Z",
         lastSeenRunId: "synthetic-run-2",
+        sourceEvidence: {
+          identity: {
+            ...purchase.sourceEvidence!.identity,
+            runId: "synthetic-run-2",
+            capturedAt: "2040-07-02T00:00:00.000Z",
+          },
+          financial: {
+            ...purchase.sourceEvidence!.financial,
+            runId: "synthetic-run-2",
+            capturedAt: "2040-07-02T00:00:00.000Z",
+          },
+        },
         details: {
           ...purchase.details,
           provider: {
@@ -316,7 +342,7 @@ describe.each(backends)(
       ]);
     });
 
-    it("never deletes a disappeared native transaction, keeps counting it and restores the same ID on reappearance", async () => {
+    it("retains a disappeared native transaction without counting it and restores the same ID on reappearance", async () => {
       const rowCount = await baseline();
       const vanish = await bySourceKey(postedKey("SYNTHETIC-TXN-VANISH"));
       const totalsBefore = await db.getTotals({ connectionId });
@@ -333,13 +359,30 @@ describe.each(backends)(
       expect(await db.getTransaction(vanish.id)).toMatchObject({
         presence: "not_returned",
         amountMinor: -6480,
+        sourceAbsence: {
+          runId: "synthetic-run-2",
+          capturedAt: "2040-07-02T00:00:00.000Z",
+        },
         version: vanish.version + 1,
       });
       expect(
         await db.listTransactions({ presence: "not_returned" }),
       ).toMatchObject([{ id: vanish.id }]);
-      // Totals exclude only removed/superseded rows; not_returned is still counted.
-      expect(await db.getTotals({ connectionId })).toEqual(totalsBefore);
+      expect(
+        (
+          await db.listTransactionPage({ connectionId, limit: 100 })
+        ).transactions.some((row) => row.id === vanish.id),
+      ).toBe(false);
+      expect(
+        await db.getTotals({ connectionId, presence: "not_returned" }),
+      ).toMatchObject({
+        includedCount: 0,
+        totals: [],
+        excluded: { sourceAbsent: 1 },
+      });
+      expect((await db.getTotals({ connectionId })).includedCount).toBe(
+        totalsBefore.includedCount - 1,
+      );
       expect(await changesForRun(2)).toMatchObject([
         { type: "transaction.unlisted", transactionId: vanish.id },
       ]);
@@ -357,6 +400,10 @@ describe.each(backends)(
         version: vanish.version + 2,
       });
       expect(await db.listTransactions()).toHaveLength(rowCount);
+      expect(
+        (await db.getTransaction(vanish.id))!.sourceAbsence ?? null,
+      ).toBeNull();
+      expect(await db.getTotals({ connectionId })).toEqual(totalsBefore);
       expect(await changesForRun(3)).toMatchObject([
         {
           type: "transaction.restored",
@@ -444,7 +491,7 @@ describe.each(backends)(
           );
           expect(archived).toMatchObject({
             status: "failed",
-            parser_version: calAdapter.parserVersion,
+            parser_version: comparableCalShape.parserVersion,
           });
           expect(archived!.applied_at).toBeTruthy();
           expect(archived!.completed_at).toBeTruthy();
@@ -463,7 +510,7 @@ describe.each(backends)(
           );
           expect(JSON.parse(archived!.coverage_json as string)).toEqual([]);
           expect(
-            await db.applyRun(`synthetic-run-${day}`, calAdapter),
+            await db.applyRun(`synthetic-run-${day}`, comparableCalShape),
           ).toMatchObject({
             replayed: true,
             status: "failed",
@@ -503,7 +550,7 @@ describe.each(backends)(
             ],
           },
           {
-            ...calAdapter,
+            ...comparableCalShape,
             extract() {
               throw new Error("Synthetic interruption after archival");
             },
@@ -512,7 +559,7 @@ describe.each(backends)(
       ).rejects.toThrow("Synthetic interruption");
       await baseline();
       const revision = await db.ledgerRevision(connectionId);
-      const apply = () => db.applyRun("pending-archive", calAdapter);
+      const apply = () => db.applyRun("pending-archive", comparableCalShape);
       const results =
         backend === "postgres"
           ? await Promise.all([apply(), apply()])
@@ -529,7 +576,7 @@ describe.each(backends)(
       ]);
       expect(
         await db.applyRun("pending-archive", {
-          ...calAdapter,
+          ...comparableCalShape,
           parserVersion: "future-parser",
           rejectEmptyRecentPosted: false,
           extract() {
@@ -584,7 +631,7 @@ describe.each(backends)(
                 yield* responses;
               },
             },
-            calAdapter,
+            comparableCalShape,
           ),
         ).toMatchObject({
           status: "partial",
@@ -668,7 +715,7 @@ describe.each(backends)(
               },
             ],
           },
-          calAdapter,
+          comparableCalShape,
         ),
       ).toMatchObject({ status: "completed", unlisted: 0 });
       expect(await db.listTransactions()).toEqual(before);
@@ -694,7 +741,7 @@ describe.each(backends)(
             },
           ],
         },
-        { ...calAdapter, rejectEmptyRecentPosted: false },
+        { ...comparableCalShape, rejectEmptyRecentPosted: false },
       );
       const before = await db.listTransactions();
       expect(before.length).toBeGreaterThan(0);
@@ -710,7 +757,19 @@ describe.each(backends)(
         status: "completed",
         unlisted: 0,
       });
-      expect(await db.listTransactions()).toEqual(before);
+      expect(await db.listTransactions()).toEqual(
+        before.map((row) =>
+          row.sourceAbsence
+            ? {
+                ...row,
+                sourceAbsence: {
+                  runId: "synthetic-run-3",
+                  capturedAt: "2040-07-03T00:00:00.000Z",
+                },
+              }
+            : row,
+        ),
+      );
       expect(await changesForRun(3)).toEqual([]);
     });
 
@@ -753,8 +812,15 @@ describe.each(backends)(
         status: "completed",
         unlisted: 0,
       });
+      const expected = structuredClone(before);
+      expected.find(
+        (row) => row.id === survivor.id,
+      )!.details.postingLink!.pending.sourceAbsence = {
+        runId: "synthetic-run-3",
+        capturedAt: "2040-07-03T00:00:00.000Z",
+      };
       expect(await db.listTransactions({ includeSuperseded: true })).toEqual(
-        before,
+        expected,
       );
       expect(await changesForRun(3)).toEqual([]);
     });
@@ -807,6 +873,16 @@ describe.each(backends)(
             .map((row) => row.sourceKey)
             .sort(),
         ).toEqual(days === undefined ? [] : ["aged", "undated"]);
+        expect(
+          (await db.listTransactionPage({ connectionId, limit: 100 }))
+            .transactions,
+        ).toHaveLength(days === undefined ? 0 : 2);
+        expect(
+          await db.getTotals({ connectionId, presence: "all" }),
+        ).toMatchObject({
+          includedCount: days === undefined ? 0 : 2,
+          excluded: { sourceAbsent: days === undefined ? 4 : 2 },
+        });
       },
     );
 

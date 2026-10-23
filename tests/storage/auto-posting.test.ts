@@ -136,7 +136,7 @@ describe.each(backends)("%s automatic posting and split", (backend) => {
       ]);
       expect(await db.getTransaction(pending.id)).toMatchObject({
         status: "posted",
-        version: survivor.version,
+        version: survivor.version + 1,
       });
     },
   );
@@ -680,9 +680,18 @@ describe.each(backends)("%s automatic posting and split", (backend) => {
         compatibleGroups: () => false,
       },
     });
-    expect((await harness.byKey("posted")).details.postingLink).toEqual(
-      survivor.details.postingLink,
-    );
+    const refreshed = await harness.byKey("posted");
+    expect(refreshed.version).toBe(survivor.version);
+    expect(refreshed.details.postingLink).toEqual({
+      ...survivor.details.postingLink,
+      pending: {
+        ...survivor.details.postingLink!.pending,
+        sourceAbsence: {
+          runId: "posting-4",
+          capturedAt: "2040-07-04T12:00:00.000Z",
+        },
+      },
+    });
     expect(await db.listEvents()).toEqual(changes);
     expect(await db.listTransactions()).toHaveLength(1);
   });
@@ -1094,7 +1103,7 @@ describe.each(backends)("%s automatic posting and split", (backend) => {
     expect(await harness.state()).toEqual(before);
   });
 
-  it("blocks unapplied cal-v5 archives under cal-v14 without changing evidence or financial state", async () => {
+  it("blocks unapplied cal-v5 archives under cal-v15 without changing evidence or financial state", async () => {
     await expect(
       db.ingestRun(
         {
@@ -1123,7 +1132,7 @@ describe.each(backends)("%s automatic posting and split", (backend) => {
     const runs = await db.listSyncRuns(harness.connectionId, {
       limit: 20,
     });
-    expect(calAdapter.parserVersion).toBe("cal-v14");
+    expect(calAdapter.parserVersion).toBe("cal-v15");
     await expect(db.applyRun("cal-v5-unapplied", calAdapter)).rejects.toThrow(
       "Run parser version differs from adapter",
     );

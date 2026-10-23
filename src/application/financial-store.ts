@@ -139,7 +139,7 @@ export interface InternalStore
     connectionId: string,
     discovery: CardDiscovery,
   ): Promise<void>;
-  /** Unpaged rows for internal callers; every perspective unless one is named. */
+  /** Internal history inspection; presence and perspective default to all. */
   listTransactions(input?: TransactionFilters): Promise<TransactionView[]>;
   ensureConnection(
     input: {

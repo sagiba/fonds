@@ -568,6 +568,11 @@ for (const backend of backends) {
       expect(await db.getTotals()).toMatchObject({
         includedCount: 0,
         totals: [],
+        excluded: { retiredOrRemoved: 0, pending: 1 },
+      });
+      expect(await db.getTotals({ presence: "all" })).toMatchObject({
+        includedCount: 0,
+        totals: [],
         excluded: { retiredOrRemoved: 1, pending: 1 },
       });
       expect(

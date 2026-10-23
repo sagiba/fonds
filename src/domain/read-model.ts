@@ -136,7 +136,7 @@ export type TotalRow = Pick<
   | "originalCurrency"
   | "fxFeeMinor"
   | "fxFeeCurrency"
->;
+> & { sourceAbsence?: Transaction["sourceAbsence"] | null };
 
 /**
  * A converted row bills in a currency other than its original money. Storage
@@ -175,12 +175,17 @@ export function calculateTotals(
     authorization: 0,
     transferOrIncome: 0,
     retiredOrRemoved: 0,
+    sourceAbsent: 0,
     unresolved: 0,
   };
   let includedCount = 0;
   for (const row of rows) {
     if (row.supersededById || row.presence === "removed") {
       excluded.retiredOrRemoved++;
+      continue;
+    }
+    if (row.sourceAbsence != null) {
+      excluded.sourceAbsent++;
       continue;
     }
     if (row.status === "pending") {

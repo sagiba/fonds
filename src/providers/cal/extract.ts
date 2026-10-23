@@ -345,28 +345,40 @@ function cancellation(row: SourceRow): boolean {
   return row.trnType === "ביטול תשלומים" && row.refundInd === true;
 }
 
-/**
- * Whether the row states a plan of two or more payments, structurally or in
- * its installment texts, however its stated counts then reconcile.
- */
-function statesPlan(row: SourceRow): boolean {
-  return [
-    ordinal(row.numOfPayments),
-    ...stated([row]).flatMap((item) =>
-      item.parsed?.template === "installment_count" ? [item.parsed.count] : [],
+/** Independent count statements; an absent count never supplies a plan size. */
+function statedInstallmentCounts(rows: SourceRow[], status: Status): number[] {
+  return unique([
+    ...rows.flatMap((row) => {
+      const count = ordinal(
+        status === "posted" ? row.numOfPayments : row.numberOfPayments,
+      );
+      return count === null ? [] : [count];
+    }),
+    ...stated(rows).flatMap((item) =>
+      item.parsed?.template === "installment_count" && item.parsed.count > 0
+        ? [item.parsed.count]
+        : [],
     ),
-  ].some((count) => count !== null && count >= 2);
+  ]);
 }
 
-/** One billed payment of an installment plan (type 8, two or more payments). */
-function installmentPayment(row: SourceRow): boolean {
-  // The group resolves conflicting counts; any stated plan makes a payment.
+function statesPlan(row: SourceRow): boolean {
+  return statedInstallmentCounts([row], "posted").some((count) => count >= 2);
+}
+
+/** The explicit installment type establishes its role without supplying its size. */
+function installmentPurchase(row: SourceRow): boolean {
+  const counts = statedInstallmentCounts([row], "posted");
   return (
     token(row.transactionTypeCode) === "8" &&
     row.refundInd === false &&
-    statesPlan(row) &&
-    ordinal(row.curPaymentNum) !== null
+    (counts.length === 0 || counts.some((count) => count >= 2))
   );
+}
+
+/** An observed ordinal, never a generated schedule, identifies the payment. */
+function installmentPayment(row: SourceRow): boolean {
+  return installmentPurchase(row) && ordinal(row.curPaymentNum) !== null;
 }
 
 /**
@@ -822,25 +834,24 @@ function extractGroup(
   const installments = rows
     .map((item) => ordinal(item.curPaymentNum, cancel))
     .filter((item): item is number => item !== null);
-  // Every row states the planned count, structurally or in its installment
-  // texts; the recent endpoint can leave the structured count null.
-  const statedCounts = unique([
-    ...rows.flatMap((item) => {
-      const count = ordinal(
-        status === "posted" ? item.numOfPayments : item.numberOfPayments,
-      );
-      return count === null ? [] : [count];
-    }),
-    ...stated(rows).flatMap((item) =>
-      item.parsed?.template === "installment_count" && item.parsed.count > 0
-        ? [item.parsed.count]
-        : [],
-    ),
-  ]);
+  const statedCounts = statedInstallmentCounts(rows, status);
   if (statedCounts.length > 1) {
     issues.push("conflicting_installment_facts");
   }
   const sourceCount = statedCounts.length === 1 ? statedCounts[0]! : null;
+  // The ledger has no independent plan-role fact for a summary without size
+  // or ordinal. Keep its stated money, but never bill its principal as one charge.
+  const unresolvedInstallmentRole =
+    status === "posted" &&
+    rows.every(
+      (item) =>
+        token(item.transactionTypeCode) === "8" && item.refundInd === false,
+    ) &&
+    sourceCount === null &&
+    installments.length === 0;
+  if (unresolvedInstallmentRole) {
+    issues.push("unresolved_installment_role");
+  }
   if (
     sourceCount !== null &&
     installments.some((number) => number > sourceCount)
@@ -928,9 +939,11 @@ function extractGroup(
     currency,
     amountBasis: line
       ? "booked_entry"
-      : status === "posted"
-        ? "purchase_commitment"
-        : "authorization",
+      : unresolvedInstallmentRole
+        ? "unknown"
+        : status === "posted"
+          ? "purchase_commitment"
+          : "authorization",
     originalAmountMinor,
     originalCurrency,
     installmentCount,

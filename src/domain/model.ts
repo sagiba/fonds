@@ -363,6 +363,53 @@ export function paymentContextConflicts(
   );
 }
 
+export const sourceAbsenceSchema = z
+  .object({
+    runId: z.string().min(1).max(RESOURCE_ID_MAX_LENGTH),
+    capturedAt: z.string(),
+  })
+  .strict();
+
+export type SourceAbsence = z.infer<typeof sourceAbsenceSchema>;
+
+const sourceReceiptSchema = z
+  .object({
+    runId: z.string().min(1).max(RESOURCE_ID_MAX_LENGTH),
+    capturedAt: z.string(),
+  })
+  .strict();
+
+/** Engine-owned capture comparisons, separate from accepted financial facts. */
+export const sourceEvidenceSchema = z
+  .object({
+    identity: z
+      .object({
+        financialFingerprint: z.string().min(1).optional(),
+        runId: z.string().min(1).max(RESOURCE_ID_MAX_LENGTH).optional(),
+        capturedAt: z.string().optional(),
+        retiredFromMatching: z.boolean(),
+      })
+      .strict()
+      .refine(
+        (identity) =>
+          (identity.financialFingerprint !== undefined &&
+            identity.runId !== undefined &&
+            identity.capturedAt !== undefined) ||
+          (identity.retiredFromMatching &&
+            identity.financialFingerprint === undefined &&
+            identity.runId === undefined &&
+            identity.capturedAt === undefined),
+        "A source identity requires its captured comparison or explicit legacy retirement",
+      )
+      .optional(),
+    financial: sourceReceiptSchema
+      .extend({ continuitySignature: z.string().min(1).optional() })
+      .optional(),
+  })
+  .strict();
+
+export type SourceEvidence = z.infer<typeof sourceEvidenceSchema>;
+
 const retainedPendingSchema = z
   .object({
     ...sourceFactsShape,
@@ -372,6 +419,8 @@ const retainedPendingSchema = z
     id: z.string().min(1),
     connectionId: z.string().min(1),
     presence: presenceSchema,
+    sourceAbsence: sourceAbsenceSchema.optional(),
+    sourceEvidence: sourceEvidenceSchema.optional(),
     firstSeenAt: z.string(),
     lastSeenAt: z.string(),
     lastSeenRunId: z.string(),
@@ -393,6 +442,16 @@ const splitReceiptSchema = z
   })
   .strict();
 
+const postingOverlapSchema = z
+  .object({
+    postedId: z.string().min(1),
+    runId: z.string().min(1).max(RESOURCE_ID_MAX_LENGTH),
+    capturedAt: z.string(),
+    pendingFingerprint: z.string().min(1),
+    postedFingerprint: z.string().min(1),
+  })
+  .strict();
+
 const postingLinkSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -406,6 +465,7 @@ const postingLinkSchema = z
       .object({
         runId: z.string().min(1).max(RESOURCE_ID_MAX_LENGTH),
         capturedAt: z.string(),
+        overlap: postingOverlapSchema.optional(),
       })
       .strict()
       .nullable(),
@@ -415,6 +475,7 @@ const postingLinkSchema = z
 
 export const detailsSchema = sourceDetailsSchema.extend({
   postingLink: postingLinkSchema.optional(),
+  postingOverlap: postingOverlapSchema.optional(),
 });
 
 export type TransactionDetails = z.infer<typeof detailsSchema>;

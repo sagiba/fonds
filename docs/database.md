@@ -93,13 +93,21 @@ Candidate IDs and source references inside JSON are references, not foreign keys
 - **`transactions`** hold current transactions, private identity, lifecycle and
   canonical money/basis. Source identity is not unique. Mapped scalars have named
   columns; explanatory text, FX steps and source issues have typed JSON columns.
-  `provider_json` holds allowlisted source evidence. `details_json` and schedules
-  are absent.
-- **`transaction_observations`** owns freshness and latest references per
-  account/resource/scope; unchanged refreshes preserve transaction content.
-  **`transaction_reconciliation`** owns identity, interpretation, conflict and
-  rejection state. **`transaction_posting_links`** holds reversible pending
-  snapshots and split receipts, separately from mapped facts.
+  `provider_json` holds allowlisted source evidence; `source_absence_json` holds
+  the latest proving run and capture time, independently of observation state.
+  Null legacy values remain unknown: migration never derives absence from
+  `not_returned`. `details_json` and schedules are absent.
+- **`transaction_observations`** owns latest scoped freshness/references; unchanged
+  refreshes preserve content. **`transaction_reconciliation`** owns identity,
+  interpretation, conflict, rejection and private pending/posted overlap.
+  `source_evidence_json` separates captured identity and accepted financial receipts.
+  Unprovable legacy groups remain deferred indefinitely, including new charges,
+  making totals incomplete. Retries cannot repair provenance. IDs, money and
+  annotations survive; owner removal/recollection creates distinct identities
+  without annotation transfer.
+  **`transaction_posting_links`** holds reversible current pending components,
+  overlap evidence and split receipts, separate from mapped facts and immutable
+  events.
 - **`deferred_evidence`** holds declared evidence without safe transaction identity.
   Content-addressed rows retain first and last receipts, deduplicating evidence.
 - **`annotations`** have at most one row per transaction; absence has no row and
@@ -240,12 +248,11 @@ modify live auth rows as part of financial API work.
 
 ## Migrations
 
-This pre-release initializes empty storage from one `0001` baseline for
+This pre-release initializes from `0001` and numbered forward migrations for
 [SQLite/libSQL](../migrations/) and [PostgreSQL](../migrations/postgres/), covering
 `financial` and `operations`. Earlier pre-release layouts are unsupported: stop Fonds, explicitly recreate the database or volume, then
-initialize it again. This baseline reset is only before the first release;
-after release, published migrations stay immutable and changes append numbered
-forward migrations without gaps.
+initialize it again. Current baseline databases upgrade in place; migrations stay
+immutable and numbered without gaps.
 
 SQLite initializes on opening, libSQL and PostgreSQL at provisioning. One
 transaction under SQLite's write lock or a PostgreSQL advisory lock checks the

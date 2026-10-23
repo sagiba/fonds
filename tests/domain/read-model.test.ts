@@ -24,6 +24,12 @@ describe("spending total money roles", () => {
     const result = calculateTotals([
       { ...row, supersededById: "successor" },
       { ...row, presence: "removed" },
+      {
+        ...row,
+        presence: "not_returned",
+        sourceAbsence: { runId: "run", capturedAt: "2040-08-02T00:00:00Z" },
+        status: "pending",
+      },
       { ...row, status: "pending" },
       { ...row, kind: "income" },
       { ...row, kind: "transfer" },
@@ -31,9 +37,10 @@ describe("spending total money roles", () => {
     ]);
     expect(result).toMatchObject({
       includedCount: 0,
-      excludedCount: 6,
+      excludedCount: 7,
       excluded: {
         retiredOrRemoved: 2,
+        sourceAbsent: 1,
         pending: 1,
         transferOrIncome: 2,
         authorization: 1,

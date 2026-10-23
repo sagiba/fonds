@@ -3,6 +3,8 @@ import type {
   AnnotationData,
   CollectionFailureCode,
   JsonObject,
+  SourceAbsence,
+  SourceEvidence,
   StoredTransactionFacts,
 } from "./model.js";
 
@@ -66,6 +68,8 @@ export type Transaction = StoredTransactionFacts & {
   id: string;
   connectionId: string;
   presence: "seen" | "not_returned" | "removed";
+  sourceAbsence?: SourceAbsence | undefined;
+  sourceEvidence?: SourceEvidence | undefined;
   firstSeenAt: string;
   lastSeenAt: string;
   lastSeenRunId: string;

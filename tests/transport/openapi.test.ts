@@ -341,6 +341,15 @@ describe("OpenAPI document", () => {
     expect(propertySchema(transaction, "status")?.description).toEqual(
       expect.stringContaining("Source report status"),
     );
+    for (const path of ["/v1/transactions", "/v1/transactions/totals"]) {
+      const presence = operation(document, "get", path).parameters?.find(
+        (parameter) => parameter.name === "presence",
+      );
+      expect(presence?.schema).toMatchObject({
+        enum: ["seen", "not_returned", "removed", "current", "all"],
+        default: "current",
+      });
+    }
     const metadata = operation(
       document,
       "patch",

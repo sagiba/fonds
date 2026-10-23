@@ -232,9 +232,13 @@ for (const row of projection) {
   // Signed minor units, truncated toward zero.
   assert.equal(exact(row.amount_minor), ((-native * 100n) / UNIT) * UNIT);
   assert.equal(row.currency, currencies[code(group[0]!.debCrdCurrencyCode)!]);
-  assert.ok(
-    row.amount_basis === "purchase_commitment" && row.booking_date === null,
+  assert.equal(
+    row.amount_basis,
+    row.source_identity.native_id === "SYNTHETIC-TXN-HISTORY"
+      ? "unknown"
+      : "purchase_commitment",
   );
+  assert.equal(row.booking_date, null);
   if (row.original_amount_minor !== null) {
     assert.ok(exact(row.original_amount_minor) * exact(row.amount_minor) > 0n);
   }

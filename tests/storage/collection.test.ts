@@ -35,7 +35,7 @@ const capture: CollectionEvent = {
   type: "capture",
   capture: {
     accountKey: "synthetic-account",
-    endpoint: "synthetic/recent",
+    endpoint: "synthetic:cal/recent",
     capturedAt: "2040-08-01T00:00:00Z",
     responseText,
   },
@@ -44,7 +44,7 @@ const failure: CollectionEvent = {
   type: "failure",
   failure: {
     accountKey: "synthetic-other",
-    endpoint: "synthetic/recent",
+    endpoint: "synthetic:cal/recent",
     code: "network_error",
   },
   fatal: false,
@@ -507,20 +507,37 @@ for (const backend of backends) {
         expect(await runs()).toBe(stored + 3);
       });
 
-      it("never caches a rejected capture, even though its ledger revision is unchanged", async () => {
+      it("never caches a rejected capture, under synthetic complete posted coverage, even with unchanged ledger revision", async () => {
+        // Invented completeness exercises lifecycle mechanics, not CAL provider guarantees.
+        const completeCalShape = {
+          ...calAdapter,
+          sourceCoverage: {
+            kind: "account_window" as const,
+            statuses: ["pending", "posted"] as const,
+            resources: ["cal:recent"],
+            dateField: "transactionDate" as const,
+            days: 60,
+          },
+          rejectEmptyRecentPosted: true,
+          rejectEmptyRecent: false,
+        };
         const date = new Date().toISOString().slice(0, 10);
         const populated = responseText
           .replaceAll("2040-05-20", date)
           .replaceAll("2040-06-11", date);
-        await collect([read("A", {}, populated)]);
-        await collect([read("B", {}, populated)]);
+        await collect([read("A", {}, populated)], db, completeCalShape);
+        await collect([read("B", {}, populated)], db, completeCalShape);
         const revision = await db.ledgerRevision(connectionId);
         const stored = await runs();
         const empty = JSON.parse(populated);
         empty.result.transactions = [];
         for (const groupPid of ["C", "D", "E"]) {
           expect(
-            await collect([read(groupPid, {}, JSON.stringify(empty))]),
+            await collect(
+              [read(groupPid, {}, JSON.stringify(empty))],
+              db,
+              completeCalShape,
+            ),
           ).toMatchObject({
             status: "failed",
             failureCodes: ["implausible_empty"],
@@ -529,7 +546,9 @@ for (const backend of backends) {
           expect(await db.ledgerRevision(connectionId)).toBe(revision);
         }
         expect(await runs()).toBe(stored + 3);
-        expect(await collect([read("F", {}, populated)])).toMatchObject({
+        expect(
+          await collect([read("F", {}, populated)], db, completeCalShape),
+        ).toMatchObject({
           status: "completed",
           unchanged: 1,
         });

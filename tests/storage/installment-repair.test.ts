@@ -412,7 +412,15 @@ describe.each(backends)("%s installment repair", (backend) => {
     expect((await parent()).sourceIssues).toContain(
       "conflicting_installment_restatement",
     );
-    await capture(12, [purchase(), line(1, 5)]);
+    // Missing role evidence cannot wash out an earlier explicit contradiction.
+    await capture(12, [
+      { ...purchase(), amountBasis: "unknown" },
+      line(1, null),
+    ]);
+    expect((await parent()).sourceIssues).toContain(
+      "conflicting_installment_restatement",
+    );
+    await capture(13, [purchase(), line(1, 5)]);
     expect((await parent()).installmentCount).toBeNull();
     expect((await parent()).sourceIssues).toContain(
       "conflicting_installment_plan",
