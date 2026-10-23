@@ -67,6 +67,7 @@ import {
   refreshDuplicatePlans,
 } from "./lifecycle.js";
 import { postingOverlapPairs } from "./posting-overlap.js";
+import { implausiblyEmpty, responseAbsence } from "./source-absence.js";
 import {
   declaredIdentityBase,
   financialFacts,
@@ -76,12 +77,7 @@ import {
   identityFingerprint,
   type SourceIdentityFacts,
 } from "./source-identity.js";
-import {
-  resourceKey,
-  scopeKey,
-  snapshotContainsRow,
-  sourceCoverage,
-} from "./source-membership.js";
+import { resourceKey, scopeKey, sourceCoverage } from "./source-membership.js";
 import { type DeferredCandidate, FinancialPlan } from "./state.js";
 
 const scopeSchema = z
@@ -1294,8 +1290,6 @@ export function extractRun(run: Run, adapter: SourceAdapter) {
   return { extracted, coverage, warnings, status, deferred };
 }
 
-type ExtractedResponse = ReturnType<typeof extractRun>["extracted"][number];
-
 function stalePartition(
   response: FinancialResponse,
   status: "posted" | "pending",
@@ -1312,60 +1306,6 @@ function stalePartition(
     ),
   );
   return latest !== undefined && latest > response.capturedAt;
-}
-
-/** Empty-response safeguards cannot grant coverage the source did not declare. */
-function implausiblyEmpty(
-  { response, result }: ExtractedResponse,
-  rows: Transaction[],
-  adapter: SourceAdapter,
-  history: ReturnType<typeof indexRunHistory>,
-  cardKeys: ReadonlyMap<string, string>,
-): boolean {
-  if (result.historical) {
-    return false;
-  }
-  const whollyEmpty = result.transactions.length === 0;
-  return result.partitions.some((partition) => {
-    if (
-      !(
-        (adapter.rejectEmptyRecent && whollyEmpty) ||
-        (adapter.rejectEmptyRecentPosted &&
-          partition.status === "posted" &&
-          !result.transactions.some((row) => row.status === "posted"))
-      ) ||
-      stalePartition(response, partition.status, adapter, history)
-    ) {
-      return false;
-    }
-    const coverage = sourceCoverage(adapter, response, partition);
-    if (!coverage) {
-      return false;
-    }
-    const coveredCurrent = (row: Transaction) =>
-      row.presence !== "removed" &&
-      row.sourceAbsence === undefined &&
-      !row.supersededById &&
-      row.lastSeenAt <= response.capturedAt &&
-      snapshotContainsRow(
-        adapter,
-        coverage,
-        row,
-        history.response(row.lastSeenRunId, row.sourceScope),
-        row.cardId ? cardKeys.get(row.cardId) : undefined,
-      );
-    return rows.some((row) => {
-      const link = row.details.postingLink;
-      return (
-        coveredCurrent(row) ||
-        (row.presence !== "removed" &&
-          !row.supersededById &&
-          link !== undefined &&
-          !link.split &&
-          coveredCurrent(link.pending))
-      );
-    });
-  });
 }
 
 /** Every financial operation uses the same content rule, including indirect review changes. */
@@ -1692,8 +1632,16 @@ export function planRun(
   );
   // Rejection applies to the whole run; collection and the CLI build one response per run.
   if (
-    extracted.some((entry) =>
-      implausiblyEmpty(entry, beforeRows, adapter, history, cardKeys),
+    extracted.some(({ response, result }) =>
+      implausiblyEmpty({
+        adapter,
+        response,
+        result,
+        history,
+        cardKeys,
+        rows: beforeRows,
+        stale: (status) => stalePartition(response, status, adapter, history),
+      }),
     )
   ) {
     const failureCode = reconciliationFailureCodeSchema.enum.implausible_empty;
@@ -1825,80 +1773,14 @@ export function planRun(
           .map(({ facts, capturedFinancial }) => [facts, capturedFinancial]),
       ),
     );
-    const comparableAbsence = (previous: Transaction) => {
-      const partition = result.partitions.find(
-        (part) => part.status === previous.status,
-      );
-      const coverage =
-        partition && !result.historical && !stalePartitions.has(previous.status)
-          ? sourceCoverage(adapter, response, partition)
-          : undefined;
-      return (
-        coverage !== undefined &&
-        previous.lastSeenAt <= response.capturedAt &&
-        snapshotContainsRow(
-          adapter,
-          coverage,
-          previous,
-          history.response(previous.lastSeenRunId, previous.sourceScope),
-          previous.cardId ? cardKeys.get(previous.cardId) : undefined,
-        )
-      );
-    };
-    // A previously accepted complete snapshot also constrains identities first
-    // discovered through a later-arriving archive. No raw response is required:
-    // an already observed native identity resolves to its existing row above.
-    const priorAbsence = (input: TransactionFacts, lastSeenAt?: string) => {
-      const prior = history.coverages.find(
-        ({ coverage }) =>
-          coverage.capturedAt >= response.capturedAt &&
-          (lastSeenAt === undefined || coverage.capturedAt > lastSeenAt) &&
-          snapshotContainsRow(
-            adapter,
-            coverage,
-            input,
-            response,
-            input.cardId ? cardKeys.get(input.cardId) : undefined,
-          ),
-      );
-      return (
-        prior && { runId: prior.runId, capturedAt: prior.coverage.capturedAt }
-      );
-    };
-    const reconciledAbsence = (
-      input: TransactionFacts,
-      previous: Pick<Transaction, "lastSeenAt" | "sourceAbsence">,
-    ) => {
-      const applicable = priorAbsence(input, previous.lastSeenAt);
-      const retained = previous.sourceAbsence;
-      if (!retained || retained.capturedAt < response.capturedAt) {
-        return applicable;
-      }
-      const witnesses = history.coverages.filter(
-        ({ runId: witnessRunId, coverage }) =>
-          witnessRunId === retained.runId &&
-          coverage.capturedAt === retained.capturedAt &&
-          coverage.accountKey === input.sourceScope &&
-          coverage.status === input.status,
-      );
-      // Facts have their own positive clock. A later negative receipt remains
-      // binding unless its retained scope disproves applicability to those facts.
-      const stillBinding =
-        witnesses.length === 0 ||
-        witnesses.some(({ coverage }) =>
-          snapshotContainsRow(
-            adapter,
-            coverage,
-            input,
-            response,
-            input.cardId ? cardKeys.get(input.cardId) : undefined,
-          ),
-        );
-      return stillBinding &&
-        (!applicable || retained.capturedAt >= applicable.capturedAt)
-        ? retained
-        : applicable;
-    };
+    const absence = responseAbsence({
+      adapter,
+      response,
+      result,
+      history,
+      cardKeys,
+      stale: (status) => stalePartitions.has(status),
+    });
     const continuations = planPostingContinuations({
       current,
       inputs,
@@ -1908,7 +1790,7 @@ export function planRun(
       response,
       history,
       index,
-      comparableAbsence,
+      comparableAbsence: absence.covers,
       baseline: baselineAccounts.has(response.accountKey),
     });
     const markSeen = (id: string, observed = true) => {
@@ -2208,7 +2090,7 @@ export function planRun(
         };
       }
       const continuation =
-        !previous && !priorAbsence(input)
+        !previous && !absence.prior(input)
           ? continuations.get(input)
           : undefined;
       if (continuation) {
@@ -2262,7 +2144,7 @@ export function planRun(
       }
       if (!previous) {
         recordPaymentContextConflicts(input, undefined);
-        const sourceAbsence = priorAbsence(input);
+        const sourceAbsence = absence.prior(input);
         plan.insertTransaction({
           ...input,
           ...storedPaymentContext(input, undefined),
@@ -2421,7 +2303,7 @@ export function planRun(
           newGroup.length === 1 &&
           !accepted.details.issues.includes("ambiguous_identity") &&
           !previous.details.issues.includes("ambiguous_identity")
-            ? reconciledAbsence(accepted, previous)
+            ? absence.reconciled(accepted, previous)
             : undefined;
         const presence = sourceAbsence ? "not_returned" : "seen";
         const presenceChanged =
@@ -2559,7 +2441,7 @@ export function planRun(
           row.lastSeenAt === response.capturedAt,
         absent: (row) =>
           !seenIds.has(row.id) &&
-          comparableAbsence(row) &&
+          absence.covers(row) &&
           !history.historical(row) &&
           row.lastSeenAt < response.capturedAt,
       });
@@ -2672,7 +2554,7 @@ export function planRun(
           });
           Object.assign(accepted, financial.facts);
           retainEvidence(pending, accepted, adapter);
-          const sourceAbsence = reconciledAbsence(accepted, pending);
+          const sourceAbsence = absence.reconciled(accepted, pending);
           pending = {
             ...pending,
             ...accepted,
@@ -2689,7 +2571,7 @@ export function planRun(
             lastSeenRunId: runId,
           };
         }
-      } else if (pending.presence !== "removed" && comparableAbsence(pending)) {
+      } else if (pending.presence !== "removed" && absence.covers(pending)) {
         pending.presence = "not_returned";
         if (
           !pending.sourceAbsence ||
@@ -2715,7 +2597,7 @@ export function planRun(
     }
     for (const previous of current) {
       if (
-        !comparableAbsence(previous) ||
+        !absence.covers(previous) ||
         seenIds.has(previous.id) ||
         previous.presence === "removed" ||
         previous.supersededById
