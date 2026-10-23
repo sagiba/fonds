@@ -902,9 +902,18 @@ async function checkInstalled(packed, scratch) {
     (await fondsOutput("help", "serve")).includes("local SQLite HTTP/MCP"),
     "help serve",
   );
+  assert(
+    (await fondsOutput("help", "--all")).includes("local SQLite CLI"),
+    "help --all",
+  );
+  // FONDS_HOME is known, so the check needs no path parsed from the text.
+  const database = join(home, "demo.sqlite");
   const demo = await fondsOutput("demo");
-  const database = demo.match(/^ {2}Database: +(.+)$/m)?.[1];
-  assert(database, `demo output: ${demo}`);
+  assert(
+    demo.includes("Demo ready") &&
+      demo.includes(`fonds totals --db ${database}`),
+    `demo output: ${demo}`,
+  );
 
   const responses = await stdioSession(
     fonds,

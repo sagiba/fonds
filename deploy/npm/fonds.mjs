@@ -4,7 +4,7 @@
 // otherwise SQLite, where `fonds serve …` runs the HTTP/stdio server and
 // anything else the CLI. Each loads only its own bundle.
 const args = process.argv.slice(2);
-if (args[0] === "help" && args.length === 2) {
+if (args[0] === "help" && args.length === 2 && !args[1].startsWith("-")) {
   args.shift();
   args.push("--help");
 }

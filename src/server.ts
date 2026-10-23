@@ -130,7 +130,7 @@ export async function startServer(args: string[], seams: ServerSeams = {}) {
       db: { type: "string" },
       transport: { type: "string", default: "http" },
       port: { type: "string", default: "8787" },
-      help: { type: "boolean" },
+      help: { type: "boolean", short: "h" },
     },
   });
   if (values.help) {

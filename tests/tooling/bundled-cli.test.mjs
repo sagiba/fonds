@@ -92,62 +92,86 @@ describe("bundled SQLite CLI", () => {
     });
   });
 
-  it("launches the emitted MCP configuration without the shell environment and sees every login", async () => {
-    const cli = await bundle(directory, data);
-    expect(cli("mcp-config")).toMatchObject({ status: 1, stdout: "" });
-    const demo = cli("demo");
-    expect(demo.status, demo.stderr).toBe(0);
-    const parseConfig = (output, name) =>
-      JSON.parse(
-        output
-          .split("\n")
-          .find((line) => line.trimStart().startsWith('{"mcpServers"')),
-      ).mcpServers[name];
-    const check = async (config, expected) => {
-      expect(config.command).toBe(process.execPath);
-      expect(config.env).toEqual({
-        FONDS_STATE_DIR: join(data, "owner's state"),
-      });
-      const client = new Client({ name: "setup-check", version: "1" });
-      try {
-        await client.connect(
-          new StdioClientTransport({
-            ...config,
-            cwd: data,
-            env: { PATH: "", ...config.env },
-            stderr: "pipe",
-          }),
-        );
-        const result = await client.callTool({
-          name: "list_connections",
-          arguments: {},
+  it(
+    "launches the emitted MCP configuration without the shell environment and sees every login",
+    // It builds the bundle and starts several CLI and MCP processes.
+    { timeout: 30_000 },
+    async () => {
+      const cli = await bundle(directory, data);
+      expect(cli("mcp-config")).toMatchObject({ status: 1, stdout: "" });
+      const demo = cli("demo");
+      expect(demo.status, demo.stderr).toBe(0);
+      const parseConfig = (output, name) =>
+        JSON.parse(
+          output
+            .split("\n")
+            .find((line) => line.trimStart().startsWith('{"mcpServers"')),
+        ).mcpServers[name];
+      const check = async (config, expected) => {
+        expect(config.command).toBe(process.execPath);
+        expect(config.env).toEqual({
+          FONDS_STATE_DIR: join(data, "owner's state"),
         });
-        expect(
-          result.structuredContent.data.map(({ id, provider }) => ({
-            id,
-            provider,
-          })),
-        ).toEqual(expected);
-      } finally {
-        await client.close();
-      }
-    };
-    await check(parseConfig(demo.stdout, "fonds-demo"), [
-      { id: "demo", provider: "cal" },
-    ]);
-    const connections = [
-      { id: "cal-one", provider: "cal" },
-      { id: "cal-two", provider: "cal" },
-      { id: "isracard-one", provider: "isracard" },
-    ];
-    expect(cli("init").status).toBe(0);
-    for (const { id, provider } of connections) {
-      expect(cli("connect", provider, "--name", id, "--offline").status).toBe(
-        0,
+        const client = new Client({ name: "setup-check", version: "1" });
+        try {
+          await client.connect(
+            new StdioClientTransport({
+              ...config,
+              cwd: data,
+              env: { PATH: "", ...config.env },
+              stderr: "pipe",
+            }),
+          );
+          const result = await client.callTool({
+            name: "list_connections",
+            arguments: {},
+          });
+          expect(
+            result.structuredContent.data.map(({ id, provider }) => ({
+              id,
+              provider,
+            })),
+          ).toEqual(expected);
+        } finally {
+          await client.close();
+        }
+      };
+      // demo's printed next step runs as it stands, then names one client.
+      const next = demo.stdout
+        .split("\n")
+        .find((line) => line.includes(" mcp-config "))
+        .trim();
+      const demoSetup = spawnSync(
+        "/bin/sh",
+        ["-c", `${next} --client claude-desktop`],
+        {
+          encoding: "utf8",
+          timeout: 15_000,
+          env: {
+            PATH: process.env.PATH,
+            FONDS_HOME: data,
+            FONDS_STATE_DIR: join(data, "owner's state"),
+          },
+        },
       );
-    }
-    const setup = cli("mcp-config");
-    expect(setup.status, setup.stderr).toBe(0);
-    await check(parseConfig(setup.stdout, "fonds"), connections);
-  });
+      expect(demoSetup.status, demoSetup.stderr).toBe(0);
+      await check(parseConfig(demoSetup.stdout, "fonds-demo"), [
+        { id: "demo", provider: "cal" },
+      ]);
+      const connections = [
+        { id: "cal-one", provider: "cal" },
+        { id: "cal-two", provider: "cal" },
+        { id: "isracard-one", provider: "isracard" },
+      ];
+      expect(cli("init").status).toBe(0);
+      for (const { id, provider } of connections) {
+        expect(cli("connect", provider, "--name", id, "--offline").status).toBe(
+          0,
+        );
+      }
+      const setup = cli("mcp-config", "--all");
+      expect(setup.status, setup.stderr).toBe(0);
+      await check(parseConfig(setup.stdout, "fonds"), connections);
+    },
+  );
 });

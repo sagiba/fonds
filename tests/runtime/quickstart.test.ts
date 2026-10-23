@@ -137,39 +137,52 @@ describe("quickstart", () => {
     rmSync(resolve(home, ".."), { recursive: true, force: true });
   });
 
-  it("runs demo idempotently and labels it synthetic", async () => {
-    const write = vi
-      .spyOn(process.stdout, "write")
-      .mockImplementation(() => true);
-    const events = async () => {
-      write.mockClear();
-      expect(
-        await main([
-          "list-events",
-          "--db",
-          join(home, "demo.sqlite"),
-          "--connection-id",
-          "demo",
-        ]),
-      ).toBe(0);
-      return String(write.mock.calls.at(-1)?.[0]);
-    };
-    try {
-      expect(await main(["demo"])).toBe(0);
-      const first = String(write.mock.calls.map((call) => call[0]).join(""));
-      expect(first).toMatch(/synthetic CAL data, not real transactions/);
-      expect(first).toMatch(/Transactions: +21 on connection "demo"/);
-      const before = await events();
-      write.mockClear();
-      expect(await main(["demo"])).toBe(0);
-      expect(String(write.mock.calls.map((call) => call[0]).join(""))).toMatch(
-        /Transactions: +21/,
-      );
-      expect(await events()).toBe(before);
-    } finally {
-      write.mockRestore();
-    }
-  });
+  it.each([
+    ["xterm", "✓", "·"],
+    ["dumb", "ok", "|"],
+  ])(
+    "runs demo idempotently and labels it synthetic with TERM=%s",
+    async (term, mark, separator) => {
+      vi.stubEnv("TERM", term);
+      vi.stubEnv("NO_COLOR", "1");
+      vi.stubEnv("FORCE_COLOR", undefined);
+      const write = vi
+        .spyOn(process.stdout, "write")
+        .mockImplementation(() => true);
+      const events = async () => {
+        write.mockClear();
+        expect(
+          await main([
+            "list-events",
+            "--db",
+            join(home, "demo.sqlite"),
+            "--connection-id",
+            "demo",
+          ]),
+        ).toBe(0);
+        return String(write.mock.calls.at(-1)?.[0]);
+      };
+      try {
+        expect(await main(["demo"])).toBe(0);
+        const first = String(write.mock.calls.map((call) => call[0]).join(""));
+        expect(first.split("\n")[0]).toBe(
+          `${mark} Demo ready: synthetic CAL data, no real accounts`,
+        );
+        expect(first).toContain(`  21 transactions ${separator} ledger `);
+        // A demo, not an installation manual: client setup is mcp-config's.
+        expect(first).not.toMatch(/mcp add|mcpServers|ChatGPT|Claude/);
+        const before = await events();
+        write.mockClear();
+        expect(await main(["demo"])).toBe(0);
+        expect(String(write.mock.calls.map((call) => call[0]).join(""))).toBe(
+          first,
+        );
+        expect(await events()).toBe(before);
+      } finally {
+        write.mockRestore();
+      }
+    },
+  );
 
   it("keeps consume a stream of compact JSON lines in a terminal", async () => {
     // consume waits for each line's write callback before advancing its cursor.
@@ -189,26 +202,31 @@ describe("quickstart", () => {
         configurable: true,
       });
       const db = join(home, "demo.sqlite");
-      expect(
-        await main([
-          "consume",
-          "--db",
-          db,
-          "--connection",
-          "demo",
-          "--consumer",
-          "tty",
-        ]),
-      ).toBe(0);
-      const lines = write.mock.calls.map((call) => String(call[0]));
-      expect(lines.length).toBeGreaterThan(1);
-      for (const line of lines) {
-        expect(line.endsWith("\n") && !line.slice(0, -1).includes("\n")).toBe(
-          true,
-        );
-        JSON.parse(line);
+      // --json is accepted and changes nothing: consume is always a stream.
+      for (const flags of [[], ["--json"]]) {
+        write.mockClear();
+        expect(
+          await main([
+            "consume",
+            "--db",
+            db,
+            "--connection",
+            "demo",
+            "--consumer",
+            `tty${flags.length}`,
+            ...flags,
+          ]),
+        ).toBe(0);
+        const lines = write.mock.calls.map((call) => String(call[0]));
+        expect(lines.length).toBeGreaterThan(1);
+        for (const line of lines) {
+          expect(line.endsWith("\n") && !line.slice(0, -1).includes("\n")).toBe(
+            true,
+          );
+          JSON.parse(line);
+        }
+        expect(JSON.parse(lines.at(-1)!).type).toBe("delivery_summary");
       }
-      expect(JSON.parse(lines.at(-1)!).type).toBe("delivery_summary");
     } finally {
       if (tty) {
         Object.defineProperty(process.stdout, "isTTY", tty);
@@ -229,9 +247,39 @@ describe("quickstart", () => {
     vi.stubEnv("PATH", dirname(launcher));
     try {
       expect(await main(["demo"])).toBe(0);
-      const output = String(write.mock.calls.map((call) => call[0]).join(""));
+      const demo = String(write.mock.calls.map((call) => call[0]).join(""));
       const demoDb = join(home, "demo.sqlite");
-      expect(output).toContain(`  fonds totals --db ${demoDb}`);
+      expect(demo).toContain(`  fonds totals --db ${demoDb}`);
+      expect(demo).toContain(
+        `  fonds mcp-config --db ${demoDb} --name fonds-demo`,
+      );
+      write.mockClear();
+      expect(
+        await main(["mcp-config", "--db", demoDb, "--name", "fonds-demo"]),
+      ).toBe(0);
+      const chooser = String(write.mock.calls.map((call) => call[0]).join(""));
+      for (const client of [
+        "chatgpt-desktop",
+        "claude-desktop",
+        "claude-code",
+        "codex",
+      ]) {
+        expect(chooser).toContain(
+          `  fonds mcp-config --client ${client} --name fonds-demo --db ${demoDb}\n`,
+        );
+      }
+      write.mockClear();
+      expect(
+        await main([
+          "mcp-config",
+          "--db",
+          demoDb,
+          "--name",
+          "fonds-demo",
+          "--all",
+        ]),
+      ).toBe(0);
+      const output = String(write.mock.calls.map((call) => call[0]).join(""));
       expect(output).toContain(
         `claude mcp add fonds-demo --scope local --transport stdio --env FONDS_STATE_DIR=${home} -- ${process.execPath}`,
       );
@@ -264,10 +312,24 @@ describe("quickstart", () => {
       const demo = cli(home, "demo");
       expect(demo.status, demo.stderr).toBe(0);
       const demoDb = join(home, "demo.sqlite");
-      expect(demo.stdout).toContain(`--db ${demoDb}`);
-      expect(demo.stdout).toMatch(
-        /claude mcp add fonds-demo .*--transport stdio --db/,
+      expect(demo.stdout).toContain(
+        `mcp-config --db ${demoDb} --name fonds-demo`,
       );
+      const setup = cli(
+        home,
+        "mcp-config",
+        "--db",
+        demoDb,
+        "--name",
+        "fonds-demo",
+        "--client",
+        "claude-code",
+      );
+      expect(setup.status, setup.stderr).toBe(0);
+      expect(setup.stdout).toMatch(
+        /claude mcp add fonds-demo .*--transport stdio .*--db/,
+      );
+      expect(setup.stdout).not.toMatch(/codex|mcpServers/);
 
       const list = cli(home, "list", "--db", demoDb, "--limit", "5");
       expect(list.status, list.stderr).toBe(0);
