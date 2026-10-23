@@ -1103,10 +1103,14 @@ function unknownCommand(name: string): string {
   return `Unknown command.${closest ? ` Did you mean ${closest.candidate}?` : ""} Use --help for usage.`;
 }
 
-/** Typed arguments without their cursor, to repeat a list from another page. */
+/**
+ * Typed arguments without their cursor, to repeat a list from another page;
+ * a trailing `--` would make an appended cursor positional.
+ */
 function withoutCursor(args: readonly string[]): string[] {
   return args.filter(
     (arg, index) =>
+      arg !== "--" &&
       arg !== "--cursor" &&
       !arg.startsWith("--cursor=") &&
       args[index - 1] !== "--cursor",

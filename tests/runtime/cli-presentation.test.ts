@@ -359,7 +359,7 @@ describe("transaction detail view", () => {
 });
 
 describe("unknown detail money", () => {
-  it("says an original amount is not stated and a converted row's fee is unknown", () => {
+  it("says an original amount is not established and a converted row's fee is unknown", () => {
     const converted = transactionView(
       {
         transaction: transaction({
@@ -376,7 +376,7 @@ describe("unknown detail money", () => {
       plain(),
       context(),
     );
-    expect(domestic).toMatch(/Original +not stated/);
+    expect(domestic).toMatch(/Original +not established$/m);
     expect(domestic).not.toContain("FX fee");
     const zero = transactionView(
       {
@@ -635,6 +635,17 @@ describe("list notes", () => {
     expect(notes("0000000000a2")).toMatch(
       /from -10\.00 USD · not returned · proven absent/,
     );
+    // Approval does not clear a review requirement.
+    const approved = transactionListView(
+      page([
+        transaction({
+          review: { required: true, status: "approved", stale: false },
+        }),
+      ]),
+      plain(120),
+      context(),
+    );
+    expect(approved).toContain("review still required");
     // The same money as the amount column is not repeated.
     expect(notes("0000000000a3")).not.toContain("from");
     expect(notes("0000000000a4")).toContain(
@@ -851,6 +862,11 @@ describe("totals view", () => {
     expect(billing).toMatch(/^Currency +Amount$/m);
     expect(billing).toMatch(/^ILS +-250\.00$/m);
     expect(billing).not.toMatch(/booked|commitment|FX fee/);
+    // Billing groups mix bases on purpose; the footer must not deny it.
+    expect(billing).toContain("Billing totals mix bases within a currency");
+    expect(billing).not.toContain(
+      "Each currency and basis is a separate total",
+    );
     const empty = totalsView(
       totalsOutputSchema.parse({
         totals: [],
@@ -1277,11 +1293,20 @@ describe("commands in a terminal", () => {
     for (const { id } of wire.data) {
       expect(human.stdout).toContain(id);
     }
-    const more = /^More: (.+)$/m.exec(human.stdout)?.[1];
-    // The command as typed, on the same ledger, from the next page.
-    expect(more).toMatch(/ list --db .+ --limit 5 --cursor \S+$/);
-    expect(
-      spawnSync("/bin/sh", ["-n"], { input: more, encoding: "utf8" }).status,
-    ).toBe(0);
+    // The command as typed, on the same ledger, from the next page; a
+    // trailing "--" must not turn the cursor into a positional.
+    for (const typed of [[], ["--"]]) {
+      const shown = await inTerminal(
+        ["list", "--db", db, "--limit", "5", ...typed],
+        { columns: 40, env: { NO_COLOR: "1" } },
+      );
+      const more = /^More: (.+)$/m.exec(shown.stdout)?.[1];
+      expect(more).toMatch(/ list --db .+ --limit 5 --cursor \S+$/);
+      const args = more!.split(" ");
+      const next = await piped(args.slice(args.indexOf("list")));
+      expect(next.status).toBe(0);
+      const ids = (JSON.parse(next.stdout) as { data: { id: string }[] }).data;
+      expect(ids[0]!.id).not.toBe(wire.data[0]!.id);
+    }
   });
 });

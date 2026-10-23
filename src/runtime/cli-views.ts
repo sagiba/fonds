@@ -93,10 +93,16 @@ function reviewNote(review: Transaction["review"]): string | undefined {
   if (review.stale) {
     return "review stale";
   }
-  return review.status === "needs_review" ||
-    (review.required && review.status === "unreviewed")
-    ? "needs review"
-    : undefined;
+  if (review.status === "needs_review") {
+    return "needs review";
+  }
+  // Approval does not clear source issues or posting candidates.
+  if (review.required) {
+    return review.status === "approved"
+      ? "review still required"
+      : "needs review";
+  }
+  return undefined;
 }
 
 /** Original money the amount column does not already show. */
@@ -363,7 +369,7 @@ export const transactionView: View<
       "Original",
       transaction.originalAmount
         ? money(transaction.originalAmount)
-        : "not stated",
+        : "not established",
     ],
     [
       "Status",
@@ -612,7 +618,9 @@ export const totalsView: View<Totals> = (totals, p, context) => {
     dim(
       p,
       wrap(
-        "Each currency and basis is a separate total; they are never added together.",
+        billing
+          ? "Billing totals mix bases within a currency to approximate what the card bills; they are not a reconciled statement or bank outflow. Currencies are never added together."
+          : "Each currency and basis is a separate total; they are never added together.",
         p.width,
       ),
     ),
