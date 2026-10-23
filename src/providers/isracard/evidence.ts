@@ -1,6 +1,8 @@
 import type { JsonObject, JsonValue } from "../../domain/model.js";
 import { canonicalJson } from "../../domain/observations.js";
 import {
+  currentSourceRowIndices,
+  currentSourceRows,
   evidenceList,
   evidenceObject,
   type EvidenceShape,
@@ -20,28 +22,32 @@ export const isracardDigitalRowShape =
   presentCard isTransactionSecure isWalletTransaction isdirectDebit isNewDirectDebit`);
 export const isracardApprovalRowShape =
   scalarFields(`confirmationLocation seqConfirmationNumber confirmationTimeStamp confirmationNumber
-  businessName purchaseDate originalAmount originalCurrency currencyIso currencySimbol ilsBillingAmount israelTransactionTime
-  transactionCode transactionDescription tranzacCodeType isTransactionSecure isWalletTransaction branchCodeDescription`);
+  businessName cityDescription country countryCode countryDesc clearedCode clearedDescription
+  purchaseDate originalAmount originalCurrency currencyIso currencyName currencySimbol ilsBillingAmount israelTransactionTime
+  transactionCode transactionDescription tranzacCodeType tranzacCodeDescription
+  securityIndicatorCode securityIndicatorDescription isTransactionSecure isWalletTransaction walletType walletTypeDescription
+  branchCodeType branchCodeDescription creditFromBusiness creditOrCharge directDebit`);
 export const isracardLegacyRowShape =
   scalarFields(`voucherNumber voucherNumberRatz voucherNumberRatzOutbound
   fullPurchaseDate fullPurchaseDateOutbound fullPaymentDate purchaseDate purchaseDateOutbound paymentDate
   paymentSum paymentSumOutbound paymentSumSign dealSum dealSumOutbound dealSumType
   currencyId currentPaymentCurrency kodMatbeaMekori
   fullSupplierNameHeb fullSupplierNameOutbound supplierId supplierName supplierNameOutbound city
-  moreInfo isHoraatKeva horaatKeva`);
+  moreInfo isHoraatKeva horaatKeva solek`);
 
 export const isracardDetailShape: EvidenceShape = {
   ...scalarFields(`voucherNumber voucherNumberRatz purchaseDateOutboundIsracard purchaseTime
     address phoneNumber city supplierId supplierName supplierNameIsracard motavName
-    transactionType walletPayName dealCode dealType numberOfPayments paymentNumber
+    transactionType walletPayName dealCode dealType wayOfDeal horaatKevaDesc reasonOfTransaction websiteName
+    numberOfPayments paymentNumber
     dealSum chargeSum chargeSumToDisplay dealSumOutbound dealSumOutboundInshekels
     currencyId currencyIdForCharge currencyIdOutbound linking
-    discount sumBeforeDiscount saleName secondSaleName moreInfo sector
+    discount sumBeforeDiscount saleName secondSaleName moreInfo sector clearingData solek
     moedChiuvFull valueDate conversionCurrency conversionDateZMD dateConversion dateConversionOutBound
     dollarConversion dollarTransferRate exchangeRateZMD
     commissionDiscountPercentage commissionDiscountSum commissionNetValue commissionNetValueCurrency
     interestPercentage interestSum moneyWithdrawalCommission dollarTransferCommissionPercentage
-    amlaDolarCa amlaDolarCaMatbea scumAmla sumDollar sumOfCompensation sumOfFund sumOfValueAddedTax`),
+    amlaDolarCa amlaDolarCaMatbea scumAmla sumDollar sumOfFund sumOfValueAddedTax`),
   Table1: [scalarFields("paymentNumber paymentDate paymentSum currencyId")],
 };
 
@@ -111,6 +117,7 @@ export const isracardStateShape: EvidenceShape = {
   identity: {
     ...scalarFields("baseKey occurrenceCount"),
     currentRows: ["scalar"],
+    latestDigitalRows: ["scalar"],
   },
   observations: [scalarFields("generation path")],
   monetaryEvidence: {
@@ -215,8 +222,65 @@ export function mergeIsracardEvidence(
   previous: JsonObject,
   incoming: JsonObject,
 ): JsonObject {
-  return mergeDeclaredEvidence(previous, incoming, {
+  const merged = mergeDeclaredEvidence(previous, incoming, {
     project: retainIsracardEvidence,
     componentKey,
   });
+  const digital = evidenceList(retainIsracardEvidence(incoming).rows).filter(
+    (row) => isracardEvidenceGeneration(row) === "digital",
+  );
+  const identity = projectIsracardState(incoming).identity;
+  return {
+    ...merged,
+    identity: {
+      ...(identity && typeof identity === "object" && !Array.isArray(identity)
+        ? identity
+        : {}),
+      latestDigitalRows: currentSourceRowIndices(
+        evidenceList(merged.rows),
+        digital.length > 0 ? digital : latestIsracardDigitalRows(previous),
+      ),
+    },
+  };
+}
+
+/** Row shape is an evidence boundary, not chronology; only the last observation supplies fallback facts. */
+export function latestIsracardDigitalRows(namespace: JsonObject): JsonValue[] {
+  const identity = namespace.identity;
+  if (
+    identity !== undefined &&
+    (!identity || typeof identity !== "object" || Array.isArray(identity))
+  ) {
+    return [];
+  }
+  if (identity && Object.hasOwn(identity, "latestDigitalRows")) {
+    return currentSourceRows({
+      rows: namespace.rows ?? [],
+      identity: { currentRows: identity.latestDigitalRows! },
+    }).filter((row) => isracardEvidenceGeneration(row) === "digital");
+  }
+  if (identity && Object.hasOwn(identity, "currentRows")) {
+    const current = currentSourceRows(namespace);
+    if (
+      current.length === 0 &&
+      (!Array.isArray(identity.currentRows) || identity.currentRows.length > 0)
+    ) {
+      return [];
+    }
+    const digital = current.filter(
+      (row) => isracardEvidenceGeneration(row) === "digital",
+    );
+    if (digital.length > 0) {
+      return digital;
+    }
+  }
+  // Without chronology, one retained statement per component is unambiguous;
+  // competing shape variants cannot be ordered by their values or array position.
+  const digital = evidenceList(retainIsracardEvidence(namespace).rows).filter(
+    (row) => isracardEvidenceGeneration(row) === "digital",
+  );
+  const keys = digital.map(componentKey);
+  return keys.includes(null) || new Set(keys).size !== keys.length
+    ? []
+    : digital;
 }

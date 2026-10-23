@@ -81,12 +81,13 @@ become review candidates.
 
 ## Absence and recovery
 
-Recent absence is compared over a 60-day horizon inside CAL's 90-day window. A
-missing purchase becomes `not_returned`, which never proves deletion; billed lines
-are never compared for absence. A successful but empty recent posted list is
-rejected as `implausible_empty` when the ledger still holds a recent posted row:
-the run is kept as failed and changes nothing. Accounts commit independently, so
-one invocation can be partial.
+Posted omissions change neither observation state nor totals. Pending omissions
+establish absence only within declared coverage. Covered pending rows make a
+wholly empty response fail `implausible_empty`, so a quiet card keeps a stale
+pending row, even once it leaves coverage. Verify against CAL before using
+[`confirm_removal`](../api.md#operations): history and annotations remain, but
+removal is an owner decision, not provider-proven cancellation.
+See [coverage rationale](../../src/providers/cal/source-notes.md#calwindow-recent-window-and-search-coverage).
 
 Authentication challenges, invalid credentials and rate limits stop the refresh,
 and repeated network or invalid-response failures stop after a bounded budget

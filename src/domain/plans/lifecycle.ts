@@ -7,15 +7,19 @@ import {
   detailsSchema,
   isBilledLine,
   paymentContextFields,
+  type ReadPaymentContext,
+  storedPaymentContext,
+  type TransactionDetails,
 } from "../model.js";
 import {
   canonicalJson,
   retainObservations,
   retainProviderEvidence,
 } from "../observations.js";
-import { inPerspective } from "../read-model.js";
+import { billedLinesByPurchase, inPerspective } from "../read-model.js";
 import { nextVersion, type Transaction } from "../records.js";
 import { canonicalAnnotation, reviewBasis, reviewState } from "./annotation.js";
+import { refreshInstallmentParents } from "./installments.js";
 import { FinancialPlan } from "./state.js";
 
 const versionSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
@@ -41,6 +45,7 @@ export interface PostingSplit {
 }
 
 interface AutomaticPosting {
+  overlap?: NonNullable<TransactionDetails["postingOverlap"]>;
   policyVersion: string;
   runId: string;
   capturedAt: string;
@@ -169,11 +174,12 @@ function removeCandidateReferences(
  */
 export function refreshDuplicatePlans(plan: FinancialPlan): Transaction[] {
   const rows = plan.orderedRows();
+  const children = billedLinesByPurchase(rows);
   const lookalikeKey = (row: Transaction) =>
     row.status === "posted" &&
     row.presence !== "removed" &&
     !row.supersededById &&
-    !inPerspective(row, "billing") &&
+    !inPerspective(row, "billing", children.has(row.id)) &&
     row.cardId !== null &&
     row.merchantName !== null &&
     row.amountMinor !== null &&
@@ -213,13 +219,36 @@ export function refreshDuplicatePlans(plan: FinancialPlan): Transaction[] {
   return changed;
 }
 
-/** Owner operations refresh lookalike plans and emit their review transitions. */
-function refreshDuplicatePlanReview(
+/**
+ * Owner operations reevaluate installment conflicts and lookalike plans, and
+ * emit their review transitions.
+ */
+function refreshPlanReview(
   plan: FinancialPlan,
   command: { actor: string; reason: string },
   now: string,
 ): void {
-  for (const before of refreshDuplicatePlans(plan)) {
+  // Only the purchases of rows this command wrote, before and after it.
+  const original = new Map(plan.snapshot.rows.map((row) => [row.id, row]));
+  const parents = new Set(
+    [...plan.transactionWrites.keys()].flatMap((id) => [
+      id,
+      ...[
+        original.get(id)?.purchaseId,
+        plan.transaction(id)?.purchaseId,
+      ].filter((purchaseId): purchaseId is string => purchaseId != null),
+    ]),
+  );
+  const changed = new Map<string, Transaction>();
+  for (const before of [
+    ...refreshInstallmentParents(plan, parents),
+    ...refreshDuplicatePlans(plan),
+  ]) {
+    if (!changed.has(before.id)) {
+      changed.set(before.id, before);
+    }
+  }
+  for (const before of changed.values()) {
     const annotation = plan.annotation(before.id)?.data;
     const beforeReview = reviewState(before, annotation);
     const afterReview = reviewState(plan.transaction(before.id)!, annotation);
@@ -239,6 +268,7 @@ function financialState(row: Transaction) {
     version: row.version,
     status: row.status,
     presence: row.presence,
+    sourceAbsence: row.sourceAbsence ?? null,
     amountMinor: row.amountMinor,
     currency: row.currency,
     amountBasis: row.amountBasis,
@@ -262,7 +292,9 @@ function financialState(row: Transaction) {
   };
 }
 
-function meaningfulAnnotation(data: AnnotationData | undefined): boolean {
+export function meaningfulAnnotation(
+  data: AnnotationData | undefined,
+): boolean {
   return (
     data !== undefined &&
     Boolean(
@@ -415,19 +447,40 @@ export function planPosting(
   }
   const cleanPending = withoutMatchIssue(pending);
   const cleanPosted = withoutMatchIssue(posted);
-  const { postingLink: _previousLink, ...pendingDetails } = pending.details;
+  const {
+    postingLink: _previousLink,
+    postingOverlap: _overlap,
+    ...pendingDetails
+  } = pending.details;
   // The survivor takes the posted row's payment context. A pending conflict
   // stays unless the posted row states that field.
   const { paymentContextConflicts: _postedConflicts, ...postedDetails } =
     cleanPosted.details;
+  const postedContext = storedPaymentContext(
+    automatic?.overlap
+      ? (Object.fromEntries(
+          paymentContextFields.map((field) => [
+            field,
+            posted[field] === null &&
+            !posted.details.paymentContextConflicts?.includes(field)
+              ? undefined
+              : posted[field],
+          ]),
+        ) as ReadPaymentContext)
+      : posted,
+    pending,
+  );
   const conflicts = paymentContextFields.filter(
     (field) =>
       posted.details.paymentContextConflicts?.includes(field) ||
-      (posted[field] === null &&
+      (postedContext[field] === null &&
         pending.details.paymentContextConflicts?.includes(field)),
   );
   const survivor: Transaction = {
     ...posted,
+    sourceAbsence: posted.sourceAbsence,
+    sourceEvidence: posted.sourceEvidence,
+    ...postedContext,
     id: pending.id,
     firstSeenAt: pending.firstSeenAt,
     version: nextVersion(pending.version),
@@ -456,7 +509,13 @@ export function planPosting(
         pendingKeys: [pending.sourceKey, ...pending.sourceAliases],
         postedKeys: [posted.sourceKey, ...posted.sourceAliases],
         evidence: automatic
-          ? { runId: automatic.runId, capturedAt: automatic.capturedAt }
+          ? {
+              runId: automatic.runId,
+              capturedAt: automatic.capturedAt,
+              ...(automatic.overlap?.postedId === posted.id
+                ? { overlap: automatic.overlap }
+                : {}),
+            }
           : null,
       },
       sourceRefs: retainObservations(
@@ -583,7 +642,7 @@ export function planPosting(
     command,
     now,
   );
-  refreshDuplicatePlanReview(plan, command, now);
+  refreshPlanReview(plan, command, now);
   return survivor;
 }
 
@@ -652,6 +711,8 @@ export function planUnlinkPosting(
   ];
   const pending = {
     ...link.pending,
+    sourceAbsence: link.pending.sourceAbsence,
+    sourceEvidence: link.pending.sourceEvidence,
     version: pendingVersion,
     details: detailsSchema.parse({
       ...link.pending.details,
@@ -688,6 +749,8 @@ export function planUnlinkPosting(
   );
   const posted: Transaction = {
     ...survivor,
+    sourceAbsence: survivor.sourceAbsence,
+    sourceEvidence: survivor.sourceEvidence,
     id: retired.id,
     firstSeenAt: retired.firstSeenAt,
     supersededById: null,
@@ -741,7 +804,7 @@ export function planUnlinkPosting(
       now,
     );
   }
-  refreshDuplicatePlanReview(plan, command, now);
+  refreshPlanReview(plan, command, now);
   return { pending, posted };
 }
 
@@ -798,6 +861,6 @@ export function planRemoval(
     });
   }
   removeCandidateReferences(plan, removed, [row.id], command, now);
-  refreshDuplicatePlanReview(plan, command, now);
+  refreshPlanReview(plan, command, now);
   return removed;
 }

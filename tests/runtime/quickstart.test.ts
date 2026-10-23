@@ -168,7 +168,7 @@ describe("quickstart", () => {
         expect(first.split("\n")[0]).toBe(
           `${mark} Demo ready: synthetic CAL data, no real accounts`,
         );
-        expect(first).toContain(`  22 transactions ${separator} ledger `);
+        expect(first).toContain(`  21 transactions ${separator} ledger `);
         // A demo, not an installation manual: client setup is mcp-config's.
         expect(first).not.toMatch(/mcp add|mcpServers|ChatGPT|Claude/);
         const before = await events();

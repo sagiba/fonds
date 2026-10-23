@@ -13,14 +13,53 @@ const CONTACTLESS = "עסקה שבוצעה באמצעות Contact less";
 const SECURE_PURCHASE =
   "עסקה זו בוצעה באינטרנט ואושרה על ידך באמצעות שירות קניה בטוחה";
 const ILS_CONVERSION =
-  /^בתאריך (\d{2}\/\d{2}\/\d{4}) בוצעה המרה ל-₪ בשער יציג (\d+\.\d{2,4})$/;
+  /^בתאריך (\d{2}\/\d{2}\/\d{4}) בוצעה המרה ל-₪ בשער יציג (\d+\.\d{1,4})$/;
 // The double space before "הבינלאומית" is part of the issuer's template.
 const USD_CONVERSION =
-  /^בתאריך (\d{2}\/\d{2}\/\d{4}) העסקה הומרה ל- (-?\d+(?:\.\d{1,2})?)\$ בשער (\d+\.\d{5,6})\. ההמרה ל- \$ בוצעה לפי שער חליפין מכירה של {2}הבינלאומית\.$/;
+  /^בתאריך (\d{2}\/\d{2}\/\d{4}) העסקה הומרה ל- (-?\d+(?:\.\d{1,2})?)\$ בשער (\d+\.\d{3,6})\. ההמרה ל- \$ בוצעה לפי שער חליפין מכירה של {2}הבינלאומית\.$/;
 const FX_FEE = 'עמלת עסקת מט"ח';
 const FX_FEE_DISCOUNT_MARKER = 'עסקה עם הנחה בעמלת מט"ח';
 const FX_FEE_DISCOUNT = 'סכום הנחה בעמלת עסקאות מט"ח';
 const AMOUNT = /^-?\d+(?:\.\d{1,2})?$/;
+
+/**
+ * Templates of the string slots `transTypeCommentDetails[]` and
+ * `onGoingTransactionsComment`, matched exactly. The installment templates
+ * state a plan's planned count; the amount templates restate the original
+ * purchase amount with a currency marker and optional digit groups.
+ */
+const INSTALLMENT_COUNT_DETAIL = /^עסקה ב-\u200e(\d+)\u200f תשלומים$/;
+const INSTALLMENT_COUNT_ONGOING = /^עסקה ב - (\d+) תשלומים$/;
+const STATED_AMOUNT = String.raw`(\D+?)(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)`;
+const ORIGINAL_AMOUNT = new RegExp(
+  `^\u200fסכום העסקה - \u200e${STATED_AMOUNT}\u200f$`,
+);
+const CASH_ORIGINAL_AMOUNT = new RegExp(`^משיכת מזומן -${STATED_AMOUNT}$`);
+
+export type CalStatedText =
+  | { template: "installment_count"; count: number }
+  | { template: "original_amount"; marker: string; amount: string };
+
+/** One string-slot text, parsed by exact template, or null. */
+export function calStatedText(text: string): CalStatedText | null {
+  const count =
+    INSTALLMENT_COUNT_DETAIL.exec(text) ?? INSTALLMENT_COUNT_ONGOING.exec(text);
+  if (count) {
+    const value = Number(count[1]);
+    // An unrepresentable count is no statement, as for structured counts.
+    return Number.isSafeInteger(value)
+      ? { template: "installment_count", count: value }
+      : null;
+  }
+  const amount = ORIGINAL_AMOUNT.exec(text) ?? CASH_ORIGINAL_AMOUNT.exec(text);
+  return amount
+    ? {
+        template: "original_amount",
+        marker: amount[1]!,
+        amount: amount[2]!.replaceAll(",", ""),
+      }
+    : null;
+}
 
 type ParsedComment =
   | { template: "contactless" }
@@ -204,6 +243,11 @@ function rowPaymentContext(
   );
   const walletCode = token(row.walletProviderCode);
   const walletDescription = row.walletProviderDesc;
+  const namedApplePay = walletCode === "3" && walletDescription === "Apple Pay";
+  const internetWallet =
+    walletCode === "32" ||
+    (["2", "14", "22", "85"].includes(walletCode ?? "") &&
+      walletDescription === "אינטרנט");
   const issues: string[] = [];
   const evidence: CalComment[] = [];
 
@@ -212,13 +256,12 @@ function rowPaymentContext(
     way === "12" ||
     way === "15" ||
     way === "35" ||
-    // Wallet code 32 (internet) alone evidences an online authorization.
-    walletCode === "32";
+    internetWallet ||
+    secureComments.length > 0 ||
+    // A named wallet used without card presence is remote wallet use, not a terminal tap.
+    (namedApplePay && row.transCardPresentInd === false);
   let authorizationMethod: CalPaymentContext["authorizationMethod"];
-  if (
-    (contactlessComments.length > 0 && way !== null && way !== "21") ||
-    (contactless && online)
-  ) {
+  if (contactless && online) {
     authorizationMethod = null;
     issues.push("conflicting_payment_context");
   } else if (contactless) {
@@ -230,7 +273,7 @@ function rowPaymentContext(
 
   const secureWay = way === "15" || way === "35";
   let threeDSecureUsed: true | null | undefined;
-  if (secureComments.length > 0 && way !== null && !secureWay) {
+  if (contactless && (secureComments.length > 0 || secureWay)) {
     threeDSecureUsed = null;
     issues.push("conflicting_payment_context");
   } else if (secureComments.length > 0 || secureWay) {
@@ -246,10 +289,7 @@ function rowPaymentContext(
           : undefined,
       authorizationMethod,
       // Only the reviewed code/label pair establishes a wallet.
-      wallet:
-        walletCode === "3" && walletDescription === "Apple Pay"
-          ? "apple_pay"
-          : undefined,
+      wallet: namedApplePay ? "apple_pay" : undefined,
       threeDSecureUsed,
       // A standing order is evidenced by its execution method or its type.
       recurring: way === "9" || typeCode === "9" ? true : undefined,

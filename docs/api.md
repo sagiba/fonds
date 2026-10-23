@@ -42,6 +42,15 @@ which runtimes offer refreshes.
 initialization. There are no public operations to create connections or export
 raw source responses; a backfill is a [refresh](#refreshes) with `{from, to}`.
 
+`GET /v1/openapi.json` is an unauthenticated
+[OpenAPI 3.1](https://spec.openapis.org/oas/v3.1.1) description of the `/v1`
+routes this deployment serves, generated from the operation definitions. The
+local server always serves it; a hosted deployment only with
+[`FONDS_PUBLIC_API_DESCRIPTION=1`](guides/hosted-service.md#configuration). It
+declares the hosted OAuth flow with each operation's scope, or the local bearer
+token, and carries no owner data. Its schemas give each input's shape; the value
+and combination rules this reference states still apply.
+
 The [command-line client](guides/local-setup.md#use-the-command-line) runs
 the same operations as kebab-case commands and flags and prints each operation's
 JSON output, embedded on a local database or against this API with `--remote`.
@@ -61,9 +70,10 @@ numbers and booleans instead. Unknown fields are rejected. No operation accepts
 provider credentials or a caller-supplied actor; the service assigns the actor for
 every mutation.
 
-Local HTTP, including `/health` and `/mcp`, requires the private bearer token and
-enforces loopback Host and Origin checks. Trusted local stdio inherits access from
-its parent process. Hosted requests need the owner, client, resource and scope the
+Local HTTP enforces loopback Host and Origin checks, and every route but the API
+description, including `/health` and `/mcp`, requires the private bearer token.
+Trusted local stdio inherits access from its parent process. Hosted requests need
+the owner, client, resource and scope the
 [security model](security-model.md#admission) admits. Financial HTTP responses
 send `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`.
 
@@ -95,29 +105,33 @@ observation freshness and card-to-account links update without an event.
 
 ## Transaction filters
 
-`list_transactions` and `get_transaction_totals` share these filters. An omitted
-filter imposes no restriction, except the stated `includeSuperseded` and
-`perspective` defaults. IDs are nonempty strings of at most 1,024 characters and
-match exactly.
+`list_transactions` and `get_transaction_totals` share these filters. Except for
+`presence`, `includeSuperseded` and `perspective`, omission imposes no restriction.
+IDs match exactly: nonempty strings of at most 1,024 characters.
 
-| Input                                          | Value                                               | Behavior                                                                                                                                                                                                |
-| ---------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `connectionId`                                 | ID                                                  | Restricts the read to one connection. Optional.                                                                                                                                                         |
-| `billingAccountId`                             | ID                                                  | Transactions whose card's **current** `billingAccountId` equals it. If a card is later linked to another account, its history moves with it, and the change emits no event; re-read cards and accounts. |
-| `cardId`                                       | ID                                                  | Transactions on one card.                                                                                                                                                                               |
-| `status`                                       | `pending` or `posted`                               | The source's report status.                                                                                                                                                                             |
-| `presence`                                     | `seen`, `not_returned` or `removed`                 |                                                                                                                                                                                                         |
-| `kind`                                         | [Kind](#fields)                                     |                                                                                                                                                                                                         |
-| `amountBasis`                                  | [Basis](#money-and-amount-basis)                    |                                                                                                                                                                                                         |
-| `currency`                                     | Uppercase ISO 4217 code                             | Matches the primary money's currency, not the original currency.                                                                                                                                        |
-| `merchantName`                                 | String, at most 4,096 characters                    | Exact match, not substring search.                                                                                                                                                                      |
-| `merchantCategoryCode`                         | Four digits                                         | Exact match. The shape does not certify registry membership.                                                                                                                                            |
-| `dateRole`, `from`, `to`                       | `transaction`, `booking` or `billing`; `YYYY-MM-DD` | `dateRole` is required when a bound is given. Bounds are inclusive dates from year 0001; a row with no date for the role matches neither.                                                               |
-| `cardPresent`, `threeDSecureUsed`, `recurring` | Boolean                                             | Match the stated [payment context](#payment-context).                                                                                                                                                   |
-| `authorizationMethod`, `wallet`                | [Enum](#fields)                                     |                                                                                                                                                                                                         |
-| `purchaseId`                                   | ID                                                  | Billed lines of one purchase. Requires `perspective` of `billing` or `all`.                                                                                                                             |
-| `includeSuperseded`                            | Boolean, default false                              | Includes rows retired by a pending-to-posted match. They stay ineligible for totals and appear only in the `retiredOrRemoved` exclusion count.                                                          |
-| `perspective`                                  | `spending` (default), `billing` or `all`            | See [perspectives](#perspectives).                                                                                                                                                                      |
+**Breaking change:** omitted `presence` now means `current`, not all retained
+presence states. `presence=all` includes history and exclusion diagnostics, not absent money.
+Superseded posting components require
+`includeSuperseded=true`.
+
+| Input                                          | Value                                                 | Behavior                                                                                                                                                                                                |
+| ---------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `connectionId`                                 | ID                                                    | Restricts the read to one connection. Optional.                                                                                                                                                         |
+| `billingAccountId`                             | ID                                                    | Transactions whose card's **current** `billingAccountId` equals it. If a card is later linked to another account, its history moves with it, and the change emits no event; re-read cards and accounts. |
+| `cardId`                                       | ID                                                    | Transactions on one card.                                                                                                                                                                               |
+| `status`                                       | `pending` or `posted`                                 | The source's report status.                                                                                                                                                                             |
+| `presence`                                     | `current`, `seen`, `not_returned`, `removed` or `all` | Defaults to `current`: retained rows without proven source absence or owner removal. Explicit states and `all` select history; `current` and `all` are query selectors, not row states.                 |
+| `kind`                                         | [Kind](#fields)                                       |                                                                                                                                                                                                         |
+| `amountBasis`                                  | [Basis](#money-and-amount-basis)                      |                                                                                                                                                                                                         |
+| `currency`                                     | Uppercase ISO 4217 code                               | Matches the primary money's currency, not the original currency.                                                                                                                                        |
+| `merchantName`                                 | String, at most 4,096 characters                      | Exact match, not substring search.                                                                                                                                                                      |
+| `merchantCategoryCode`                         | Four digits                                           | Exact match. The shape does not certify registry membership.                                                                                                                                            |
+| `dateRole`, `from`, `to`                       | `transaction`, `booking` or `billing`; `YYYY-MM-DD`   | `dateRole` is required when a bound is given. Bounds are inclusive dates from year 0001; a row with no date for the role matches neither.                                                               |
+| `cardPresent`, `threeDSecureUsed`, `recurring` | Boolean                                               | Match the stated [payment context](#payment-context).                                                                                                                                                   |
+| `authorizationMethod`, `wallet`                | [Enum](#fields)                                       |                                                                                                                                                                                                         |
+| `purchaseId`                                   | ID                                                    | Billed lines of one purchase. Requires `perspective` of `billing` or `all`.                                                                                                                             |
+| `includeSuperseded`                            | Boolean, default false                                | Includes rows retired by a pending-to-posted match. They stay ineligible for totals and appear only in the `retiredOrRemoved` exclusion count.                                                          |
+| `perspective`                                  | `spending` (default), `billing` or `all`              | See [perspectives](#perspectives).                                                                                                                                                                      |
 
 An unknown `cardId` or `billingAccountId` fails with `invalid_input`, as does one
 outside a given `connectionId`, or a card and an account given together from
@@ -246,7 +260,8 @@ stay separate.
 | `connectionId`            | string                                                                                        | Owning connection.                                                                                                                                                                                                                                                                                     |
 | `cardId`                  | string or null                                                                                | The [card](#card), or null for a record with no card.                                                                                                                                                                                                                                                  |
 | `status`                  | `pending` or `posted`                                                                         | The source's report status. `posted` does not establish a booking.                                                                                                                                                                                                                                     |
-| `presence`                | `seen`, `not_returned` or `removed`                                                           | `not_returned` means a comparable response omitted the row. It never implies cancellation.                                                                                                                                                                                                             |
+| `presence`                | `seen`, `not_returned` or `removed`                                                           | `seen` means last observed, not globally fresh. `not_returned` can mean omission, historical import or uncertain legacy state; consult `sourceAbsence`. `removed` is an owner decision.                                                                                                                |
+| `sourceAbsence`           | `{runId, capturedAt}` or null                                                                 | Receipt of a successful comparable capture proving omission within its coverage. Available in compact and detailed records. Null means no such proof, not verified presence.                                                                                                                           |
 | `kind`                    | `purchase`, `refund`, `income`, `transfer`, `fee`, `interest`, `cash_withdrawal` or `unknown` | Coarse classification, assigned only with explicit evidence. Sign alone never classifies.                                                                                                                                                                                                              |
 | `amountBasis`             | `booked_entry`, `authorization`, `purchase_commitment` or `unknown`                           | What `amount` is. Independent of `kind`. See [money](#money-and-amount-basis).                                                                                                                                                                                                                         |
 | `amount`                  | [Money](#money-and-amount-basis) or null                                                      | Primary money in its basis.                                                                                                                                                                                                                                                                            |
@@ -285,7 +300,8 @@ A payment-context field (`cardPresent`, `authorizationMethod`, `wallet`,
 `threeDSecureUsed`, `recurring`) is set only from explicit source evidence. When
 two source facts disagree, the typed field is `null` and the record carries
 `conflicting_payment_context`. A stored fact persists through later reads that do
-not mention it, and a history import never changes payment context;
+not mention it. Omitting an optional detail does not resolve a conflict with its
+retained evidence. A history import never changes payment context;
 [sync.ts](../src/domain/plans/sync.ts) owns the merge and conflict-clearing rules.
 
 ### Source issues and review reasons
@@ -304,29 +320,37 @@ for a client is:
 | `conflicting_payment_context`                                                                                                                                                                                                                                                                                                                                                              | A typed [payment-context](#payment-context) field is null.                                                                          |
 | `fx_unreconciled`, `conflicting_fx_comments`, `unverified_converted_installments`                                                                                                                                                                                                                                                                                                          | FX facts are withheld; see [foreign exchange](#foreign-exchange).                                                                   |
 | `conflicting_installment_total`, `conflicting_installment_facts`                                                                                                                                                                                                                                                                                                                           | The rows of one plan in one capture disagree on the total or a plan-level fact.                                                     |
-| `conflicting_installment_plan`                                                                                                                                                                                                                                                                                                                                                             | A later capture restates a purchase that has live billed lines as a non-plan; the plan's facts are kept.                            |
+| `conflicting_installment_plan`, `conflicting_installment_restatement`, `conflicting_installment_lines`                                                                                                                                                                                                                                                                                     | Plan facts disagree. Restatements await source resolution; line conflicts are reevaluated against live lines.                       |
 | `unresolved_purchase`                                                                                                                                                                                                                                                                                                                                                                      | A billed line's purchase cannot be resolved, so its `purchaseId` is null.                                                           |
 | `duplicate_installment_ordinal`                                                                                                                                                                                                                                                                                                                                                            | Another live billed line of the purchase states this ordinal; the amount is null until the owner removes one of them.               |
 | `invalid_installment_ordinal`, `unknown_installment_count`, `unverified_installment_amount_basis`, `invalid_installment_plan_voucher`                                                                                                                                                                                                                                                      | An installment ordinal, count, voucher or money role is missing, malformed, inconsistent or unproven; no plan or amount is guessed. |
 | `possible_duplicate_plan`                                                                                                                                                                                                                                                                                                                                                                  | Another posted plan purchase has the same card, merchant, installment count, amount, currency and date. Both stay counted.          |
 | `isracard_unverified_semantics`, `unverified_amount_basis`, `unsupported_transaction_type`, `source_derived_amount_direction`                                                                                                                                                                                                                                                              | Accounting semantics are unverified, so basis or kind stays `unknown`; the [Isracard guide](providers/isracard.md) says which.      |
 | `ambiguous_source_identity`, `weak_source_identity`, `incomplete_source_identity`, `ambiguous_identity`                                                                                                                                                                                                                                                                                    | The row's identity is not unique, or is missing parts. It is excluded from totals when ambiguous.                                   |
+| `unverified_legacy_identity`                                                                                                                                                                                                                                                                                                                                                               | Deferred new charges omitted; totals incomplete. [Recovery](database.md#what-the-financial-tables-hold).                            |
+| `unresolved_installment_role`                                                                                                                                                                                                                                                                                                                                                              | Unsupported installment role; no ordinary bill inferred.                                                                            |
 | `possible_pending_posted_match`                                                                                                                                                                                                                                                                                                                                                            | A pending-to-posted candidate exists; see `pendingPostingCandidateIds`.                                                             |
 | `unresolved_amount`, `unresolved_billing_amount`, `unresolved_companion_billing_amount`, `unresolved_installment_component`, `unresolved_original_amount`, `conflicting_generation_billing_amount`, `conflicting_original_amount`, `conflicting_billing_currency`, `conflicting_original_currency`, `unsupported_original_currency`, `unsupported_amount_direction`, `amount_out_of_range` | Money or currency could not be established or was contradictory; the affected amount is null.                                       |
-| `invalid_source_date`, `invalid_source_time`, `invalid_merchant_category_code`, `invalid_payment_history`, `invalid_transaction_detail`, `ambiguous_transaction_detail`, `informational_statement_row`, `unverified_legacy_source_role`                                                                                                                                                    | A source field was invalid, ambiguous or of an unverified role, and was not promoted.                                               |
+| `invalid_source_date`, `conflicting_billing_date`, `invalid_source_time`, `invalid_merchant_category_code`, `invalid_payment_history`, `invalid_transaction_detail`, `ambiguous_transaction_detail`, `informational_statement_row`, `unverified_legacy_source_role`                                                                                                                        | A source field was invalid, ambiguous or of an unverified role, and was not promoted.                                               |
 
 ### Versioned fields
 
-Retained content, including enrichment, `review.sourceIssues` and private provider
-evidence, is versioned. Changes increment `version` and emit
-`transaction.updated`. `changedFields` names fields; `evidence` signals private
-evidence changes without exposing values. Refetch even with visible fields unchanged. Observation freshness and references stay quiet; owner annotations are
-independently versioned.
+Retained content (enrichment, `review.sourceIssues`, private evidence) is versioned.
+Changes increment `version` and emit `transaction.updated`; `changedFields` names
+fields, while `evidence` signals private changes without values. Refetch despite
+unchanged visible fields. Freshness, references and repeated absence receipts stay
+quiet; absence/restoration transitions have lifecycle events. Annotations version
+independently. Linked pending-component changes signal `evidence` and invalidate
+unlink guards; link events remain immutable.
+
+`retained_financial_evidence` marks
+[missing-component financial retention](design.md#identity-corrections-and-absence),
+not renewed support.
 
 ### Detailed read
 
-`get_transaction` returns the detailed record by default. It replaces the annotation
-summary with the full annotation and adds:
+`get_transaction` defaults to detail, replacing annotation summaries with full
+annotations and adding:
 
 | Member                  | Meaning                                                                                                                                                                                                                                                         |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -419,20 +443,19 @@ purchase date and say nothing about billing dates.
 ## Perspectives
 
 `list_transactions` and `get_transaction_totals` take `perspective`. It selects
-which rows represent a plan, so that a purchase is counted once. Membership depends
-only on the row's own facts, never on whether child rows exist or on the other
-filters, which then apply within the perspective. The rule is `perspectiveRule` in
-[read-model.ts](../src/domain/read-model.ts).
+which rows represent a plan, so that a purchase is counted once. Membership never
+depends on the other filters, which then apply within the perspective. The rule is
+`perspectiveRule` in [read-model.ts](../src/domain/read-model.ts).
 
-| `perspective`        | Members                                                                                                                                       | Totals                                                |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| `spending` (default) | Every row with `purchaseId` null: purchases, single charges, standalone billed rows, fees and cancellations.                                  | Grouped by currency and `amountBasis`.                |
-| `billing`            | Every row except purchase rows with `installmentCount` of 2 or more and no `installmentNumber`. Those are counted through their billed lines. | One group per currency.                               |
-| `all`                | Every row.                                                                                                                                    | Rejected with `invalid_input`: it would double-count. |
+| `perspective`        | Members                                                                                                               | Totals                                                |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `spending` (default) | Every row with `purchaseId` null: purchases, single charges, standalone billed rows, fees and cancellations.          | Grouped by currency and `amountBasis`.                |
+| `billing`            | Every row except purchases with live billed lines or with `installmentCount` of 2 or more and no `installmentNumber`. | One group per currency.                               |
+| `all`                | Every row.                                                                                                            | Rejected with `invalid_input`: it would double-count. |
 
 Standalone rows appear in both `spending` and `billing` without double-counting,
-because no purchase row exists for them; a row whose `installmentCount` is null is
-never a plan purchase.
+because they have no purchase. Held lines stay unresolved; the purchase
+commitment is never substituted.
 
 Worked example, one currency: a −300.00 purchase in three installments of −100.00,
 with two billed lines observed so far, plus a −50.00 single charge (outflows are
@@ -451,7 +474,7 @@ reconciled statement or the amount that leaves a bank account.
 `get_transaction_totals` returns exact sums over the selected rows:
 `{totals, fxFees, fxFeeUnknownCount, includedCount, excludedCount, excluded}`,
 where `excluded` is
-`{pending, transferOrIncome, retiredOrRemoved, unresolved, authorization}`.
+`{pending, transferOrIncome, retiredOrRemoved, sourceAbsent, unresolved, authorization}`.
 
 - `totals` is a list of [money](#money-and-amount-basis) groups: one per currency
   and `amountBasis` (`spending`) or one per currency (`billing`, where
@@ -462,18 +485,24 @@ where `excluded` is
   published. Unknown is never zero.
 - `includedCount` counts eligible matching rows. `excludedCount` is the sum of the
   `excluded` buckets. In every perspective, each excluded row enters the first
-  applicable bucket, in the order: retired (superseded) or removed, pending,
+  applicable bucket, in the order: retired (superseded) or removed, `sourceAbsent`, pending,
   income or transfer, `authorization` basis, then unresolved, such as unknown
   basis or kind, or ambiguous identity.
-- `not_returned` alone does not remove a row from totals. An empty list of groups is
-  not proof that a refresh was complete.
+- Rows with `sourceAbsence` never contribute, even when selecting history.
+  `not_returned` alone does not exclude valid money. Absence implies no refund or
+  cancellation; no offsetting entry is invented. Empty totals prove no completeness.
 
 ## Pending-to-posted matching
 
 When a provider supports it, a pending authorization and its later posted row are
 matched conservatively and reversibly. The pending transaction keeps its ID and
 takes the posted facts, and the posted row is retired with `supersededById`. The
-match is one-to-one. Only providers that opt in take part (each provider guide
+match is one-to-one. Pending absence is independent: use `status=pending` and
+`presence=current` for retained authorizations without proven absence; explicit
+states and `all` expose history.
+Pending rows never enter spending totals. A witnessed overlap can link after later
+absence and sufficient evidence, but an annotated posted row requires owner review;
+automatic links never move annotation documents. Only providers that opt in take part (each provider guide
 says whether it does), and billed lines are never matched or linked. Shared
 safeguards govern every match; provider evidence can only narrow eligibility.
 An unclassified pending row may take a known posted purchase's classification
@@ -570,18 +599,18 @@ Each [event feed](#lists-and-cursors) entry is:
 values. `summary` appears on `sync.baseline` events as `{transactionCount, historical}`.
 Event IDs are integers, ordered ascending.
 
-| Type                                                               | Meaning                                                                         |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
-| `sync.baseline`                                                    | First successful capture of an account or resource, with a count summary.       |
-| `sync.partial`, `sync.failed`, `sync.recovered`                    | Sync run health.                                                                |
-| `transaction.imported`                                             | A record discovered by an initial or historical import. It is not new spending. |
-| `transaction.created`                                              | A record discovered by a later recent-window refresh.                           |
-| `transaction.updated`                                              | A versioned field changed.                                                      |
-| `transaction.posted`, `transaction.linked`, `transaction.unlinked` | Pending-to-posted transitions.                                                  |
-| `transaction.removed`                                              | The owner confirmed removal.                                                    |
-| `transaction.unlisted`, `transaction.restored`                     | A comparable response omitted or returned the row (presence).                   |
-| `transaction.review_required`, `transaction.review_resolved`       | Review state changed.                                                           |
-| `annotation.updated`                                               | The owner changed an annotation, or undid a change.                             |
+| Type                                                               | Meaning                                                                                                                             |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `sync.baseline`                                                    | First successful capture of an account or resource, with a count summary.                                                           |
+| `sync.partial`, `sync.failed`, `sync.recovered`                    | Sync run health.                                                                                                                    |
+| `transaction.imported`                                             | A discovery from an initial, historical or stale capture, or already contradicted by newer authoritative absence. Not new spending. |
+| `transaction.created`                                              | A discovery from a later fresh recent-window refresh, without newer authoritative absence.                                          |
+| `transaction.updated`                                              | A versioned field changed.                                                                                                          |
+| `transaction.posted`, `transaction.linked`, `transaction.unlinked` | Pending-to-posted transitions.                                                                                                      |
+| `transaction.removed`                                              | The owner confirmed removal.                                                                                                        |
+| `transaction.unlisted`, `transaction.restored`                     | A comparable response omitted or returned the row (presence).                                                                       |
+| `transaction.review_required`, `transaction.review_resolved`       | Review state changed.                                                                                                               |
+| `annotation.updated`                                               | The owner changed an annotation, or undid a change.                                                                                 |
 
 Events are thin. They identify records to refetch in their current state, and carry
 no object snapshot. Neither `created` nor `imported` proves when spending occurred.

@@ -12,6 +12,7 @@ import { sqliteMigrations } from "../../src/storage/sqlite/migration.js";
 import {
   d1Enabled,
   type Harness,
+  loadMiniflare,
   open,
   row,
   synthetic,
@@ -112,6 +113,111 @@ it("keeps each D1 migration a copy of the SQLite one, the initial one with the c
         : copy,
     ).toBe(sql);
   }
+});
+
+describe.skipIf(!d1Enabled)("guarded D1 write batches", () => {
+  it("upgrades legacy D1 rows atomically without inferring lifecycle evidence", async () => {
+    const Miniflare = await loadMiniflare();
+    const runtime = new Miniflare({
+      modules: true,
+      script: "export default {}",
+      d1Databases: ["DB"],
+    });
+    try {
+      const binding = await runtime.getD1Database("DB");
+      const migration = (name: string) =>
+        readFileSync(
+          new URL(`../../migrations/d1/${name}.sql`, import.meta.url),
+          "utf8",
+        )
+          .split(/;\s*$/m)
+          .map((statement) => statement.trim())
+          .filter(
+            (statement) => statement && !/^(--[^\n]*\n?)*$/.test(statement),
+          )
+          .map((statement) => binding.prepare(statement));
+      await binding.batch(migration("0001_initial"));
+      await binding
+        .prepare(
+          `
+      INSERT INTO connections(id,provider,display_name,config_json,created_at)
+      VALUES ('legacy','synthetic','Legacy','{"schemaVersion":1}','2040-01-01T00:00:00Z')
+    `,
+        )
+        .run();
+      await binding
+        .prepare(
+          `
+      INSERT INTO transactions (
+        id,connection_id,source_scope,source_key,source_aliases_json,
+        identity_strength,status,presence,kind,amount_minor,currency,amount_basis,
+        first_seen_at,version,source_issues_json,provider_json
+      ) VALUES (
+        'legacy-row','legacy','account','posted-old','[]',
+        'native','posted','not_returned','purchase',-12345,'USD','booked_entry',
+        '2040-01-01T00:00:00Z',1,'[]','{"synthetic":{"reference":"retained"}}'
+      )
+    `,
+        )
+        .run();
+      await binding
+        .prepare(
+          `
+      INSERT INTO transaction_reconciliation (
+        transaction_id,pending_posting_candidates_json,rejected_posting_keys_json
+      ) VALUES ('legacy-row','[]','[]')
+    `,
+        )
+        .run();
+      const rows = () => binding.prepare("SELECT * FROM transactions").all();
+      const reconciliation = () =>
+        binding.prepare("SELECT * FROM transaction_reconciliation").all();
+      const before = (await rows()).results;
+      const priorReconciliation = (await reconciliation()).results;
+      await expect(
+        binding.batch([
+          ...migration("0002_source_lifecycle"),
+          binding.prepare("INSERT INTO missing_relation VALUES (1)"),
+        ]),
+      ).rejects.toThrow("missing_relation");
+      expect((await rows()).results).toEqual(before);
+      expect((await reconciliation()).results).toEqual(priorReconciliation);
+      await binding.batch(migration("0002_source_lifecycle"));
+      expect((await rows()).results).toEqual([
+        { ...before[0], source_absence_json: null },
+      ]);
+      expect((await reconciliation()).results).toEqual([
+        {
+          ...priorReconciliation[0],
+          posting_overlap_json: null,
+          source_evidence_json: null,
+        },
+      ]);
+      const receipt =
+        '{"runId":"synthetic-absence","capturedAt":"2040-02-01T00:00:00Z"}';
+      const setAbsence = (value: string | null) =>
+        binding
+          .prepare("UPDATE transactions SET source_absence_json = ?")
+          .bind(value)
+          .run();
+      await setAbsence(receipt);
+      expect((await rows()).results).toEqual([
+        { ...before[0], source_absence_json: receipt },
+      ]);
+      await expect(setAbsence("not-json")).rejects.toThrow(
+        /CHECK constraint failed/i,
+      );
+      expect((await rows()).results).toEqual([
+        { ...before[0], source_absence_json: receipt },
+      ]);
+      await setAbsence(null);
+      expect((await rows()).results).toEqual([
+        { ...before[0], source_absence_json: null },
+      ]);
+    } finally {
+      await runtime.dispose();
+    }
+  });
 });
 
 // Local D1 runs in workerd through Miniflare; enable it with FONDS_TEST_D1=1.

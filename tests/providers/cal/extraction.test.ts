@@ -88,13 +88,13 @@ describe("CAL extraction", () => {
         "transSafeIndication",
         "srcCurrencyCode",
         "crmIccCurrencyDesc",
+        "crdExtIdNumTypeCode",
         "comments",
         "immediateComments",
         "transTypeCommentDetails",
       ]) {
         expect(retained[0]![key]).toEqual(original[key]);
       }
-      expect(retained[0]).not.toHaveProperty("crdExtIdNumTypeCode");
       expect(row.details).not.toHaveProperty("exchangeRate");
       expect(row.details).not.toHaveProperty("fees");
       expect(row.wallet ?? null).toBeNull();
@@ -146,7 +146,7 @@ describe("CAL extraction", () => {
     },
   );
 
-  it("omits an opaque pending indicator without changing authorization meaning", () => {
+  it("retains an opaque pending indicator without changing authorization meaning", () => {
     const response = baseline();
     response.result.transactions = [];
     response.result.clearanceRequests = [
@@ -164,7 +164,7 @@ describe("CAL extraction", () => {
     });
     expect(
       (row.details.provider.cal!.rows as SyntheticRow[])[0],
-    ).not.toHaveProperty("j5Indicator");
+    ).toHaveProperty("j5Indicator", "SYNTHETIC-UNINTERPRETED-INDICATOR");
     expect(row).toMatchObject({ cardPresent: false, wallet: null });
   });
 
@@ -205,7 +205,7 @@ describe("CAL extraction", () => {
 
   it.each([
     [3, "Apple Pay", true, "apple_pay", null],
-    [3, "Apple Pay", false, "apple_pay", null],
+    [3, "Apple Pay", false, "apple_pay", "online"],
     [32, "אינטרנט", false, null, "online"],
     [32, "אינטרנט", true, null, "online"],
     [0, "", false, null, null],
@@ -995,6 +995,6 @@ describe("CAL automatic posting capability", () => {
       pendingAmountBasis: "authorization",
       postedAmountBasis: "purchase_commitment",
     });
-    expect(calAdapter.parserVersion).toBe("cal-v12");
+    expect(calAdapter.parserVersion).toBe("cal-v15");
   });
 });

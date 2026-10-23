@@ -1,0 +1,1247 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { emptyDetails, type TransactionInput } from "../../src/domain/model.js";
+import { inPerspective } from "../../src/domain/read-model.js";
+import type { SourceAdapter } from "../../src/domain/source-adapter.js";
+import {
+  authorization,
+  postingAdapter,
+  postingHarness,
+} from "../helpers/posting.js";
+import {
+  backends,
+  type Harness,
+  insertTransactionFixture,
+  open,
+  row,
+  synthetic,
+} from "../helpers/storage-harness.js";
+
+const connectionId = "synthetic-installment-repair";
+const adapter: SourceAdapter = {
+  ...synthetic,
+  extract(text, context) {
+    return {
+      ...synthetic.extract(text, context),
+      historical: context.scope?.kind === "history",
+    };
+  },
+};
+
+function purchase(count: number | null = null): TransactionInput {
+  return row("plan", {
+    amountMinor: -12500,
+    installmentCount: count,
+    billingDate: count === null ? "2040-07-10" : null,
+    details: {
+      ...emptyDetails(),
+      issues: count === null ? ["unknown_installment_count"] : [],
+    },
+  });
+}
+
+function line(ordinal: number, count: number | null = 5): TransactionInput {
+  return row(`line-${ordinal}`, {
+    amountBasis: "booked_entry",
+    amountMinor: -2500,
+    installmentCount: count,
+    installmentNumber: ordinal,
+    purchaseKey: "plan",
+    billingDate: `2040-${String(ordinal + 6).padStart(2, "0")}-10`,
+  });
+}
+
+describe.each(backends)("%s installment repair", (backend) => {
+  let db: Harness;
+  beforeEach(async () => {
+    db = await open(backend);
+    await db.ensureConnection({ id: connectionId, provider: "cal" });
+  });
+  afterEach(() => db.close());
+
+  function capture(day: number, rows: TransactionInput[], historical = false) {
+    return db.ingestRun(
+      {
+        connectionId,
+        runId: `repair-${day}`,
+        responses: [
+          {
+            accountKey: "account",
+            endpoint: "synthetic:installments",
+            capturedAt: `2040-07-${String(day).padStart(2, "0")}T12:00:00Z`,
+            responseText: JSON.stringify(rows),
+            scope: { kind: historical ? "history" : "recent" },
+          },
+        ],
+      },
+      adapter,
+    );
+  }
+
+  async function parent() {
+    const rows = await db.listTransactions({
+      connectionId,
+      perspective: "all",
+    });
+    const parents = rows.filter((item) => item.sourceKey === "plan");
+    expect(parents).toHaveLength(1);
+    return parents[0]!;
+  }
+
+  async function expectBilling(keys: string[], amountMinor: number) {
+    const every = await db.listTransactions({
+      connectionId,
+      perspective: "all",
+    });
+    const page = await db.listTransactionPage({
+      connectionId,
+      perspective: "billing",
+      limit: 200,
+    });
+    expect(page.transactions.map((item) => item.sourceKey).sort()).toEqual(
+      keys,
+    );
+    expect(
+      every
+        .filter((item) =>
+          inPerspective(
+            item,
+            "billing",
+            every.some(
+              (child) =>
+                child.purchaseId === item.id &&
+                child.presence !== "removed" &&
+                !child.supersededById,
+            ),
+          ),
+        )
+        .map((item) => item.sourceKey)
+        .sort(),
+    ).toEqual(keys);
+    expect(
+      (await db.getTotals({ connectionId, perspective: "billing" })).totals,
+    ).toEqual([{ currency: "ILS", amountBasis: null, amountMinor }]);
+    expect((await db.getTotals({ connectionId })).totals).toEqual([
+      {
+        currency: "ILS",
+        amountBasis: "purchase_commitment",
+        amountMinor: -12500,
+      },
+    ]);
+  }
+
+  it("keeps a recent unknown-count purchase out of billing once historical lines link to it, without replacing newer money", async () => {
+    await capture(10, [purchase()]);
+    const before = await parent();
+    await capture(
+      11,
+      [
+        {
+          ...purchase(5),
+          amountMinor: -10000,
+          description: "Older synthetic description",
+        },
+        ...[1, 2, 3, 4, 5].map((ordinal) => line(ordinal)),
+      ],
+      true,
+    );
+    await capture(12, [purchase()]);
+    expect(await parent()).toMatchObject({
+      id: before.id,
+      installmentCount: null,
+      amountMinor: -12500,
+      description: "Synthetic",
+    });
+    expect((await parent()).sourceIssues).not.toContain(
+      "conflicting_installment_plan",
+    );
+    await expectBilling(
+      ["line-1", "line-2", "line-3", "line-4", "line-5"],
+      -12500,
+    );
+  });
+
+  it("clears already-stored null-count conflicts on an unchanged refresh and preserves annotations and identities", async () => {
+    await capture(10, [purchase()]);
+    await capture(11, [purchase(5), line(1), line(2)], true);
+    const stored = await parent();
+    // Reproduce a ledger written before repair, independently of ingestion behavior.
+    await insertTransactionFixture(
+      db,
+      [
+        {
+          ...stored,
+          installmentCount: null,
+          billingDate: "2040-07-10",
+          details: {
+            ...stored.details,
+            issues: [
+              "unknown_installment_count",
+              "conflicting_installment_plan",
+            ],
+          },
+        },
+      ],
+      "update",
+    );
+    await expectBilling(["line-1", "line-2"], -5000);
+    const annotation = await db.editAnnotation({
+      transactionId: stored.id,
+      expectedVersion: 0,
+      notes: "Keep this synthetic owner note",
+      category: "Synthetic category",
+    });
+    const identities = (await db.listTransactions({ perspective: "all" }))
+      .map((item) => [item.sourceKey, item.id, item.purchaseId])
+      .sort();
+    const priorEvents = (await db.listEvents()).length;
+    await capture(12, [purchase()]);
+    const repaired = await parent();
+    expect(repaired).toMatchObject({
+      id: stored.id,
+      installmentCount: null,
+      version: stored.version + 1,
+      annotation,
+    });
+    expect(repaired.sourceIssues).not.toContain("conflicting_installment_plan");
+    expect((await db.listEvents()).slice(priorEvents)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "transaction.updated",
+          transactionId: stored.id,
+        }),
+      ]),
+    );
+    expect(
+      (await db.listTransactions({ perspective: "all" }))
+        .map((item) => [item.sourceKey, item.id, item.purchaseId])
+        .sort(),
+    ).toEqual(identities);
+    await expectBilling(["line-1", "line-2"], -5000);
+
+    const events = await db.listEvents();
+    const versions = (await db.listTransactions({ perspective: "all" }))
+      .map((item) => [item.id, item.version])
+      .sort();
+    expect(await capture(13, [purchase()])).toMatchObject({
+      created: 0,
+      updated: 0,
+    });
+    expect(await capture(14, [purchase()])).toMatchObject({
+      created: 0,
+      updated: 0,
+    });
+    expect(await db.listEvents()).toEqual(events);
+    expect(
+      (await db.listTransactions({ perspective: "all" }))
+        .map((item) => [item.id, item.version])
+        .sort(),
+    ).toEqual(versions);
+    expect((await parent()).annotation).toEqual(annotation);
+  });
+
+  it("clears a known-count conflict stored by an unknown-count recapture before provenance", async () => {
+    await capture(10, [purchase(5), line(1), line(2)]);
+    const stored = await parent();
+    // The earlier policy flagged a later unknown-count capture as a restatement.
+    await insertTransactionFixture(
+      db,
+      [
+        {
+          ...stored,
+          details: {
+            ...stored.details,
+            issues: [
+              "unknown_installment_count",
+              "conflicting_installment_plan",
+            ],
+          },
+        },
+      ],
+      "update",
+    );
+    await capture(12, [purchase()]);
+    expect(await parent()).toMatchObject({
+      installmentCount: 5,
+      sourceIssues: ["unknown_installment_count"],
+    });
+  });
+
+  it("leaves a plan's count unknown when a capture's own plan facts conflict", async () => {
+    await capture(10, [purchase(5), line(1)]);
+    await capture(11, [
+      {
+        ...purchase(),
+        details: {
+          ...purchase().details,
+          issues: ["conflicting_installment_facts"],
+        },
+      },
+    ]);
+    const current = await parent();
+    expect(current.installmentCount).toBeNull();
+    expect(current.sourceIssues).toEqual(["conflicting_installment_facts"]);
+    await expectBilling(["line-1"], -2500);
+  });
+
+  it("still guards a plan when a capture with conflicting counts also restates its kind", async () => {
+    await capture(10, [purchase(4), line(1, 4)]);
+    await capture(11, [
+      {
+        ...purchase(),
+        kind: "refund",
+        amountMinor: 12500,
+        details: {
+          ...purchase().details,
+          issues: ["conflicting_installment_facts"],
+        },
+      },
+    ]);
+    const current = await parent();
+    expect(current).toMatchObject({
+      kind: "purchase",
+      amountMinor: -12500,
+      installmentCount: 4,
+    });
+    expect(current.sourceIssues).toContain(
+      "conflicting_installment_restatement",
+    );
+  });
+
+  it("keeps a single-payment restatement stored before provenance until the source restates a plan", async () => {
+    await capture(10, [purchase(5), line(1)]);
+    const stored = await parent();
+    // The earlier policy flagged an explicit single-payment capture this way.
+    await insertTransactionFixture(
+      db,
+      [
+        {
+          ...stored,
+          details: {
+            ...stored.details,
+            issues: ["conflicting_installment_plan"],
+          },
+        },
+      ],
+      "update",
+    );
+    await capture(11, [{ ...purchase(), amountMinor: -17000 }]);
+    const current = await parent();
+    expect(current).toMatchObject({ installmentCount: 5, amountMinor: -12500 });
+    expect(current.sourceIssues).toContain(
+      "conflicting_installment_restatement",
+    );
+    await capture(12, [{ ...purchase(5), amountMinor: -17000 }]);
+    expect(await parent()).toMatchObject({
+      amountMinor: -17000,
+      sourceIssues: [],
+    });
+  });
+
+  it("keeps the same purchase and billing members when history arrives first", async () => {
+    await capture(10, [purchase(5), line(1), line(2)], true);
+    const before = await parent();
+    await capture(11, [purchase()]);
+    expect(await parent()).toMatchObject({
+      id: before.id,
+      installmentCount: 5,
+      billingDate: null,
+    });
+    await expectBilling(["line-1", "line-2"], -5000);
+  });
+
+  it("retains the known plan count while accepting newer unknown-count purchase money and description", async () => {
+    await capture(10, [purchase(5), line(1), line(2)], true);
+    const before = await parent();
+    await capture(11, [
+      {
+        ...purchase(),
+        amountMinor: -13000,
+        description: "Corrected synthetic purchase",
+      },
+    ]);
+    const current = await parent();
+    expect(current).toMatchObject({
+      id: before.id,
+      installmentCount: 5,
+      billingDate: null,
+      amountMinor: -13000,
+      description: "Corrected synthetic purchase",
+    });
+    expect(current.sourceIssues).not.toContain("conflicting_installment_plan");
+    expect((await db.getTotals()).totals).toEqual([
+      {
+        currency: "ILS",
+        amountBasis: "purchase_commitment",
+        amountMinor: -13000,
+      },
+    ]);
+    expect((await db.getTotals({ perspective: "billing" })).totals).toEqual([
+      { currency: "ILS", amountBasis: null, amountMinor: -5000 },
+    ]);
+  });
+
+  it("never infers a count from a partial child window", async () => {
+    await capture(10, [purchase()]);
+    await capture(11, [purchase(5), line(3)], true);
+    await capture(12, [purchase()]);
+    expect((await parent()).installmentCount).toBeNull();
+    expect(await db.listTransactions({ perspective: "all" })).toHaveLength(2);
+    await expectBilling(["line-3"], -2500);
+  });
+
+  it("does not guess a count when linked lines disagree and never bills the parent twice", async () => {
+    await capture(10, [purchase()]);
+    await capture(11, [purchase(), line(1, 5), line(2, 6)], true);
+    await capture(12, [purchase()]);
+    const unresolved = await parent();
+    expect(unresolved.installmentCount).toBeNull();
+    expect(unresolved.sourceIssues).toContain("conflicting_installment_plan");
+    await expectBilling(["line-1", "line-2"], -5000);
+  });
+
+  it("does not erase an explicit single-payment conflict when previously unknown child counts become known", async () => {
+    await capture(10, [purchase(), line(1, null)]);
+    expect((await parent()).installmentCount).toBeNull();
+    expect((await parent()).sourceIssues).not.toContain(
+      "conflicting_installment_plan",
+    );
+    await capture(11, [purchase(1), line(1, null)]);
+    // The restatement keeps the plan's facts, including its unknown count.
+    expect((await parent()).installmentCount).toBeNull();
+    expect((await parent()).sourceIssues).toContain(
+      "conflicting_installment_restatement",
+    );
+    // Missing role evidence cannot wash out an earlier explicit contradiction.
+    await capture(12, [
+      { ...purchase(), amountBasis: "unknown" },
+      line(1, null),
+    ]);
+    expect((await parent()).sourceIssues).toContain(
+      "conflicting_installment_restatement",
+    );
+    await capture(13, [purchase(), line(1, 5)]);
+    expect((await parent()).installmentCount).toBeNull();
+    expect((await parent()).sourceIssues).toContain(
+      "conflicting_installment_plan",
+    );
+    await expectBilling(["line-1"], -2500);
+  });
+
+  it("does not infer a purchase's count from consistent explicit lines", async () => {
+    const input = [purchase(), line(1), line(2)];
+    await capture(10, input);
+    const before = await parent();
+    expect(before).toMatchObject({
+      installmentCount: null,
+      sourceIssues: ["unknown_installment_count"],
+    });
+    await expectBilling(["line-1", "line-2"], -5000);
+    const events = await db.listEvents();
+    expect(await capture(11, input)).toMatchObject({ created: 0, updated: 0 });
+    expect((await parent()).version).toBe(before.version);
+    expect(await db.listEvents()).toEqual(events);
+  });
+
+  it("flags a line whose ordinal exceeds the purchase's count when the line states none", async () => {
+    await capture(10, [purchase(3), line(4, null)]);
+    expect((await parent()).sourceIssues).toEqual([
+      "conflicting_installment_lines",
+      "conflicting_installment_plan",
+    ]);
+  });
+
+  it("keeps a source-stated plan billing date across refreshes", async () => {
+    const input = [
+      { ...purchase(3), billingDate: "2040-07-10" },
+      line(1, 3),
+      line(2, 3),
+    ];
+    await capture(10, input);
+    const before = await parent();
+    expect(before.billingDate).toBe("2040-07-10");
+    const unknown = [{ ...purchase(), billingDate: "2040-07-12" }];
+    await capture(11, unknown);
+    expect(await parent()).toMatchObject({
+      installmentCount: 3,
+      billingDate: "2040-07-10",
+    });
+    const events = await db.listEvents();
+    expect(await capture(12, unknown)).toMatchObject({
+      created: 0,
+      updated: 0,
+    });
+    expect(await db.listEvents()).toEqual(events);
+  });
+
+  it("flags a line without a count whose ordinal exceeds another line's count", async () => {
+    await capture(10, [purchase(), line(1, 3), line(4, 3)]);
+    await capture(11, [line(4, null)]);
+    expect((await parent()).sourceIssues).toEqual([
+      "conflicting_installment_lines",
+      "conflicting_installment_plan",
+      "unknown_installment_count",
+    ]);
+  });
+
+  it("flags unanimous lines that contradict the purchase's stated count", async () => {
+    await capture(10, [purchase(3), line(1, 3), line(2, 3)]);
+    await capture(11, [purchase(3), line(1, 4), line(2, 4)]);
+    const current = await parent();
+    expect(current.installmentCount).toBe(3);
+    expect(current.sourceIssues).toEqual([
+      "conflicting_installment_lines",
+      "conflicting_installment_plan",
+    ]);
+  });
+
+  it("keeps line-count conflicts stable when a single-payment purchase is captured again", async () => {
+    const input = [purchase(1), line(1, 5)];
+    await capture(10, input);
+    const before = await parent();
+    expect(before.sourceIssues).toEqual([
+      "conflicting_installment_lines",
+      "conflicting_installment_plan",
+    ]);
+    const events = await db.listEvents();
+    expect(await capture(11, input)).toMatchObject({ created: 0, updated: 0 });
+    expect(await parent()).toMatchObject({
+      version: before.version,
+      sourceIssues: before.sourceIssues,
+    });
+    expect(await db.listEvents()).toEqual(events);
+  });
+
+  it("treats a linked purchase recaptured as a refund as a restatement", async () => {
+    await capture(10, [purchase(), line(1, null)]);
+    await capture(11, [{ ...purchase(), kind: "refund", amountMinor: 12500 }]);
+    const current = await parent();
+    expect(current).toMatchObject({ kind: "purchase", amountMinor: -12500 });
+    expect(current.sourceIssues).toContain(
+      "conflicting_installment_restatement",
+    );
+  });
+
+  it("reevaluates line conflicts from accepted rows of a partly invalid capture", async () => {
+    await capture(10, [purchase(5), line(1, 6)]);
+    expect((await parent()).sourceIssues).toContain(
+      "conflicting_installment_lines",
+    );
+    await capture(11, [
+      line(1, 5),
+      { ...row("invalid"), amountMinor: 0.5 } as TransactionInput,
+    ]);
+    expect((await parent()).sourceIssues).toEqual([]);
+  });
+
+  it("does not infer a count from the highest ordinal when every child count is unknown", async () => {
+    await capture(10, [purchase()]);
+    await capture(11, [purchase(), line(3, null)], true);
+    await capture(12, [purchase()]);
+    expect((await parent()).installmentCount).toBeNull();
+    await expectBilling(["line-3"], -2500);
+  });
+
+  it("keeps a linked purchase out of billing even when all its lines are outside the requested date window", async () => {
+    await capture(10, [purchase(), line(3, null)]);
+    const stored = await parent();
+    await insertTransactionFixture(
+      db,
+      [{ ...stored, billingDate: "2040-07-10" }],
+      "update",
+    );
+    const filters = {
+      connectionId,
+      perspective: "billing" as const,
+      dateRole: "billing" as const,
+      from: "2040-07-01",
+      to: "2040-07-31",
+    };
+    expect((await db.listTransactionPage(filters)).transactions).toEqual([]);
+    expect((await db.getTotals(filters)).totals).toEqual([]);
+  });
+
+  it("preserves a known plan and flags an explicit single-payment restatement", async () => {
+    await capture(10, [purchase(5), line(1)]);
+    await capture(11, [{ ...purchase(1), billingDate: "2040-07-10" }]);
+    const current = await parent();
+    expect(current.installmentCount).toBe(5);
+    expect(current.sourceIssues).toContain("conflicting_installment_plan");
+    await expectBilling(["line-1"], -2500);
+    await capture(12, [purchase()]);
+    expect((await parent()).sourceIssues).toContain(
+      "conflicting_installment_plan",
+    );
+    expect((await parent()).installmentCount).toBe(5);
+    await capture(13, [purchase(5)]);
+    expect((await parent()).sourceIssues).not.toContain(
+      "conflicting_installment_plan",
+    );
+    await expectBilling(["line-1"], -2500);
+  });
+
+  it.each(["removed", "superseded"] as const)(
+    "does not suppress a standalone purchase because of a %s child",
+    async (state) => {
+      await capture(10, [purchase(), line(1, null)]);
+      const rows = await db.listTransactions({ perspective: "all" });
+      const stored = await parent();
+      const child = rows.find((item) => item.sourceKey === "line-1")!;
+      await expectBilling(["line-1"], -2500);
+      if (state === "removed") {
+        await db.confirmRemoval({
+          transactionId: child.id,
+          expectedVersion: child.version,
+          reason: "Synthetic removal",
+        });
+      } else {
+        const replacement = {
+          ...child,
+          id: "synthetic-replacement",
+          sourceKey: "replacement",
+          purchaseId: null,
+          installmentNumber: null,
+        };
+        await insertTransactionFixture(db, [replacement]);
+        await insertTransactionFixture(
+          db,
+          [{ ...child, supersededById: replacement.id }],
+          "update",
+        );
+      }
+      expect((await parent()).installmentCount).toBeNull();
+      expect(
+        (
+          await db.listTransactionPage({ perspective: "billing" })
+        ).transactions.map((item) => item.id),
+      ).toContain(stored.id);
+      expect((await db.getTotals({ perspective: "billing" })).totals).toEqual([
+        {
+          currency: "ILS",
+          amountBasis: null,
+          amountMinor: state === "removed" ? -12500 : -15000,
+        },
+      ]);
+    },
+  );
+
+  it.each([true, false])(
+    "clears resolved child-count conflicts on refresh when the purchase is present=%s",
+    async (includeParent) => {
+      await capture(10, [purchase(5), line(1, 5), line(2, 6)]);
+      expect((await parent()).sourceIssues).toContain(
+        "conflicting_installment_plan",
+      );
+      const bad = (await db.listTransactions({ perspective: "all" })).find(
+        (item) => item.sourceKey === "line-2",
+      )!;
+      await db.confirmRemoval({
+        transactionId: bad.id,
+        expectedVersion: bad.version,
+        reason: "Synthetic incorrect child removed",
+      });
+      const next = includeParent ? [purchase()] : [row("unrelated")];
+      await capture(11, next);
+      expect((await parent()).installmentCount).toBe(5);
+      expect((await parent()).sourceIssues).not.toContain(
+        "conflicting_installment_plan",
+      );
+      const current = await parent();
+      const events = await db.listEvents();
+      expect(await capture(12, next)).toMatchObject({ created: 0, updated: 0 });
+      expect((await parent()).version).toBe(current.version);
+      expect(await db.listEvents()).toEqual(events);
+    },
+  );
+
+  it("clears derived count conflicts after the sole conflicting child is removed while the parent is absent", async () => {
+    await capture(10, [purchase(5), line(1, 6)]);
+    expect((await parent()).sourceIssues).toContain(
+      "conflicting_installment_plan",
+    );
+    expect((await parent()).sourceIssues).toContain(
+      "conflicting_installment_lines",
+    );
+    const child = (await db.listTransactions({ perspective: "all" })).find(
+      (item) => item.sourceKey === "line-1",
+    )!;
+    await db.confirmRemoval({
+      transactionId: child.id,
+      expectedVersion: child.version,
+      reason: "Synthetic sole incorrect child removed",
+    });
+    await capture(11, [row("unrelated")]);
+    const resolved = await parent();
+    expect(resolved).toMatchObject({
+      installmentCount: 5,
+      amountMinor: -12500,
+    });
+    expect(resolved.sourceIssues).not.toContain("conflicting_installment_plan");
+    expect(resolved.sourceIssues).not.toContain(
+      "conflicting_installment_lines",
+    );
+    const events = await db.listEvents();
+    expect(await capture(12, [row("unrelated")])).toMatchObject({
+      created: 0,
+      updated: 0,
+    });
+    expect((await parent()).version).toBe(resolved.version);
+    expect(await db.listEvents()).toEqual(events);
+  });
+
+  it("resolves a derived conflict when the owner removes the conflicting line", async () => {
+    await capture(10, [purchase(5), line(1, 6)]);
+    const flagged = await parent();
+    expect(flagged.reviewRequired).toBe(true);
+    const child = (await db.listTransactions({ perspective: "all" })).find(
+      (item) => item.sourceKey === "line-1",
+    )!;
+    await db.confirmRemoval({
+      transactionId: child.id,
+      expectedVersion: child.version,
+      reason: "Synthetic incorrect child removed",
+    });
+    const resolved = await parent();
+    expect(resolved).toMatchObject({
+      installmentCount: 5,
+      sourceIssues: [],
+      reviewRequired: false,
+    });
+    expect(await db.listEvents()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "transaction.review_resolved",
+          transactionId: flagged.id,
+        }),
+      ]),
+    );
+  });
+
+  it("keeps the captured FX of a linked purchase whose count is unknown", async () => {
+    const withFx = {
+      ...purchase(),
+      fxFeeMinor: -100,
+      fxFeeCurrency: "ILS",
+      details: {
+        ...purchase().details,
+        currencyExchange: [
+          {
+            sourceCurrency: "USD",
+            targetCurrency: "ILS",
+            unitCurrency: "USD",
+            exchangeRate: "3.75",
+            quotationDate: "2040-07-01",
+          },
+        ],
+      },
+    };
+    await capture(10, [withFx, line(1, null)]);
+    expect(await parent()).toMatchObject({
+      installmentCount: null,
+      fxFeeMinor: -100,
+      fxFeeCurrency: "ILS",
+    });
+    expect((await parent()).details.currencyExchange).toHaveLength(1);
+    const before = await parent();
+    const events = await db.listEvents();
+    await capture(11, [withFx, line(1, null)]);
+    expect((await parent()).version).toBe(before.version);
+    expect(await db.listEvents()).toEqual(events);
+  });
+
+  it("keeps a linked purchase restated with an unverified basis stable", async () => {
+    await capture(10, [purchase(), line(1, null)]);
+    const restated: TransactionInput = {
+      ...purchase(),
+      amountBasis: "unknown",
+      fxFeeMinor: -100,
+      fxFeeCurrency: "ILS",
+    };
+    await capture(11, [restated]);
+    const before = await parent();
+    expect(before).toMatchObject({ fxFeeMinor: null, fxFeeCurrency: null });
+    const events = await db.listEvents();
+    expect(await capture(12, [restated])).toMatchObject({
+      created: 0,
+      updated: 0,
+    });
+    expect(await parent()).toMatchObject({
+      id: before.id,
+      version: before.version,
+    });
+    expect(await db.listEvents()).toEqual(events);
+  });
+
+  it("keeps FX on a single charge that a line names but cannot attach to", async () => {
+    await capture(10, [
+      {
+        ...row("plan"),
+        amountBasis: "booked_entry",
+        fxFeeMinor: -100,
+        fxFeeCurrency: "ILS",
+      },
+      line(1, null),
+    ]);
+    expect(await parent()).toMatchObject({
+      fxFeeMinor: -100,
+      fxFeeCurrency: "ILS",
+    });
+  });
+
+  it("keeps FX on purchases that share the key a line names", async () => {
+    const withFx = (key: string, aliases: string[] = []) => ({
+      ...purchase(),
+      sourceKey: key,
+      sourceAliases: aliases,
+      fxFeeMinor: -100,
+      fxFeeCurrency: "ILS",
+    });
+    await capture(10, [
+      withFx("a", ["b"]),
+      withFx("b"),
+      { ...line(1, null), purchaseKey: "b" },
+    ]);
+    const rows = await db.listTransactions({ perspective: "all" });
+    for (const key of ["a", "b"]) {
+      expect(rows.find((item) => item.sourceKey === key)).toMatchObject({
+        fxFeeMinor: -100,
+        fxFeeCurrency: "ILS",
+      });
+    }
+    expect(
+      rows.find((item) => item.sourceKey === "line-1")!.sourceIssues,
+    ).toContain("unresolved_purchase");
+  });
+
+  it("keeps FX on a purchase that shares an alias with a linked purchase", async () => {
+    const input: TransactionInput[] = [
+      { ...purchase(), sourceAliases: ["shared"] },
+      {
+        ...row("other"),
+        sourceAliases: ["shared"],
+        fxFeeMinor: -100,
+        fxFeeCurrency: "ILS",
+      },
+      line(1, null),
+    ];
+    await capture(10, input);
+    await capture(11, input);
+    expect(
+      (await db.listTransactions({ perspective: "all" })).find(
+        (item) => item.sourceKey === "other",
+      ),
+    ).toMatchObject({ version: 1, fxFeeMinor: -100, fxFeeCurrency: "ILS" });
+  });
+
+  it.each([true, false])(
+    "keeps a native purchase matched after a weak identity joins its group (lines=%s)",
+    async (withLines) => {
+      const identity = { cal: { identity: { baseKey: "shared" } } };
+      const native = {
+        ...purchase(),
+        details: { ...purchase().details, provider: identity },
+      };
+      const lines = withLines ? [line(1)] : [];
+      await capture(10, [native, ...lines]);
+      const input: TransactionInput[] = [
+        native,
+        {
+          ...row("weak"),
+          identityStrength: "weak",
+          amountMinor: -900,
+          details: { ...purchase().details, issues: [], provider: identity },
+        },
+        ...lines,
+      ];
+      await capture(11, input);
+      const snapshot = async () =>
+        (await db.listTransactions({ perspective: "all" }))
+          .map((item) => [item.sourceKey, item.id, item.purchaseId])
+          .sort();
+      const before = await snapshot();
+      for (const day of [12, 13]) {
+        await capture(day, input);
+        expect(await snapshot()).toEqual(before);
+      }
+    },
+  );
+
+  it("keeps a weak linked purchase's captured FX and identity stable", async () => {
+    const input: TransactionInput[] = [
+      {
+        ...purchase(),
+        identityStrength: "weak",
+        sourceAliases: ["plan-alias"],
+        fxFeeMinor: -100,
+        fxFeeCurrency: "ILS",
+      },
+      // Another purchase's alias collides with the weak purchase's key.
+      { ...row("other"), sourceAliases: ["plan"] },
+      { ...line(1, 5), purchaseKey: "plan-alias" },
+    ];
+    await capture(10, input);
+    const before = await parent();
+    expect(before).toMatchObject({
+      installmentCount: null,
+      fxFeeMinor: -100,
+      fxFeeCurrency: "ILS",
+    });
+    const events = await db.listEvents();
+    expect(await capture(11, input)).toMatchObject({ created: 0, updated: 0 });
+    expect(await parent()).toMatchObject({
+      id: before.id,
+      version: before.version,
+    });
+    expect(await db.listEvents()).toEqual(events);
+  });
+
+  it("keeps ambiguous purchases that differ only by FX matched to their own identities", async () => {
+    const ambiguous = (key: string, fxFeeMinor: number): TransactionInput => ({
+      ...purchase(),
+      sourceKey: key,
+      identityStrength: "ambiguous",
+      fxFeeMinor,
+      fxFeeCurrency: "ILS",
+      details: {
+        ...purchase().details,
+        provider: { cal: { identity: { baseKey: "shared" } } },
+      },
+    });
+    const input = [
+      ambiguous("b", -200),
+      ambiguous("a", -100),
+      { ...line(1, null), purchaseKey: "b" },
+    ];
+    await capture(10, input);
+    const ids = async () =>
+      Object.fromEntries(
+        (await db.listTransactions({ perspective: "all" })).map((item) => [
+          item.sourceKey,
+          [item.id, item.fxFeeMinor],
+        ]),
+      );
+    const before = await ids();
+    const events = await db.listEvents();
+    await capture(11, input);
+    expect(await ids()).toEqual(before);
+    expect(await db.listEvents()).toEqual(events);
+  });
+
+  it("keeps a restatement flagged after the owner removes the lines until the next capture", async () => {
+    await capture(10, [purchase(5), line(1)]);
+    await capture(11, [purchase(1)]);
+    const child = (await db.listTransactions({ perspective: "all" })).find(
+      (item) => item.sourceKey === "line-1",
+    )!;
+    await db.confirmRemoval({
+      transactionId: child.id,
+      expectedVersion: child.version,
+      reason: "Synthetic plan lines removed",
+    });
+    expect(await parent()).toMatchObject({
+      installmentCount: 5,
+      reviewRequired: true,
+    });
+    await capture(12, [purchase(1)]);
+    expect(await parent()).toMatchObject({
+      installmentCount: 1,
+      sourceIssues: [],
+    });
+  });
+
+  it("refreshes only the purchases an owner operation touches", async () => {
+    await capture(10, [purchase(), line(1), row("unrelated")]);
+    const other = (await db.listTransactions({ perspective: "all" })).find(
+      (item) => item.sourceKey === "unrelated",
+    )!;
+    const stored = await parent();
+    // A stale conflict that only the purchase's own refresh may clear.
+    const issues = [
+      "conflicting_installment_lines",
+      "conflicting_installment_plan",
+    ];
+    await insertTransactionFixture(
+      db,
+      [{ ...stored, details: { ...stored.details, issues } }],
+      "update",
+    );
+    await db.confirmRemoval({
+      transactionId: other.id,
+      expectedVersion: other.version,
+      reason: "Synthetic unrelated removal",
+    });
+    expect((await parent()).sourceIssues).toEqual(issues);
+  });
+
+  it("keeps an ambiguous linked purchase's captured FX and stays stable", async () => {
+    const input: TransactionInput[] = [
+      {
+        ...purchase(),
+        identityStrength: "ambiguous",
+        fxFeeMinor: -100,
+        fxFeeCurrency: "ILS",
+      },
+      line(1, null),
+    ];
+    await capture(10, input);
+    const before = await parent();
+    expect(before).toMatchObject({
+      identityStrength: "ambiguous",
+      installmentCount: null,
+      fxFeeMinor: -100,
+      fxFeeCurrency: "ILS",
+    });
+    const child = (await db.listTransactions({ perspective: "all" })).find(
+      (item) => item.sourceKey === "line-1",
+    )!;
+    expect(child.purchaseId).toBe(before.id);
+    const events = await db.listEvents();
+    expect(await capture(11, input)).toMatchObject({ created: 0, updated: 0 });
+    expect(await parent()).toMatchObject({
+      id: before.id,
+      version: before.version,
+    });
+    expect(await db.listEvents()).toEqual(events);
+  });
+
+  it("flags matching unknown-count linked purchases as possible duplicate plans without merging them", async () => {
+    const twin = (key: string, fields: Partial<TransactionInput> = {}) => [
+      { ...purchase(), sourceKey: key, ...fields },
+      {
+        ...line(1, null),
+        sourceKey: `${key}-line`,
+        purchaseKey: key,
+        ...fields,
+      },
+    ];
+    await capture(10, [
+      ...twin("plan"),
+      ...twin("twin"),
+      ...twin("different-merchant", {
+        merchantName: "Other synthetic merchant",
+      }),
+      ...twin("different-card", { cardKey: "other-card" }),
+    ]);
+    const rows = await db.listTransactions({ perspective: "all" });
+    for (const key of ["plan", "twin"]) {
+      const item = rows.find((entry) => entry.sourceKey === key)!;
+      expect(item.installmentCount).toBeNull();
+      expect(item.sourceIssues).toContain("possible_duplicate_plan");
+      expect(item.supersededById).toBeNull();
+    }
+    for (const key of ["different-merchant", "different-card"]) {
+      expect(
+        rows.find((item) => item.sourceKey === key)!.sourceIssues,
+      ).not.toContain("possible_duplicate_plan");
+    }
+    expect(rows).toHaveLength(8);
+  });
+
+  it("reports unresolved held billed lines instead of falling back to the unknown-count purchase amount", async () => {
+    await capture(10, [
+      purchase(),
+      line(1, null),
+      { ...line(1, null), sourceKey: "duplicate-line", amountMinor: -2400 },
+    ]);
+    const current = await parent();
+    expect(current).toMatchObject({
+      installmentCount: null,
+      amountMinor: -12500,
+    });
+    const page = await db.listTransactionPage({ perspective: "billing" });
+    expect(page.transactions.map((item) => item.sourceKey).sort()).toEqual([
+      "duplicate-line",
+      "line-1",
+    ]);
+    for (const item of page.transactions) {
+      expect(item.amountMinor).toBeNull();
+      expect(item.sourceIssues).toContain("duplicate_installment_ordinal");
+    }
+    expect(await db.getTotals({ perspective: "billing" })).toMatchObject({
+      totals: [],
+      includedCount: 0,
+      excluded: { unresolved: 2 },
+    });
+    expect((await db.getTotals()).totals).toEqual([
+      {
+        currency: "ILS",
+        amountBasis: "purchase_commitment",
+        amountMinor: -12500,
+      },
+    ]);
+  });
+
+  it("keeps unknown-count parent dates, versions and events stable across identical captures", async () => {
+    const input = [purchase(), line(1, null)];
+    await capture(10, input);
+    expect(await parent()).toMatchObject({
+      installmentCount: null,
+      billingDate: "2040-07-10",
+    });
+    const before = await parent();
+    const events = await db.listEvents();
+    expect(await capture(11, input)).toMatchObject({ created: 0, updated: 0 });
+    expect(await parent()).toMatchObject({
+      version: before.version,
+      billingDate: "2040-07-10",
+    });
+    expect(await db.listEvents()).toEqual(events);
+  });
+
+  it.each(["unknown_installment_count", "conflicting_installment_facts"])(
+    "holds accepted purchase money through %s after a single-payment contradiction until explicit plan resolution",
+    async (issue) => {
+      await capture(10, [purchase(5), line(1)]);
+      await capture(11, [{ ...purchase(1), amountMinor: -15000 }]);
+      expect((await parent()).amountMinor).toBe(-12500);
+      const unresolved = {
+        ...purchase(),
+        amountMinor: -17000,
+        details: { ...emptyDetails(), issues: [issue] },
+      };
+      await capture(12, [unresolved]);
+      expect(await parent()).toMatchObject({
+        installmentCount: 5,
+        amountMinor: -12500,
+      });
+      expect((await parent()).sourceIssues).toContain(
+        "conflicting_installment_plan",
+      );
+      expect((await parent()).sourceIssues).toContain(
+        "conflicting_installment_restatement",
+      );
+      await expectBilling(["line-1"], -2500);
+      const before = await parent();
+      const events = await db.listEvents();
+      for (const day of [13, 14]) {
+        await capture(day, [unresolved]);
+        expect(await parent()).toMatchObject({
+          id: before.id,
+          version: before.version,
+          installmentCount: 5,
+          amountMinor: -12500,
+          sourceIssues: before.sourceIssues,
+        });
+        expect(await db.listEvents()).toEqual(events);
+        await expectBilling(["line-1"], -2500);
+      }
+      await capture(15, [{ ...purchase(5), amountMinor: -17000 }]);
+      expect((await parent()).amountMinor).toBe(-17000);
+      expect((await parent()).sourceIssues).not.toContain(
+        "conflicting_installment_plan",
+      );
+    },
+  );
+});
+
+describe.each(backends)(
+  "%s installment refresh with a same-capture posting",
+  (backend) => {
+    let db: Harness;
+    let harness: ReturnType<typeof postingHarness>;
+    beforeEach(async () => {
+      db = await open(backend);
+      harness = postingHarness(db);
+      await db.ensureConnection({ id: harness.connectionId, provider: "cal" });
+    });
+    afterEach(() => db.close());
+
+    // Partitions follow the captured account, so one run can cover two.
+    const accounts: SourceAdapter = {
+      ...postingAdapter,
+      extract(text, context) {
+        const result = postingAdapter.extract(text, context);
+        for (const partition of result.partitions) {
+          partition.accountKey = context.accountKey;
+        }
+        return result;
+      },
+    };
+
+    type Responses = Record<string, TransactionInput[]>;
+
+    /** One run with a response per account, in insertion order. */
+    const run = (day: number, responses: Responses) =>
+      db.ingestRun(
+        {
+          connectionId: harness.connectionId,
+          runId: `combined-${day}`,
+          responses: Object.entries(responses).map(([accountKey, rows]) => ({
+            accountKey,
+            endpoint: "synthetic:cal/recent",
+            capturedAt: `2040-07-${String(day).padStart(2, "0")}T12:00:00Z`,
+            responseText: JSON.stringify(
+              rows.map((input) => ({ ...input, sourceScope: accountKey })),
+            ),
+          })),
+        },
+        accounts,
+      );
+    const pending = authorization("pending", {
+      merchantName: "Shop B Testburg NLD",
+    });
+    const posted = row("posted", { merchantName: "Shop B" });
+    const plan = [purchase(5), line(1, 6)];
+    it.each<[string, Responses, Responses]>([
+      [
+        "posting first",
+        { account: [pending, ...plan] },
+        { account: [posted, line(1, 5), purchase(5)] },
+      ],
+      [
+        "line first",
+        { account: [pending, ...plan] },
+        { account: [line(1, 5), posted, purchase(5)] },
+      ],
+      [
+        "purchase first",
+        { account: [pending, ...plan] },
+        { account: [purchase(5), line(1, 5), posted] },
+      ],
+      [
+        "posting in a later account",
+        { account: plan, card: [pending] },
+        // The purchase is absent, so only the refresh resolves its conflict.
+        { account: [line(1, 5)], card: [posted] },
+      ],
+    ])(
+      "resolves a line conflict once with the %s, and replays unchanged",
+      async (_order, first, responses) => {
+        await run(2, first);
+        const flagged = await harness.byKey("plan");
+        expect(flagged.reviewRequired).toBe(true);
+        const before = (await db.listEvents()).length;
+        await run(3, responses);
+        expect(
+          (await harness.byKey("posted")).details.postingLink,
+        ).toBeDefined();
+        expect(await harness.byKey("plan")).toMatchObject({
+          installmentCount: 5,
+          sourceIssues: [],
+          reviewRequired: false,
+        });
+        expect(
+          (await db.listEvents())
+            .slice(before)
+            .filter(
+              (event) =>
+                event.transactionId === flagged.id &&
+                event.type.startsWith("transaction.review_"),
+            )
+            .map((event) => [event.type, event.actor]),
+        ).toEqual([["transaction.review_resolved", "sync"]]);
+        const events = await db.listEvents();
+        const versions = (await db.listTransactions({ perspective: "all" }))
+          .map((item) => [item.id, item.version])
+          .sort();
+        await run(4, responses);
+        expect(await db.listEvents()).toEqual(events);
+        expect(
+          (await db.listTransactions({ perspective: "all" }))
+            .map((item) => [item.id, item.version])
+            .sort(),
+        ).toEqual(versions);
+      },
+    );
+  },
+);

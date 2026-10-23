@@ -344,6 +344,24 @@ for (const backend of [
             "pending-retained",
             "restored\u0000merchant",
           );
+          pending.sourceAbsence = { runId: "run", capturedAt: instant };
+          pending.sourceEvidence = {
+            identity: {
+              financialFingerprint: "synthetic-pending-comparison",
+              runId: "run",
+              capturedAt: instant,
+              retiredFromMatching: false,
+            },
+            financial: {
+              runId: "run",
+              capturedAt: instant,
+              continuitySignature: "synthetic-component",
+            },
+          };
+          expected[0]!.sourceEvidence = {
+            identity: { retiredFromMatching: true },
+          };
+          expected[1]!.sourceEvidence = structuredClone(pending.sourceEvidence);
           expected[0]!.details.postingLink = {
             schemaVersion: 1,
             policyVersion: "synthetic",
@@ -353,6 +371,22 @@ for (const backend of [
             pendingKeys: ["pending-retained"],
             postedKeys: ["retired"],
             evidence: { runId: "run", capturedAt: instant },
+          };
+          expected[1]!.details.postingOverlap = {
+            postedId: "tx-2",
+            runId: "run",
+            capturedAt: instant,
+            pendingFingerprint: "synthetic-pending-fingerprint",
+            postedFingerprint: "synthetic-posted-fingerprint",
+          };
+          expected[2]!.details.postingLink = {
+            ...structuredClone(expected[0]!.details.postingLink),
+            automatic: true,
+            evidence: {
+              runId: "run",
+              capturedAt: instant,
+              overlap: expected[1]!.details.postingOverlap,
+            },
           };
           for (const row of expected) {
             await db.write(row);
@@ -468,6 +502,61 @@ for (const backend of [
           await db.close();
         }
       }, 20_000);
+      it("round-trips confirmed absence separately from legacy presence and clears its evidence", async () => {
+        const db = await subject(postgres, d1);
+        try {
+          await db.query(
+            "INSERT INTO connections(id,provider,display_name,config_json,created_at) VALUES (?,?,?,?,?)",
+            ["synthetic", "cal", "Synthetic", '{"schemaVersion":1}', instant],
+          );
+          await db.query(
+            "INSERT INTO sync_runs(id,connection_id,started_at,status,collector_version,parser_version,metadata_json,coverage_json,warnings_json,evidence_digest) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            [
+              "run",
+              "synthetic",
+              instant,
+              "completed",
+              "synthetic",
+              "synthetic",
+              '{"schemaVersion":1,"responses":[]}',
+              "[]",
+              "[]",
+              "a".repeat(64),
+            ],
+          );
+          const legacy = transaction("absence", "ordinary");
+          legacy.presence = "not_returned";
+          await db.write(legacy);
+          expect((await db.read(legacy.id))[0]).toEqual(legacy);
+          expect(
+            await db.query("SELECT source_absence_json FROM transactions"),
+          ).toEqual([{ source_absence_json: null }]);
+          const confirmed = {
+            ...legacy,
+            sourceAbsence: { runId: "run", capturedAt: instant },
+          };
+          await db.write(confirmed, legacy);
+          expect((await db.read(legacy.id))[0]).toEqual(confirmed);
+          expect(
+            await db.query("SELECT source_absence_json FROM transactions"),
+          ).toEqual([
+            {
+              source_absence_json: JSON.stringify({
+                runId: "run",
+                capturedAt: instant,
+              }),
+            },
+          ]);
+          const restored = { ...confirmed, sourceAbsence: undefined };
+          await db.write(restored, confirmed);
+          expect((await db.read(legacy.id))[0]).toEqual(legacy);
+          expect(
+            await db.query("SELECT source_absence_json FROM transactions"),
+          ).toEqual([{ source_absence_json: null }]);
+        } finally {
+          await db.close();
+        }
+      });
       it("writes freshness and operational state without updating transaction content", async () => {
         const db = await subject(postgres, d1);
         try {
@@ -558,12 +647,51 @@ for (const backend of [
           expect((await db.read(original.id))[0]).toEqual(observed);
           const reconciled = structuredClone(observed);
           reconciled.details.rejectedPostingKeys = ["newly-rejected"];
+          reconciled.sourceEvidence = {
+            identity: {
+              financialFingerprint: "synthetic-private-comparison",
+              runId: "run",
+              capturedAt: instant,
+              retiredFromMatching: false,
+            },
+            financial: { runId: "run", capturedAt: instant },
+          };
+          reconciled.details.postingOverlap = {
+            postedId: "synthetic-posted",
+            runId: "run",
+            capturedAt: instant,
+            pendingFingerprint: "synthetic-pending-fingerprint",
+            postedFingerprint: "synthetic-posted-fingerprint",
+          };
           reconciled.details.provider.cal!.identity = {
             baseKey: "new-derived-base",
             occurrenceCount: 1,
           };
           await db.write(reconciled, observed);
           expect((await db.read(original.id))[0]).toEqual(reconciled);
+          expect(
+            await db.query(
+              "SELECT posting_overlap_json FROM transaction_reconciliation WHERE transaction_id = ?",
+              [original.id],
+            ),
+          ).toEqual([
+            {
+              posting_overlap_json: JSON.stringify(
+                reconciled.details.postingOverlap,
+              ),
+            },
+          ]);
+          const cleared = structuredClone(reconciled);
+          delete cleared.details.postingOverlap;
+          cleared.sourceEvidence = undefined;
+          await db.write(cleared, reconciled);
+          expect((await db.read(original.id))[0]).toEqual(cleared);
+          expect(
+            await db.query(
+              "SELECT posting_overlap_json FROM transaction_reconciliation WHERE transaction_id = ?",
+              [original.id],
+            ),
+          ).toEqual([{ posting_overlap_json: null }]);
           await expect(
             db.write(
               { ...reconciled, description: "Meaningful change" },

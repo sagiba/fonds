@@ -409,6 +409,7 @@ export function row(
 export const synthetic: SourceAdapter = {
   provider: "cal",
   parserVersion: "synthetic-v1",
+  sourceCoverage: { kind: "same_origin", statuses: ["pending", "posted"] },
   retainProviderEvidence: (value) =>
     evidenceObject(value, {
       retained: {

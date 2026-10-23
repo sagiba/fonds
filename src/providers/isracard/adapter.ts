@@ -1,23 +1,29 @@
 import type { SourceAdapter } from "../../domain/source-adapter.js";
+import { retainedPaymentContext } from "./enrichment.js";
 import {
   mergeIsracardEvidence,
   projectIsracardState,
   retainIsracardEvidence,
 } from "./evidence.js";
 import { extractIsracard } from "./extract.js";
+import { isracardFinancialAuthority } from "./financial-authority.js";
 import { compatibleIsracardPostingGroups } from "./posting-evidence.js";
 import { normalizeIsracardScope, validateIsracardScope } from "./scope.js";
 import { ISRACARD_ENDPOINTS } from "./transport.js";
 
 export const isracardAdapter: SourceAdapter = {
   provider: "isracard",
-  parserVersion: "isracard-v13",
+  parserVersion: "isracard-v17",
   retainProviderEvidence: retainIsracardEvidence,
   mergeProviderEvidence: mergeIsracardEvidence,
+  paymentContextFromRetainedEvidence: retainedPaymentContext,
   projectProviderState: projectIsracardState,
   extract: extractIsracard,
+  financialAuthority: isracardFinancialAuthority,
+  counterpartyKinds: ["transfer", "unknown"],
   validateScope: validateIsracardScope,
   normalizeScope: normalizeIsracardScope,
+  sourceCoverage: { kind: "same_origin", statuses: ["pending"] },
   pendingPostingCandidates: true,
   automaticPosting: {
     pendingAmountBasis: "authorization",

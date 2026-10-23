@@ -143,6 +143,76 @@ async function ingest(
 }
 
 describe("Isracard authorization extraction", () => {
+  it("projects same-row merchant location, named wallet and source descriptions without guessing accounting or security codes", () => {
+    const [row] = facts(
+      capture({
+        rows: [
+          {
+            ...approval(),
+            cityDescription: "Invented City",
+            countryCode: "ISR",
+            walletTypeDescription: "APPLE MC",
+            tranzacCodeDescription: "אינטרנט",
+            securityIndicatorCode: "V",
+            transactionDescription: "Synthetic authorization description",
+            transactionCode: 901,
+            branchCodeType: 14,
+            branchCodeDescription: "Synthetic category",
+            isWalletTransaction: 0,
+          },
+        ],
+      }),
+    );
+    expect(row).toMatchObject({
+      kind: "unknown",
+      amountBasis: "authorization",
+      wallet: "apple_pay",
+      cardPresent: false,
+      authorizationMethod: "online",
+      threeDSecureUsed: null,
+      merchantCategoryCode: null,
+      description: "Synthetic authorization description",
+      providerTransactionCode: "901",
+      details: { merchant: { city: "Invented City", countryCode: "ISR" } },
+    });
+  });
+
+  it.each([
+    "+99 555 5555",
+    "https://merchant.example",
+    "www.merchant.example",
+    "contact@merchant.example",
+    "SHOP.EXAMPLE.COM",
+    "help.example.com",
+    "shop.example.com/bill",
+  ])(
+    "keeps non-location pending city %s out of merchant fields",
+    (cityDescription) => {
+      const [row] = facts(
+        capture({
+          rows: [{ ...approval(), cityDescription, countryCode: "ZZZ" }],
+        }),
+      );
+      expect(row!.details.merchant).toMatchObject({
+        city: null,
+        countryCode: null,
+      });
+      expect(row!.details.provider.isracard!.rows).toEqual([
+        expect.objectContaining({ cityDescription, countryCode: "ZZZ" }),
+      ]);
+    },
+  );
+
+  it.each(["St. Louis", "St.Louis", "St.Jo"])(
+    "keeps dotted place-name candidate %s",
+    (cityDescription) => {
+      expect(
+        facts(capture({ rows: [{ ...approval(), cityDescription }] }))[0]!
+          .details.merchant.city,
+      ).toBe(cityDescription);
+    },
+  );
+
   it("uses the full opaque detail-address tuple, without confirmation display or purchase date, for native pending identity", () => {
     const source = capture();
     const result = extract(source);
@@ -713,6 +783,110 @@ describe("Isracard singleton posting admission", () => {
 });
 
 describe("Isracard pending lifecycle through storage", () => {
+  it("continues an overlapped legacy posting only after the same native identity gains verified DigitalV3 evidence", async () => {
+    const domestic = (pending: boolean, legacy: boolean, posted: boolean) => {
+      const source = example();
+      delete source.responses.details;
+      change(source, (payload) => {
+        payload.data.approvals = pending
+          ? { approvedTransactions: [approval()], totalEstimatedAmount: 86.4 }
+          : null;
+        if (!posted) {
+          payload.data.israelAbroadVouchers = null;
+        }
+      });
+      const statement = JSON.parse(source.responses.legacy!) as {
+        CardsTransactionsListBean: {
+          Index0: { CurrentCardTransactions: { txnIsrael: Row[] }[] };
+        };
+      };
+      const transactions =
+        statement.CardsTransactionsListBean.Index0.CurrentCardTransactions[0]!;
+      transactions.txnIsrael = legacy
+        ? [
+            {
+              ...transactions.txnIsrael[0]!,
+              fullSupplierNameHeb: "Synthetic merchant",
+            },
+          ]
+        : [];
+      source.responses.legacy = JSON.stringify(statement);
+      return source;
+    };
+    const db = await openDatabase(":memory:");
+    try {
+      await ingest(db, domestic(true, false, false), 0);
+      const pending = (await db.listTransactions({ status: "pending" }))[0]!;
+      await db.editAnnotation({
+        transactionId: pending.id,
+        expectedVersion: 0,
+        notes: "Synthetic delayed purchase note",
+      });
+      await ingest(db, domestic(true, true, false), 1);
+      const posted = (await db.listTransactions({ status: "posted" }))[0]!;
+      expect(posted).toMatchObject({
+        identityStrength: "native",
+        kind: "unknown",
+        amountBasis: "unknown",
+        amountMinor: -8640,
+        currency: "ILS",
+      });
+      const witness = (await db.getTransaction(pending.id))!.details
+        .postingOverlap;
+      expect(witness).toMatchObject({
+        postedId: posted.id,
+        runId: "synthetic-pending-1",
+      });
+      await ingest(db, domestic(false, true, false), 2);
+      expect(await db.getTransaction(pending.id)).toMatchObject({
+        status: "pending",
+        presence: "not_returned",
+        details: { postingOverlap: witness },
+        annotation: { data: { notes: "Synthetic delayed purchase note" } },
+      });
+      expect((await db.getTransaction(posted.id))!.details.postingLink).toBe(
+        undefined,
+      );
+
+      const enriched = domestic(false, true, true);
+      expect(extract(enriched).transactions).toEqual([
+        expect.objectContaining({
+          sourceKey: posted.sourceKey,
+          identityStrength: "native",
+          kind: "purchase",
+          amountBasis: "purchase_commitment",
+        }),
+      ]);
+      await ingest(db, enriched, 3);
+      const survivor = (await db.getTransaction(pending.id))!;
+      expect(survivor).toMatchObject({
+        id: pending.id,
+        status: "posted",
+        kind: "purchase",
+        amountBasis: "purchase_commitment",
+        amountMinor: -8640,
+        currency: "ILS",
+        annotation: { data: { notes: "Synthetic delayed purchase note" } },
+        details: {
+          postingLink: {
+            automatic: true,
+            postedId: posted.id,
+            evidence: { overlap: witness },
+          },
+        },
+      });
+      expect(await db.getTransaction(posted.id)).toMatchObject({
+        supersededById: pending.id,
+        annotation: null,
+      });
+      expect(
+        (await db.listTransactions()).filter((row) => !row.supersededById),
+      ).toHaveLength(1);
+    } finally {
+      db.close();
+    }
+  });
+
   it.each(["collision", "missing_identity"] as const)(
     "keeps annotated %s evidence attached when identical financial facts reverse source order",
     async (scenario) => {

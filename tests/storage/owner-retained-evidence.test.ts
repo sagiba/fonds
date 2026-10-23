@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import type { SourceAdapter } from "../../src/domain/source-adapter.js";
 import { calAdapter } from "../../src/providers/cal/adapter.js";
+import { authorization, postingHarness } from "../helpers/posting.js";
 import {
   backends,
   fixture,
+  insertTransactionFixture,
   open,
   row,
   synthetic,
@@ -54,6 +56,52 @@ for (const backend of backends) {
         await db.close();
       }
     });
+    it.each(["pending", "posted"] as const)(
+      "keeps missing legacy %s source evidence independent across owner link and unlink",
+      async (legacySide) => {
+        const db = await open(backend);
+        try {
+          const harness = postingHarness(db);
+          await db.ensureConnection({
+            id: harness.connectionId,
+            provider: "cal",
+          });
+          await harness.capture(1, [authorization(), row("posted")]);
+          const pending = await harness.byKey("pending");
+          const posted = await harness.byKey("posted");
+          const legacy = legacySide === "pending" ? pending : posted;
+          await insertTransactionFixture(
+            db,
+            [{ ...legacy, sourceEvidence: undefined }],
+            "update",
+          );
+          const expectedPending =
+            legacySide === "pending" ? undefined : pending.sourceEvidence;
+          const expectedPosted =
+            legacySide === "posted" ? undefined : posted.sourceEvidence;
+          await db.linkPendingTransaction(
+            await harness.command(pending.id, posted.id),
+          );
+          const linked = (await db.getTransaction(pending.id))!;
+          expect(linked.sourceEvidence).toEqual(expectedPosted);
+          expect(linked.details.postingLink!.pending.sourceEvidence).toEqual(
+            expectedPending,
+          );
+          await db.unlinkPendingTransaction(
+            await harness.command(pending.id, posted.id),
+          );
+          expect((await db.getTransaction(pending.id))!.sourceEvidence).toEqual(
+            expectedPending,
+          );
+          expect((await db.getTransaction(posted.id))!.sourceEvidence).toEqual(
+            expectedPosted,
+          );
+        } finally {
+          await db.close();
+        }
+      },
+    );
+
     it("keeps canonical provider lists after linking so the same posted reread writes observations only", async () => {
       const db = await open(backend);
       try {
@@ -147,6 +195,29 @@ for (const backend of backends) {
           { key: "A posted note", value: "one" },
           { key: "Z pending note", value: "two" },
         ]);
+        expect(linked.sourceEvidence).toEqual(purchase.sourceEvidence);
+        expect(linked.details.postingLink!.pending.sourceEvidence).toEqual(
+          authorization.sourceEvidence,
+        );
+        // The first omission changes the component restored by unlink. Only
+        // subsequent identical captures are observation-only rereads.
+        expect(await ingest(3, true, false)).toMatchObject({
+          created: 0,
+          updated: 1,
+          unlisted: 0,
+        });
+        const absent = (await db.getTransaction(authorization.id))!;
+        expect(absent).toMatchObject({
+          version: linked.version + 1,
+          details: {
+            postingLink: {
+              pending: {
+                presence: "not_returned",
+                sourceAbsence: { runId: "owner-evidence-3" },
+              },
+            },
+          },
+        });
         const before = await db.raw("SELECT * FROM transactions ORDER BY id");
         const cursor = await db.latestEventId();
         if (backend === "postgres") {
@@ -161,7 +232,7 @@ for (const backend of backends) {
             "CREATE TRIGGER reject_canonical_write BEFORE UPDATE ON transactions BEGIN SELECT RAISE(ABORT, 'unexpected canonical transaction write'); END",
           );
         }
-        expect(await ingest(3, true, false)).toMatchObject({
+        expect(await ingest(4, true, false)).toMatchObject({
           created: 0,
           updated: 0,
           unlisted: 0,
@@ -171,10 +242,10 @@ for (const backend of backends) {
         );
         expect(await db.getTransaction(authorization.id)).toMatchObject({
           status: "posted",
-          version: linked.version,
+          version: absent.version,
           amountMinor: linked.amountMinor,
           annotation,
-          lastSeenRunId: "owner-evidence-3",
+          lastSeenRunId: "owner-evidence-4",
         });
         expect(
           (await db.listEvents({ after: cursor })).filter((event) =>

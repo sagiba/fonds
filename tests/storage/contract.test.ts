@@ -776,7 +776,7 @@ for (const backend of backends) {
         provider: "cal",
         collectorVersion: "synthetic-v1",
         async *collect() {
-          for (const amountMinor of [-100, -200]) {
+          for (const [index, amountMinor] of [-100, -200].entries()) {
             const responseText = JSON.stringify([
               invalid,
               row("valid", {
@@ -795,7 +795,7 @@ for (const backend of backends) {
               capture: {
                 accountKey: "account",
                 endpoint: "synthetic:cal/recent",
-                capturedAt: "2040-08-01T00:00:00Z",
+                capturedAt: `2040-08-01T00:00:0${index + 1}Z`,
                 responseText,
               },
             };

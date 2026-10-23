@@ -73,11 +73,13 @@ database never receives it. No CLI command applies it.
 - **Installment plans.** A proven plan is one purchase, at the stated total, plus
   one billed line per payment, linked by `purchaseId` as for
   [CAL](cal.md#what-is-collected).
-- **Payment context.** Online and 3-D Secure use, a named wallet, standing orders
-  and a transfer's counterparty become typed fields only from explicit evidence.
-  Merchant city and a valid country code are kept; there is no MCC, and card
-  presence stays unknown. Wallet, merchant address and phone, and counterparty
-  require a voucher-bound optional legacy detail. The CLI defaults to
+- **Payment context.** Online and 3-D Secure use, wallets, standing orders and
+  transfer counterparties require explicit evidence. Merchant city/country are
+  kept for pending and posted rows; MCC remains unknown. Presence uses presentation
+  or remote-use evidence; the negative card flag alone is insufficient.
+  Pending approvals can name a wallet; posted
+  wallet names, merchant address/phone and counterparty require a voucher-bound
+  optional detail. CLI defaults to
   `--max-details 0`; opt in with, for example, `--max-details 5` on `refresh`
   (range 0–20 attempts per refresh window; a history backfill applies the cap
   to each month). Details share the request budget with statements and have no

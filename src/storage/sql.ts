@@ -10,6 +10,7 @@ import {
   isNull,
   lt,
   lte,
+  ne,
   or,
   sql,
   type Table,
@@ -24,10 +25,13 @@ import type { Connection, Transaction } from "../domain/records.js";
 
 export type PlanScope = { transactionId: string } | { accountOf: string };
 
-type Columns<T> = { [Key in keyof T]: AnyColumn };
+type Columns<T> = { [Key in keyof T]-?: AnyColumn };
 
 type TransactionColumns = Columns<
-  Omit<Transaction, "details" | "lastSeenAt" | "lastSeenRunId">
+  Omit<
+    Transaction,
+    "details" | "lastSeenAt" | "lastSeenRunId" | "sourceEvidence"
+  >
 >;
 
 const dateColumns = {
@@ -35,6 +39,13 @@ const dateColumns = {
   booking: "bookingDate",
   billing: "billingDate",
 } as const;
+
+/** A live billed line of the outer row, matching `isLiveBilledLine`. */
+const line = sql.identifier("billed_line");
+
+function lineColumn(column: AnyColumn) {
+  return sql`${line}.${sql.identifier(column.name)}`;
+}
 
 /** The domain's perspective membership rule, compiled to SQL. */
 function perspectiveFilter(
@@ -48,11 +59,20 @@ function perspectiveFilter(
     case "without_purchase":
       return isNull(table.purchaseId);
     case "without_plan_purchase":
-      // Null-safe: NOT (count >= n AND number IS NULL) would drop null counts.
-      return or(
-        isNull(table.installmentCount),
-        lt(table.installmentCount, rule.minimumPayments),
-        isNotNull(table.installmentNumber),
+      // Associations are global to the perspective, not narrowed by page/date filters.
+      return and(
+        or(
+          isNull(table.installmentCount),
+          lt(table.installmentCount, rule.minimumPayments),
+          isNotNull(table.installmentNumber),
+        ),
+        sql`not exists (
+          select 1 from ${table.id.table} as ${line}
+          where ${lineColumn(table.connectionId)} = ${table.connectionId}
+            and ${lineColumn(table.purchaseId)} = ${table.id}
+            and ${lineColumn(table.presence)} <> 'removed'
+            and ${lineColumn(table.supersededById)} is null
+        )`,
       );
   }
 }
@@ -131,9 +151,11 @@ export function transactionFilter(
       : eq(table.amountBasis, filters.amountBasis),
     filters.kind === undefined ? undefined : eq(table.kind, filters.kind),
     filters.status === undefined ? undefined : eq(table.status, filters.status),
-    filters.presence === undefined
+    filters.presence === "all"
       ? undefined
-      : eq(table.presence, filters.presence),
+      : filters.presence === "current"
+        ? and(isNull(table.sourceAbsence), ne(table.presence, "removed"))
+        : eq(table.presence, filters.presence),
     filters.merchantName === undefined
       ? undefined
       : eq(table.merchantName, filters.merchantName),
@@ -191,6 +213,7 @@ export function totalsColumns<T extends TransactionColumns>(
   T,
   | "supersededById"
   | "presence"
+  | "sourceAbsence"
   | "status"
   | "kind"
   | "amountMinor"
@@ -204,6 +227,7 @@ export function totalsColumns<T extends TransactionColumns>(
   return {
     supersededById: table.supersededById,
     presence: table.presence,
+    sourceAbsence: table.sourceAbsence,
     status: table.status,
     kind: table.kind,
     amountMinor: table.amountMinor,

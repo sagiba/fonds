@@ -17,6 +17,8 @@ import type { Card } from "../../domain/cards.js";
 import type {
   AnnotationData,
   RefreshFailureCode,
+  SourceAbsence,
+  SourceEvidence,
   TransactionInput,
 } from "../../domain/model.js";
 import type {
@@ -194,6 +196,7 @@ export const transactions = pgTable(
     }).notNull(),
     status: text({ enum: ["pending", "posted"] }).notNull(),
     presence: text({ enum: ["seen", "not_returned", "removed"] }).notNull(),
+    sourceAbsence: jsonText<SourceAbsence>()("source_absence_json"),
     description: text(),
     counterpartyName: text("counterparty_name"),
     kind: text().$type<TransactionInput["kind"]>().notNull(),
@@ -292,6 +295,10 @@ export const transactionReconciliation = pgTable("transaction_reconciliation", {
     "pending_posting_candidates_json",
   ),
   rejectedPostingKeys: jsonText<string[]>()("rejected_posting_keys_json"),
+  sourceEvidence: jsonText<SourceEvidence>()("source_evidence_json"),
+  postingOverlap: jsonText<
+    NonNullable<TransactionInput["details"]["postingOverlap"]>
+  >()("posting_overlap_json"),
   providerIdentity: jsonText<
     Record<string, import("../../domain/model.js").JsonValue>
   >()("provider_identity_json"),

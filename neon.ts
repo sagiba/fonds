@@ -74,6 +74,14 @@ if (credentialsKey) {
   env.FONDS_CREDENTIALS_KEY = credentialsKey;
 }
 
+// Always declared: Neon keeps a variable a deploy omits, so turning the API
+// description off must deploy 0 rather than drop the setting.
+const apiDescription = process.env.FONDS_PUBLIC_API_DESCRIPTION ?? "0";
+if (apiDescription !== "0" && apiDescription !== "1") {
+  throw new Error("FONDS_PUBLIC_API_DESCRIPTION must be 0 or 1");
+}
+env.FONDS_PUBLIC_API_DESCRIPTION = apiDescription;
+
 // Provider credentials are uploaded only when explicitly supplied. Neon merges
 // omitted Function variables, so ordinary deploys keep stored credentials.
 const credentialsFile = process.env.FONDS_CONNECTION_CREDENTIALS_FILE;

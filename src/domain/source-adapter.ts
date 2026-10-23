@@ -2,6 +2,7 @@ import type { CardDiscovery } from "./cards.js";
 import type { CredentialInput, ProviderCredentials } from "./credentials.js";
 import type {
   JsonObject,
+  ReadPaymentContext,
   TransactionFacts,
   TransactionInput,
 } from "./model.js";
@@ -30,6 +31,20 @@ export interface ExtractionResult {
   historical: boolean;
 }
 
+/** One current observation's authority over its complete financial interpretation. */
+export type FinancialAuthority =
+  | {
+      kind: "asserted" | "conflicting";
+      /** Opaque equality witness for an ordinary corroborating source component. */
+      continuitySignature?: string;
+    }
+  | {
+      kind: "incomplete";
+      /** Explicit missing source support, never inferred from nullable facts. */
+      reason: string;
+      continuitySignature?: string;
+    };
+
 /** Amount roles whose normalized purchase money supports automatic continuation. */
 export interface AutomaticPostingCapability {
   pendingAmountBasis: TransactionInput["amountBasis"];
@@ -45,6 +60,24 @@ export interface AutomaticPostingCapability {
   ): boolean;
 }
 
+/** Source-declared domains whose omissions can be interpreted by the shared engine. */
+export type SourceCoveragePolicy = {
+  /** Explicit omission authority, independent of positive partition comparison. */
+  statuses: readonly ("pending" | "posted")[];
+} & (
+  | { kind: "same_origin" }
+  | {
+      kind: "account_window";
+      /** Canonical resources, after resourceKey normalization. */
+      resources: readonly string[];
+      /** The source date governing membership, never an inferred fallback. */
+      dateField: "transactionDate" | "bookingDate" | "billingDate";
+      days: number;
+      /** Intersect the window with the row's retained resource and scope. */
+      requireOriginMatch?: boolean;
+    }
+);
+
 /** Collection owns provider paging; adapters project one captured unit at a time. */
 export interface SourceAdapter {
   provider: string;
@@ -55,23 +88,46 @@ export interface SourceAdapter {
   validateScope?(scope: CollectionScope): CollectionScope | void;
   /** Normalize equivalent request criteria only for health/precedence comparison. */
   normalizeScope?(scope: CollectionScope): CollectionScope;
+  /**
+   * Declare row-local authority from pristine current facts, before retained
+   * evidence or planner holds are applied. Absence means asserted, including
+   * explicit unknown classifications. The same pure projection may identify a
+   * unique retained component for legacy rows without a financial receipt.
+   */
+  financialAuthority?(
+    input: Readonly<TransactionFacts>,
+    extraction: Pick<ExtractionResult, "warnings">,
+  ): FinancialAuthority;
+  /** Kinds for which the source name denotes a counterparty, after reconciliation. */
+  counterpartyKinds?: readonly TransactionFacts["kind"][];
   /** Similarity can suggest an owner-reviewed posting link. */
   pendingPostingCandidates?: boolean;
   /** Opt in to narrow, reversible same-capture purchase/refund continuation. */
   automaticPosting?: AutomaticPostingCapability;
+  /** Opt in to negative evidence; positive comparison never grants absence authority. */
+  sourceCoverage?: SourceCoveragePolicy;
   /** Compare recent absence only within this many days of capture (UTC dates). */
   recentComparableDays?: number;
   /** Reject a successful empty recent posted partition if comparable posted rows exist. */
   rejectEmptyRecentPosted?: boolean;
+  /** Reject a wholly empty recent capture while covered current rows remain. */
+  rejectEmptyRecent?: boolean;
   /** Declared source evidence only, projected identically for stored and new rows; return {} to retain none. */
   retainProviderEvidence(evidence: JsonObject): JsonObject;
   /** Adapter-derived reconciliation state, never part of source-content comparison. */
   projectProviderState?(evidence: JsonObject): JsonObject;
-  /** Merge declared components from overlapping captures without duplicating observations. */
+  /** Merge declared components and derived identity state without duplicating observations. */
   mergeProviderEvidence?(
     previous: JsonObject,
     incoming: JsonObject,
   ): JsonObject;
+  /** Reinterpret current payment facts with retained optional evidence after component merging. */
+  paymentContextFromRetainedEvidence?(input: Readonly<TransactionFacts>):
+    | {
+        payment: ReadPaymentContext;
+        issues: string[];
+      }
+    | undefined;
   /**
    * Identity groups declare `identity.baseKey`; retained rows preserve their
    * distinguishing source facts. Shared matching uses the current observation.

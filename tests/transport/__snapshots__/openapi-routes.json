@@ -1,0 +1,457 @@
+{
+  "GET /v1/connections": {
+    "operationId": "list_connections",
+    "scopes": [
+      "financial:read"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
+    ]
+  },
+  "GET /v1/connections/{connectionId}": {
+    "operationId": "get_connection",
+    "scopes": [
+      "financial:read"
+    ],
+    "parameters": [
+      "path connectionId (required)"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
+    ]
+  },
+  "GET /v1/accounts": {
+    "operationId": "list_accounts",
+    "scopes": [
+      "financial:read"
+    ],
+    "parameters": [
+      "query connectionId (required)",
+      "query limit",
+      "query cursor"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
+    ]
+  },
+  "GET /v1/accounts/{accountId}": {
+    "operationId": "get_account",
+    "scopes": [
+      "financial:read"
+    ],
+    "parameters": [
+      "path accountId (required)"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
+    ]
+  },
+  "GET /v1/cards": {
+    "operationId": "list_cards",
+    "scopes": [
+      "financial:read"
+    ],
+    "parameters": [
+      "query connectionId (required)",
+      "query limit",
+      "query cursor"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
+    ]
+  },
+  "GET /v1/cards/{cardId}": {
+    "operationId": "get_card",
+    "scopes": [
+      "financial:read"
+    ],
+    "parameters": [
+      "path cardId (required)"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
+    ]
+  },
+  "POST /v1/connections/{connectionId}/refreshes": {
+    "operationId": "refresh_connection",
+    "scopes": [
+      "financial:write"
+    ],
+    "parameters": [
+      "path connectionId (required)"
+    ],
+    "body": [
+      "from",
+      "to"
+    ],
+    "responses": [
+      "200",
+      "202",
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "413",
+      "500"
+    ]
+  },
+  "GET /v1/connections/{connectionId}/refreshes": {
+    "operationId": "list_refreshes",
+    "scopes": [
+      "financial:read"
+    ],
+    "parameters": [
+      "path connectionId (required)",
+      "query cursor",
+      "query limit"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
+    ]
+  },
+  "POST /v1/refreshes": {
+    "operationId": "refresh_all_connections",
+    "scopes": [
+      "financial:write"
+    ],
+    "body": [
+      "from",
+      "to"
+    ],
+    "responses": [
+      "200",
+      "202",
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "413",
+      "500"
+    ]
+  },
+  "GET /v1/refreshes/{refreshId}": {
+    "operationId": "get_refresh",
+    "scopes": [
+      "financial:read"
+    ],
+    "parameters": [
+      "path refreshId (required)"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
+    ]
+  },
+  "GET /v1/transactions": {
+    "operationId": "list_transactions",
+    "scopes": [
+      "financial:read"
+    ],
+    "parameters": [
+      "query connectionId",
+      "query billingAccountId",
+      "query cardId",
+      "query status",
+      "query presence",
+      "query includeSuperseded",
+      "query merchantName",
+      "query merchantCategoryCode",
+      "query dateRole",
+      "query from",
+      "query to",
+      "query currency",
+      "query amountBasis",
+      "query kind",
+      "query cardPresent",
+      "query authorizationMethod",
+      "query wallet",
+      "query threeDSecureUsed",
+      "query recurring",
+      "query purchaseId",
+      "query perspective",
+      "query limit",
+      "query cursor"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
+    ]
+  },
+  "GET /v1/transactions/totals": {
+    "operationId": "get_transaction_totals",
+    "scopes": [
+      "financial:read"
+    ],
+    "parameters": [
+      "query connectionId",
+      "query billingAccountId",
+      "query cardId",
+      "query status",
+      "query presence",
+      "query includeSuperseded",
+      "query merchantName",
+      "query merchantCategoryCode",
+      "query dateRole",
+      "query from",
+      "query to",
+      "query currency",
+      "query amountBasis",
+      "query kind",
+      "query cardPresent",
+      "query authorizationMethod",
+      "query wallet",
+      "query threeDSecureUsed",
+      "query recurring",
+      "query purchaseId",
+      "query perspective"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
+    ]
+  },
+  "GET /v1/transactions/{transactionId}": {
+    "operationId": "get_transaction",
+    "scopes": [
+      "financial:read"
+    ],
+    "parameters": [
+      "path transactionId (required)",
+      "query detail",
+      "query includeEvidence"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
+    ]
+  },
+  "GET /v1/events": {
+    "operationId": "list_events",
+    "scopes": [
+      "financial:read"
+    ],
+    "parameters": [
+      "query connectionId (required)",
+      "query cursor",
+      "query limit"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
+    ]
+  },
+  "GET /v1/connections/{connectionId}/sync-runs": {
+    "operationId": "list_sync_runs",
+    "scopes": [
+      "financial:read"
+    ],
+    "parameters": [
+      "path connectionId (required)",
+      "query cursor",
+      "query limit"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
+    ]
+  },
+  "PATCH /v1/transactions/{transactionId}/annotation": {
+    "operationId": "update_annotation",
+    "scopes": [
+      "financial:write"
+    ],
+    "parameters": [
+      "path transactionId (required)"
+    ],
+    "body": [
+      "expectedVersion (required)",
+      "expectedTransactionVersion",
+      "notes",
+      "category",
+      "tags",
+      "metadata",
+      "review"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "413",
+      "500"
+    ]
+  },
+  "POST /v1/annotations/undo": {
+    "operationId": "undo_annotation",
+    "scopes": [
+      "financial:write"
+    ],
+    "body": [
+      "eventId (required)",
+      "expectedVersion (required)"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "413",
+      "500"
+    ]
+  },
+  "POST /v1/transactions/{transactionId}/link-pending": {
+    "operationId": "link_pending_transaction",
+    "scopes": [
+      "financial:write"
+    ],
+    "parameters": [
+      "path transactionId (required)"
+    ],
+    "body": [
+      "postedId (required)",
+      "expectedPendingAnnotationVersion (required)",
+      "expectedPostedAnnotationVersion (required)",
+      "reason (required)",
+      "expectedPendingTransactionVersion (required)",
+      "expectedPostedTransactionVersion (required)"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "413",
+      "500"
+    ]
+  },
+  "POST /v1/transactions/{transactionId}/unlink-pending": {
+    "operationId": "unlink_pending_transaction",
+    "scopes": [
+      "financial:write"
+    ],
+    "parameters": [
+      "path transactionId (required)"
+    ],
+    "body": [
+      "postedId (required)",
+      "expectedPendingAnnotationVersion (required)",
+      "expectedPostedAnnotationVersion (required)",
+      "reason (required)",
+      "expectedPendingTransactionVersion (required)",
+      "expectedPostedTransactionVersion (required)"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "413",
+      "500"
+    ]
+  },
+  "POST /v1/transactions/{transactionId}/removal": {
+    "operationId": "confirm_removal",
+    "scopes": [
+      "financial:write"
+    ],
+    "parameters": [
+      "path transactionId (required)"
+    ],
+    "body": [
+      "reason (required)",
+      "expectedTransactionVersion (required)"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "413",
+      "500"
+    ]
+  }
+}

@@ -24,6 +24,10 @@ import { createMcpHttpHandler } from "../../src/transport/mcp.js";
 
 const publicOrigin = "https://financial.synthetic.invalid";
 const issuer = "https://issuer.synthetic.invalid/auth";
+const endpoints = {
+  authorization: `${issuer}/authorize`,
+  token: `${issuer}/token`,
+};
 const token = "synthetic-local-token-00000000000000000000";
 const expectedScopes = {
   list_connections: "financial:read",
@@ -94,8 +98,9 @@ function identity(
   };
 }
 
-function setup(provider?: HostedAuthProvider) {
-  const application: Application = {
+function setup(
+  provider?: HostedAuthProvider,
+  application: Application = {
     backend: "sqlite",
     operations: operationDefinitions.map((definition) => ({
       ...definition,
@@ -103,9 +108,11 @@ function setup(provider?: HostedAuthProvider) {
       outputSchema: z.object({ name: z.string() }).strict(),
       execute: vi.fn(async () => ({ name: definition.name })),
     })),
-  };
+  },
+) {
   const authProvider = provider ?? {
     issuer,
+    endpoints,
     async authenticate(request: Request) {
       const credential = request.headers.get("authorization");
       if (credential === "Bearer read") {
@@ -233,11 +240,16 @@ describe("hosted trusted auth boundary", () => {
       identity(["financial:read"], { clientId: "" }),
       null,
     ]) {
-      const { request } = setup({ issuer, authenticate: async () => result });
+      const { request } = setup({
+        issuer,
+        endpoints,
+        authenticate: async () => result,
+      });
       expect((await request("/health", "read")).status).toBe(401);
     }
     const { request } = setup({
       issuer,
+      endpoints,
       authenticate: async () => {
         throw new Error("synthetic-private-provider-response");
       },
@@ -251,7 +263,7 @@ describe("hosted trusted auth boundary", () => {
 
   it("rejects untrusted Host and Origin before consulting the provider", async () => {
     const authenticate = vi.fn(async () => identity(["financial:read"]));
-    const { request, service } = setup({ issuer, authenticate });
+    const { request, service } = setup({ issuer, endpoints, authenticate });
     for (const headers of [
       { Host: "attacker.invalid" },
       { Origin: "https://attacker.invalid" },
@@ -351,10 +363,40 @@ describe("hosted trusted auth boundary", () => {
     },
   );
 
+  it("rejects request syntax before scope, and scope before operation validation", async () => {
+    const db = await openDatabase(":memory:");
+    // The store validates edits too; the operation must reject them first.
+    const edit = vi.spyOn(db, "editAnnotation");
+    try {
+      const { request } = setup(undefined, createApplication(db));
+      const path = "/v1/transactions/synthetic/annotation";
+      const patch = (bearer: string, body: string) =>
+        request(path, bearer, { method: "PATCH", body });
+      // Malformed JSON fails before the grant is checked.
+      const syntax = await patch("read", "{");
+      expect(syntax.status).toBe(400);
+      expect(await syntax.json()).toEqual({
+        error: { code: "invalid_input", message: "Invalid request input." },
+      });
+      // Well-formed input missing expectedVersion: a read grant is refused
+      // before the operation validates it; a write grant reaches validation.
+      expect((await patch("read", "{}")).status).toBe(403);
+      const invalid = await patch("write", "{}");
+      expect(invalid.status).toBe(400);
+      expect(await invalid.json()).toEqual({
+        error: { code: "invalid_input", message: "Invalid operation input." },
+      });
+      expect(edit).not.toHaveBeenCalled();
+    } finally {
+      await db.close();
+    }
+  });
+
   it("rejects mixed hosted/local configuration at runtime and malformed public origins", () => {
     const { application } = setup();
     const authProvider: HostedAuthProvider = {
       issuer,
+      endpoints,
       authenticate: async () => null,
     };
     expect(() =>

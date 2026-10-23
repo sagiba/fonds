@@ -85,6 +85,152 @@ for (const backend of backends) {
       });
     }
 
+    it("defaults public pages to current while retaining explicit history and annotations", async () => {
+      await insert("current");
+      const absent = await insert("absent", {
+        presence: "not_returned",
+        sourceAbsence: { runId: "run", capturedAt: "2040-08-02T00:00:00Z" },
+      });
+      await insert("removed", { presence: "removed" });
+      await db.editAnnotation({
+        transactionId: absent.id,
+        expectedVersion: 0,
+        notes: "Keep this history",
+      });
+      expect(
+        (await db.listTransactionPage()).transactions.map((row) => row.id),
+      ).toEqual(["current"]);
+      expect(
+        (await db.listTransactionPage({ presence: "all" })).transactions.map(
+          (row) => row.id,
+        ),
+      ).toEqual(["absent", "current", "removed"]);
+      expect(
+        (
+          await db.listTransactionPage({ presence: "not_returned" })
+        ).transactions.map((row) => row.id),
+      ).toEqual(["absent"]);
+      expect(
+        (
+          await db.listTransactionPage({ presence: "removed" })
+        ).transactions.map((row) => row.id),
+      ).toEqual(["removed"]);
+      expect(await db.getTransaction(absent.id)).toMatchObject({
+        presence: "not_returned",
+        sourceAbsence: { runId: "run", capturedAt: "2040-08-02T00:00:00Z" },
+        annotation: { data: { notes: "Keep this history" } },
+      });
+      expect(await db.getTotals()).toMatchObject({
+        includedCount: 1,
+        excludedCount: 0,
+      });
+      expect(await db.getTotals({ presence: "all" })).toMatchObject({
+        includedCount: 1,
+        excludedCount: 2,
+        excluded: { sourceAbsent: 1, retiredOrRemoved: 1 },
+      });
+    });
+
+    it("retains unclassified historical not-returned rows without claiming they are seen", async () => {
+      await insert("historical", {
+        presence: "not_returned",
+        amountMinor: -100,
+      });
+      expect((await db.listTransactionPage()).transactions).toMatchObject([
+        { id: "historical", presence: "not_returned" },
+      ]);
+      expect(
+        (await db.listTransactionPage({ presence: "seen" })).transactions,
+      ).toEqual([]);
+      expect(await db.getTotals()).toMatchObject({
+        totals: [{ amountMinor: -100 }],
+        includedCount: 1,
+        excluded: { sourceAbsent: 0 },
+      });
+    });
+
+    it.each(["spending", "billing"] as const)(
+      "never accounts for absent charges, refunds or FX fees in %s history",
+      async (perspective) => {
+        await insert("current", { amountMinor: -100 });
+        await insert("absent-charge", {
+          presence: "not_returned",
+          sourceAbsence: { runId: "run", capturedAt: "2040-08-02T00:00:00Z" },
+          amountMinor: -500,
+          originalCurrency: "USD",
+          originalAmountMinor: -100,
+          fxFeeMinor: -20,
+          fxFeeCurrency: "ILS",
+        });
+        await insert("absent-refund", {
+          presence: "not_returned",
+          sourceAbsence: { runId: "run", capturedAt: "2040-08-02T00:00:00Z" },
+          kind: "refund",
+          amountMinor: 300,
+          originalCurrency: "USD",
+          originalAmountMinor: -100,
+        });
+        const result = await db.getTotals({ perspective, presence: "all" });
+        expect(result).toMatchObject({
+          totals: [{ amountMinor: -100 }],
+          includedCount: 1,
+          excludedCount: 2,
+          excluded: { sourceAbsent: 2 },
+          fxFees: [],
+          fxFeeUnknownCount: 0,
+        });
+        expect(
+          await db.getTotals({ perspective, presence: "not_returned" }),
+        ).toMatchObject({ totals: [], includedCount: 0, excludedCount: 2 });
+      },
+    );
+
+    it("retains billed-line associations through absence without falling back to the whole commitment", async () => {
+      await insert("purchase", { amountMinor: -900, installmentCount: null });
+      await insert("line", {
+        purchaseId: "purchase",
+        amountMinor: -300,
+        amountBasis: "booked_entry",
+        installmentNumber: 1,
+        presence: "not_returned",
+        sourceAbsence: { runId: "run", capturedAt: "2040-08-02T00:00:00Z" },
+      });
+      expect(
+        (await db.listTransactionPage({ perspective: "billing" })).transactions,
+      ).toEqual([]);
+      expect(
+        await db.getTotals({ perspective: "billing", presence: "all" }),
+      ).toMatchObject({
+        totals: [],
+        includedCount: 0,
+        excluded: { sourceAbsent: 1 },
+      });
+      expect(await db.getTotals()).toMatchObject({
+        totals: [{ amountMinor: -900 }],
+        includedCount: 1,
+      });
+      await db.raw(
+        "UPDATE transactions SET presence = ?, source_absence_json = ? WHERE id = ?",
+        [
+          "not_returned",
+          JSON.stringify({ runId: "run", capturedAt: "2040-08-02T00:00:00Z" }),
+          "purchase",
+        ],
+      );
+      await db.raw(
+        "UPDATE transactions SET presence = ?, source_absence_json = NULL WHERE id = ?",
+        ["seen", "line"],
+      );
+      expect(await db.getTotals()).toMatchObject({
+        totals: [],
+        includedCount: 0,
+      });
+      expect(await db.getTotals({ perspective: "billing" })).toMatchObject({
+        totals: [{ amountMinor: -300 }],
+        includedCount: 1,
+      });
+    });
+
     it("honors an explicit needs_review instruction without manufacturing a parser issue", async () => {
       const row = await insert();
       await db.editAnnotation({
@@ -683,7 +829,10 @@ for (const backend of backends) {
       await insert("cancel", {
         amountMinor: -Number.MAX_SAFE_INTEGER,
         kind: "refund",
+      });
+      await insert("absent", {
         presence: "not_returned",
+        sourceAbsence: { runId: "run", capturedAt: "2040-08-02T00:00:00Z" },
       });
       await insert("euro", { currency: "EUR", amountMinor: -12 });
       await insert("booked", { amountBasis: "booked_entry", amountMinor: -13 });
@@ -708,6 +857,7 @@ for (const backend of backends) {
         await db.getTotals({
           connectionId,
           includeSuperseded: true,
+          presence: "all",
         }),
       ).toEqual({
         totals: [
@@ -726,12 +876,13 @@ for (const backend of backends) {
         fxFees: [],
         fxFeeUnknownCount: 0,
         includedCount: 5,
-        excludedCount: 9,
+        excludedCount: 10,
         excluded: {
           pending: 1,
           authorization: 0,
           transferOrIncome: 2,
           retiredOrRemoved: 2,
+          sourceAbsent: 1,
           unresolved: 4,
         },
       });
@@ -822,6 +973,7 @@ for (const backend of backends) {
             authorization: 0,
             transferOrIncome: 0,
             retiredOrRemoved: 0,
+            sourceAbsent: 0,
             unresolved: 0,
           },
         });

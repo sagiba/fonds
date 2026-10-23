@@ -18,6 +18,8 @@ import {
   calForeignExchange,
   calPaymentContext,
   calProviderTransactionCode,
+  type CalStatedText,
+  calStatedText,
 } from "./enrichment.js";
 import { calRowEvidence, retainCalEvidence } from "./evidence.js";
 import { calHasUnsupportedPagination } from "./pagination.js";
@@ -132,6 +134,12 @@ function identifier(value: unknown): string | null {
   return isLosslessNumber(value) ? value.value : text(value);
 }
 
+/** Foreign rows state merchant number `0`, which names no merchant. */
+function merchantNumber(value: unknown): string | null {
+  const number = identifier(value);
+  return number !== null && /^0+$/.test(number) ? null : number;
+}
+
 /** Reviewed CAL classification mapping; shape alone does not verify an ISO registry entry. */
 function merchantCategoryCode(value: unknown, issues: string[]): string | null {
   if (
@@ -236,7 +244,16 @@ function money(
 function additionalInformation(
   rows: SourceRow[],
   comments: CalComment[][],
+  typed: Pick<
+    TransactionInput,
+    "installmentCount" | "originalAmountMinor" | "originalCurrency"
+  >,
 ): string[] {
+  const restated = new Set(
+    stated(rows).flatMap(({ text, parsed }) =>
+      restatesTyped(parsed, typed) ? [text] : [],
+    ),
+  );
   const prose = (value: unknown): string[] =>
     typeof value === "string" && value.trim().length > 0 ? [value] : [];
   const slot = (items: unknown, field?: string): string[] =>
@@ -255,6 +272,60 @@ function additionalInformation(
       ...slot(row.transTypeCommentDetails),
       ...prose(row.onGoingTransactionsComment),
     ]),
+  ).filter((text) => !restated.has(text));
+}
+
+/** The string-slot texts of the rows, each parsed by exact template. */
+function stated(rows: SourceRow[]) {
+  return rows
+    .flatMap((row) => [
+      ...(Array.isArray(row.transTypeCommentDetails)
+        ? row.transTypeCommentDetails
+        : []),
+      row.onGoingTransactionsComment,
+    ])
+    .flatMap((value) =>
+      typeof value === "string"
+        ? [{ text: value, parsed: calStatedText(value) }]
+        : [],
+    );
+}
+
+/** The unsigned original money an original-amount text states, when its marker resolves. */
+function statedOriginal(
+  parsed: CalStatedText | null,
+): { currency: string; amountMinor: number | null } | null {
+  const currency =
+    parsed?.template === "original_amount"
+      ? resolveOriginalSymbol(parsed.marker)
+      : null;
+  if (parsed?.template !== "original_amount" || currency === null) {
+    return null;
+  }
+  try {
+    return { currency, amountMinor: decimalToMinor(parsed.amount, currency) };
+  } catch {
+    return { currency, amountMinor: null };
+  }
+}
+
+/** Whether a parsed text states exactly what a typed field already does. */
+function restatesTyped(
+  parsed: CalStatedText | null,
+  typed: Pick<
+    TransactionInput,
+    "installmentCount" | "originalAmountMinor" | "originalCurrency"
+  >,
+): boolean {
+  if (parsed?.template === "installment_count") {
+    return parsed.count === typed.installmentCount;
+  }
+  const text = statedOriginal(parsed);
+  return (
+    text !== null &&
+    typed.originalAmountMinor !== null &&
+    text.currency === typed.originalCurrency &&
+    text.amountMinor === Math.abs(typed.originalAmountMinor)
   );
 }
 
@@ -274,21 +345,46 @@ function cancellation(row: SourceRow): boolean {
   return row.trnType === "ביטול תשלומים" && row.refundInd === true;
 }
 
-/** One billed payment of an installment plan (type 8, two or more payments). */
-function installmentPayment(row: SourceRow): boolean {
-  const count = ordinal(row.numOfPayments);
+/** Independent count statements; an absent count never supplies a plan size. */
+function statedInstallmentCounts(rows: SourceRow[], status: Status): number[] {
+  return unique([
+    ...rows.flatMap((row) => {
+      const count = ordinal(
+        status === "posted" ? row.numOfPayments : row.numberOfPayments,
+      );
+      return count === null ? [] : [count];
+    }),
+    ...stated(rows).flatMap((item) =>
+      item.parsed?.template === "installment_count" && item.parsed.count > 0
+        ? [item.parsed.count]
+        : [],
+    ),
+  ]);
+}
+
+function statesPlan(row: SourceRow): boolean {
+  return statedInstallmentCounts([row], "posted").some((count) => count >= 2);
+}
+
+/** The explicit installment type establishes its role without supplying its size. */
+function installmentPurchase(row: SourceRow): boolean {
+  const counts = statedInstallmentCounts([row], "posted");
   return (
     token(row.transactionTypeCode) === "8" &&
     row.refundInd === false &&
-    count !== null &&
-    count >= 2 &&
-    ordinal(row.curPaymentNum) !== null
+    (counts.length === 0 || counts.some((count) => count >= 2))
   );
+}
+
+/** An observed ordinal, never a generated schedule, identifies the payment. */
+function installmentPayment(row: SourceRow): boolean {
+  return installmentPurchase(row) && ordinal(row.curPaymentNum) !== null;
 }
 
 /**
  * Plan facts every payment row restates. A difference within one capture
- * leaves the purchase in review; it never splits the plan.
+ * leaves the purchase in review; it never splits the plan. The planned count
+ * is reconciled with the installment texts, where a null states nothing.
  */
 const planInvariants = [
   "trnPurchaseDate",
@@ -299,7 +395,6 @@ const planInvariants = [
   "transOriginalCurrencyCode",
   "trnCurrencySymbol",
   "trnAmt",
-  "numOfPayments",
 ] as const;
 
 /**
@@ -344,7 +439,12 @@ function resolveOriginalCurrency(
     return null;
   }
   const currency = iso ?? provider;
+  // `srcCurrencyCode` restates the ISO numeric code, empty exactly when it is null.
+  const source = identifier(row.srcCurrencyCode);
+  const stated = identifier(row.trnCurrencyIsoCode);
   if (
+    (source !== null &&
+      (stated === null || Number(source) !== Number(stated))) ||
     (iso && provider && iso !== provider) ||
     (currency &&
       row.trnCurrencySymbol != null &&
@@ -456,13 +556,17 @@ function conflictingBillingCurrency(
 ): boolean {
   return (
     unique(rows.map((row) => token(row.debCrdCurrencyCode))).length !== 1 ||
-    rows.some((row) =>
-      [row.currencyForDisplay, row.debCrdCurrencySymbol].some(
-        (marker) =>
-          marker !== undefined &&
-          marker !== null &&
-          lookup(displaySymbols, text(marker)) !== currency,
-      ),
+    rows.some(
+      (row) =>
+        [row.currencyForDisplay, row.debCrdCurrencySymbol].some(
+          (marker) =>
+            marker !== undefined &&
+            marker !== null &&
+            lookup(displaySymbols, text(marker)) !== currency,
+        ) ||
+        // The billing currency's ISO alphabetic code, when stated as one.
+        (/^[A-Z]{3}$/.test(text(row.crmIccCurrencyDesc) ?? "") &&
+          text(row.crmIccCurrencyDesc) !== currency),
     )
   );
 }
@@ -642,6 +746,43 @@ function extractGroup(
     currency = null;
   }
   let originalCurrency = resolveOriginalCurrency(row, issues);
+  // Every contributing row restates the currency, not only the first.
+  if (
+    originalCurrency !== null &&
+    rows.some((item) => resolveOriginalCurrency(item, []) !== originalCurrency)
+  ) {
+    issues.push("conflicting_original_currency");
+    originalCurrency = null;
+  }
+  // The original-amount texts restate the structured original money, whether
+  // or not it is published; a text naming another currency or amount leaves
+  // it, and any conversion from it, unknown.
+  let originalConflict = false;
+  if (originalCurrency !== null) {
+    const structured = rows.map((item) =>
+      money(item.trnAmt, originalCurrency!, []),
+    );
+    const texts = stated(rows).flatMap(({ parsed }) => {
+      const text = statedOriginal(parsed);
+      return text === null ? [] : [text];
+    });
+    if (texts.some((text) => text.currency !== originalCurrency)) {
+      issues.push("conflicting_original_currency");
+      originalConflict = true;
+    } else if (
+      texts.some((text) =>
+        structured.some(
+          (amount) => amount !== null && Math.abs(amount) !== text.amountMinor,
+        ),
+      )
+    ) {
+      issues.push("conflicting_original_amount");
+      originalConflict = true;
+    }
+    if (originalConflict) {
+      originalCurrency = null;
+    }
+  }
   if (
     role.kind !== "single" &&
     originalCurrency !== null &&
@@ -693,9 +834,24 @@ function extractGroup(
   const installments = rows
     .map((item) => ordinal(item.curPaymentNum, cancel))
     .filter((item): item is number => item !== null);
-  const sourceCount = ordinal(
-    status === "posted" ? row.numOfPayments : row.numberOfPayments,
-  );
+  const statedCounts = statedInstallmentCounts(rows, status);
+  if (statedCounts.length > 1) {
+    issues.push("conflicting_installment_facts");
+  }
+  const sourceCount = statedCounts.length === 1 ? statedCounts[0]! : null;
+  // The ledger has no independent plan-role fact for a summary without size
+  // or ordinal. Keep its stated money, but never bill its principal as one charge.
+  const unresolvedInstallmentRole =
+    status === "posted" &&
+    rows.every(
+      (item) =>
+        token(item.transactionTypeCode) === "8" && item.refundInd === false,
+    ) &&
+    sourceCount === null &&
+    installments.length === 0;
+  if (unresolvedInstallmentRole) {
+    issues.push("unresolved_installment_role");
+  }
   if (
     sourceCount !== null &&
     installments.some((number) => number > sourceCount)
@@ -734,7 +890,8 @@ function extractGroup(
     rows.length === 1 &&
     !hasInstallmentComponents &&
     code !== "8" &&
-    (ordinal(row.numOfPayments) ?? 0) <= 1
+    !statesPlan(row) &&
+    !originalConflict
       ? calForeignExchange(row, comments[0]!, {
           originalCurrency: resolveOriginalCurrency(row, []),
           billingCurrency: currency,
@@ -748,7 +905,11 @@ function extractGroup(
       details.currencyExchange = fx.currencyExchange;
     }
   }
-  details.additionalInformation = additionalInformation(rows, comments);
+  details.additionalInformation = additionalInformation(rows, comments, {
+    installmentCount,
+    originalAmountMinor,
+    originalCurrency,
+  });
   const categoryCode = merchantCategoryCode(row.internationalBranchID, issues);
   details.issues = unique(issues);
   return {
@@ -764,7 +925,7 @@ function extractGroup(
     counterpartyName: null,
     kind,
     merchantName: text(row.merchantName),
-    merchantProviderId: identifier(row.merchantId),
+    merchantProviderId: merchantNumber(row.merchantId),
     merchantCategoryCode: categoryCode,
     transactionDate,
     bookingDate: null,
@@ -778,9 +939,11 @@ function extractGroup(
     currency,
     amountBasis: line
       ? "booked_entry"
-      : status === "posted"
-        ? "purchase_commitment"
-        : "authorization",
+      : unresolvedInstallmentRole
+        ? "unknown"
+        : status === "posted"
+          ? "purchase_commitment"
+          : "authorization",
     originalAmountMinor,
     originalCurrency,
     installmentCount,

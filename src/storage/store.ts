@@ -1128,10 +1128,14 @@ function buildStore<Db>(
       const connection = await getConnection(id);
       return connection && present(connection);
     },
-    // Internal inspection (CLI, collection checks) sees every row unless a
-    // perspective is named; public pages default to spending.
+    // Internal inspection retains history across every perspective; callers
+    // needing current rows must name presence or use the public page API.
     listTransactions: async (input) => {
-      const filters = filtersSchema.parse({ perspective: "all", ...input });
+      const filters = filtersSchema.parse({
+        perspective: "all",
+        presence: "all",
+        ...input,
+      });
       await checkScope(filters);
       const rows = await db.execute(
         statements.transactionPage(db.root, filters),
@@ -1169,9 +1173,6 @@ function buildStore<Db>(
       await checkScope(filters);
       const rows = await db.execute(statements.totals(db.root, filters));
       await checkEmpty(rows, filters.connectionId);
-      if (filters.perspective === "all") {
-        throw new InvalidInputError("Totals cannot use the all perspective");
-      }
       return calculateTotals(rows, filters.perspective);
     },
     listEvents: async (input) => {

@@ -23,7 +23,9 @@ export const filtersSchema = z
     billingAccountId: z.string().min(1).max(RESOURCE_ID_MAX_LENGTH).optional(),
     cardId: z.string().min(1).max(RESOURCE_ID_MAX_LENGTH).optional(),
     status: transactionStatusSchema.optional(),
-    presence: presenceSchema.optional(),
+    presence: z
+      .enum([...presenceSchema.options, "current", "all"])
+      .default("current"),
     includeSuperseded: z.boolean().default(false),
     merchantName: z.string().min(1).max(CANONICAL_TEXT_MAX_LENGTH).optional(),
     merchantCategoryCode: merchantCategoryCodeSchema.optional(),
@@ -215,10 +217,9 @@ export type EventPageInput = z.input<typeof cursorSchema>;
 export type EventQuery = z.output<typeof cursorSchema>;
 
 /** Totals over `all` would double-count purchases and their billed lines. */
-export const totalsSchema = filtersSchema.refine(
-  (input) => input.perspective !== "all",
-  "Totals require the spending or billing perspective",
-);
+export const totalsSchema = filtersSchema.safeExtend({
+  perspective: z.enum(PERSPECTIVES).exclude(["all"]).default("spending"),
+});
 
 /** Date bounds are inclusive and must name the financial date they constrain. */
 export function validateDateFilters(input: {

@@ -45,6 +45,7 @@
 | Internal reference                                  | Purpose                                                  |
 | --------------------------------------------------- | -------------------------------------------------------- |
 | [Repository layout](internals/repository-layout.md) | Module ownership, imports, style and generated artifacts |
+| [HTTP API internals](internals/http-api.md)         | Route table, request parsing and the API description     |
 | [Acceptance scenarios](internals/acceptance.md)     | Financial behaviors that must remain correct             |
 | [Authentication storage](internals/auth-storage.md) | Hosted identity and bridge table inventory and ownership |
 | [Storage tests](internals/storage-testing.md)       | Reproduce actual-driver verification                     |

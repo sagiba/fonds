@@ -463,6 +463,10 @@ export function createBetterAuth(
   const provider: HostedAuthProvider = {
     issuer,
     authorizationScopes: BETTER_AUTH_SCOPES,
+    endpoints: {
+      authorization: `${issuer}/oauth2/authorize`,
+      token: `${issuer}/oauth2/token`,
+    },
     async authenticate(request) {
       const authorization = request.headers.get("authorization");
       if (

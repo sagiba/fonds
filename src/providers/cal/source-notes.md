@@ -15,6 +15,14 @@ excludes unknown fields and nested noise. Interpretation state and capture conte
 are separate; exact responses require optional raw archives. Overlapping payments
 keep distinct components; a fresh component replaces its earlier evidence.
 
+Source-origin/nature and card-type codes, wallet classifications, merchant category
+labels, named financial-status flags and pending amount/authorization slots remain
+evidence even where their normalized meaning is unresolved. Null, false and zero
+are source assertions, not evidence of refresh noise. `walletTokenInd` classifies
+the payment credential; token identity digits stay excluded. Source sequence and
+redundant comment-presence metadata remain excluded. `isMargaritaInd` has no
+established transaction role and remains unretained, not classified as proven noise.
+
 ## cal.envelope: response shapes
 
 - **Observed:** recent responses carry `result.transactions`,
@@ -46,10 +54,15 @@ keep distinct components; a fresh component replaces its earlier evidence.
   removed. A successful empty yearly search can omit records that its quarterly
   or monthly subdivisions return. The web frontend's 540-day selection limit is
   not a server retention guarantee.
-- **Policy:** recent absence uses a 60-day horizon as a safety margin inside the
-  asserted window. CAL rows have a purchase date and no booking date, and billed
-  lines are not compared for absence because search selects by purchase date.
-  Search windows are padded by one UTC day because the boundaries are unknown.
+- **Policy:** posted omissions establish no financial absence or observation-state
+  change: a purchase date cannot prove continued recent-list membership. Pending
+  omissions use the same unfiltered recent scope with a 60-day margin, an adopted
+  policy rather than a completeness guarantee. Wholly empty responses cannot
+  distinguish final pending expiry from transient emptiness; rejection while covered
+  pending rows remain favors retention. Positive pending observations still apply
+  with empty posted lists. Historical purchases remain eligible. CAL has no booking
+  date; billed lines are noncomparable because search selects by purchase date.
+  Unknown boundaries justify padding search windows by one UTC day.
 - **Checks:** [collection] "CAL monthly search coverage regression", "pads UTC
   calendar dates…".
 
@@ -73,16 +86,20 @@ keep distinct components; a fresh component replaces its earlier evidence.
 - `transCardPresentInd` is on every row and means "at a terminal": in-store Apple
   Pay is true, and false means remote, not necessarily online.
 - `trnExacWay`: `21` contactless wallet (exactly the rows with the contactless
-  comment), `9` standing order, `12` online without 3-D Secure, `15` and `35`
+  comment), `9` standing order, `12` general online, `15` and `35`
   online with it. `0,1,3,4,5,7,10,13,14,16,17,18,20` are unverified.
-- `walletProviderCode` with `walletProviderDesc`: `3` with `Apple Pay`, `32` with
-  the Hebrew word for internet, `0` none. `2`, `14`, `22` and `85` have no
-  description and look like merchant tokens.
+- `walletProviderCode` with `walletProviderDesc`: `3` with `Apple Pay`, `0` none;
+  `32`, `2`, `14`, `22` and `85` carry the Hebrew word for internet and look like
+  merchant tokens. These internet-labelled codes support online use; `32` works
+  alone too. Named Apple Pay explicitly marked remote
+  is online wallet use, not a terminal tap.
 - **Negative finding:** `posEntryMod` is unusable: in-store Apple Pay rows can
   carry `02`, contradicting ISO 8583.
 - **Policy:** each typed fact needs explicit evidence, and contradicting evidence
-  leaves it unknown with a source issue. Other processor flags stay in provider
-  detail, because a field name alone establishes no financial or security meaning.
+  leaves it unknown with a source issue. Unknown/general execution codes do not
+  negate explicit contactless or secure-online text. Secure-online text establishes
+  online use and 3-D Secure; contactless evidence conflicts. Other security codes
+  remain uninterpreted.
 - **Checks:** [enrichment] "CAL comment templates and payment context", "CAL
   payment context through ingestion"; [source patterns] "makes payment context a
   conflict when a plan's rows disagree…".
@@ -106,19 +123,20 @@ keep distinct components; a fresh component replaces its earlier evidence.
   amount candidate, positive on refunds and nonzero on waived fees.
   `amtBeforeConvAndIndex` is the billed component. `debCrdCurrencyCode` and
   `transOriginalCurrencyCode` use provider codes (`1` USD, `3` ILS, `7` EUR);
-  `trnCurrencyIsoCode` is an ISO numeric string, and `srcCurrencyCode` agrees
-  with it where populated. `transOriginalSumCurrency` is nonnumeric despite its
+  `trnCurrencyIsoCode` is an ISO numeric string; `srcCurrencyCode` restates it,
+  empty exactly when it is null, and `crmIccCurrencyDesc` names the billing
+  currency's ISO alpha code. `transOriginalSumCurrency` is nonnumeric despite its
   name. `forcedDebRate` was always empty or `0`: rates and
   fees appear only in comments. Charges are positive, refunds negative and waived
   rows zero, but that sign agreement is not a universal guarantee.
 - **Negative findings:** a USD merchant charge can be billed in ILS, so a billed
   amount is never converted again; direct USD or EUR billing is its own native
   amount. Symbols and the abroad flag do not establish a conversion. Cash-account
-  and rate-like fields never replace purchase or original money. A discounted
-  row's billed amount is not reduced on that row, so a discount is never
-  subtracted again; its semantics are unverified.
+  and rate-like fields never replace purchase or original money. On a
+  discounted row `amountForDisplay` is not reduced, but `amtBeforeConvAndIndex`
+  is reduced by `discountAmount`; a discount is never subtracted again.
 - **Policy:** posted money is a full-purchase commitment, pending money an
-  authorization.
+  authorization. A currency restatement that disagrees is a conflict.
 - **Checks:** [currencies] "CAL original-currency roles"; [extraction] "retains
   opaque numeric cash-account metadata…".
 
@@ -145,14 +163,21 @@ keep distinct components; a fresh component replaces its earlier evidence.
   absorbing rounding. A plan's rows share `trnIntId`, `trnIntId` plus
   `curPaymentNum` was unique, and those identities never changed across
   overlapping captures: a candidate key, not a correction guarantee.
-  `numOfPayments` is the planned count and `curPaymentNum` an observed ordinal; a
-  positive ordinal with a zero planned count occurs.
+  `numOfPayments` is the planned count and `curPaymentNum` an observed ordinal;
+  other types state count and ordinal 0. Every installment row also states the
+  count as `עסקה ב-‎N‏ תשלומים` in `transTypeCommentDetails[]` and
+  `עסקה ב - N תשלומים` in `onGoingTransactionsComment`, equal wherever both
+  appear. The recent route can leave `numOfPayments` and `curPaymentNum` null.
+- **Policy:** texts supply missing `numOfPayments`; disagreement leaves it unknown
+  with `conflicting_installment_facts`. Explicit installment type/ordinal establishes
+  payment despite unknown count. Never derive ordinals.
 - **Cancellations (type 86)** have their own `trnIntId`, share none with a plan
   and carry `refundInd: true`. Their `numOfPayments` describes the original plan,
   which is not linked, and components may have ordinal 0.
 - **Not established:** foreign-currency plans, per-payment original money (`trnAmt`
-  describes the whole plan) and a cancellation's plan. Early repayment and
-  refunds can end a plan before its size.
+  describes the plan), cancellation-to-plan links or summaries missing count/ordinal.
+  Such summaries retain principal with unknown basis, excluded from totals. Early repayment/refunds
+  may shorten plans.
 - **Payment history:** in `paymentsMade[]` (`date`, `num`, `amount`,
   `currency`), `num` is a localized label with directional marks and digit
   groups, not an ordinal. In nonempty examples the parent counts are null and the
@@ -168,9 +193,9 @@ keep distinct components; a fresh component replaces its earlier evidence.
 `comments[]` entries are `{key, value}`, with an empty value when the key states
 the fact. Dates are `DD/MM/YYYY`; below, `9` marks a digit whose count varies. The
 parsed templates are the constants in [enrichment](enrichment.ts): contactless,
-3-D Secure, an ILS conversion at the representative rate (2 to 4 rate decimals), a
+3-D Secure, an ILS conversion at the representative rate (1 to 4 rate decimals), a
 USD conversion at the issuer's selling rate (a double space before "הבינלאומית", a
-USD amount that can be negative, 5 to 6 rate decimals, a trailing period), the FX
+USD amount that can be negative, 3 to 6 rate decimals, a trailing period), the FX
 fee (possibly negative, trailing zeros dropped), and the FX-fee discount marker
 and amount. These templates stay text:
 
@@ -190,10 +215,14 @@ link), `immediateComments[]` (the immediate-charge notice), string
 `transTypeCommentDetails[]` (original amount with U+200F and U+200E marks,
 installment counts, cash-withdrawal amounts) and `onGoingTransactionsComment`.
 They can explain transfers, waived fees or discounts, but Fonds infers no
-counterparty roles or adjustments from prose and never follows their links.
+counterparty roles or adjustments from prose and never follows their links. An
+installment-count or original-amount text leaves `additionalInformation` only
+when a typed field states the same fact; a contradicting one leaves the original
+money unknown.
 
 - **Checks:** [enrichment] "matches templates exactly…", "keeps unparsed
-  templates and unknown text in additionalInformation…"; [source information].
+  templates and unknown text in additionalInformation…"; [source information];
+  [stated text] "CAL stated text".
 
 ## cal.fx: conversion and fee
 
@@ -217,8 +246,9 @@ counterparty roles or adjustments from prose and never follows their links.
   row. The billing-month route's Hebrew `branchCodeDesc` labels group it
   deterministically: every MCC mapped to exactly one label over the joined rows.
   Several MCC values were shared by many merchants, so an MCC cannot establish
-  merchant identity. Merchant IDs are opaque and provider-scoped; address and
-  phone are unstructured.
+  merchant identity. Merchant IDs are opaque and provider-scoped; foreign rows
+  state `0`, which names no merchant and is not published. Address and phone
+  are unstructured.
 - **Policy:** short numeric codes are not zero-padded without evidence. A
   merchant, MCC, card-present flag or email candidate never proves business use.
 - **Checks:** [extraction] merchant-category cases.
@@ -229,7 +259,7 @@ counterparty roles or adjustments from prose and never follows their links.
   `cardUniqueID` and, in the later shape only, `transactionID`, which does not
   prove a link to `trnIntId`. A posted group can repeat a native ID across
   installment payments or cancellation components sharing a debit date.
-  `trnNumaretor` changes within groups and across captures, and `earlyPaymentInd`
+  `trnNumaretor` changes within groups and across captures and is no ordinal, and `earlyPaymentInd`
   changed without monetary changes. `debCrdDate`, on every posted row, is a debit
   or billing date, not a posting date; a future value does not mean pending.
   Recent dates are timezone-free `YYYY-MM-DDTHH:mm:ss`, and midnight does not
@@ -266,6 +296,7 @@ counterparty roles or adjustments from prose and never follows their links.
 [posting evidence tests]: ../../../tests/providers/cal/posting-evidence.test.ts
 [source information]: ../../../tests/providers/source-information.test.ts
 [source patterns]: ../../../tests/providers/cal/source-patterns.test.ts
+[stated text]: ../../../tests/providers/cal/stated-text.test.ts
 [six-current]: https://www.six-group.com/dam/download/financial-information/data-center/iso-currrency/lists/list-one.xml
 [six-historic]: https://www.six-group.com/dam/download/financial-information/data-center/iso-currrency/lists/list-three.xml
 [six-174]: https://www.six-group.com/dam/download/financial-information/data-center/iso-currrency/amendments/dl-currency-iso-amendment-174.pdf

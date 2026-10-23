@@ -73,6 +73,7 @@
     "@neon/config": "1.9.2",
     "@neon/functions": "0.11.0",
     "@neondatabase/auth": "0.6.0-beta",
+    "@seriousme/openapi-schema-validator": "2.11.0",
     "@stylistic/eslint-plugin": "5.10.0",
     "@types/node": "^24.19.2",
     "@types/pg": "^8.23.1",

@@ -397,10 +397,12 @@ describe("operation commands", () => {
 
       const rows = (await direct.invoke("list_transactions", {
         perspective: "all",
+        // Owner-confirmed continuity can involve an authorization already absent.
+        presence: "all",
         limit: 200,
       })) as { data: { id: string; status: string; version: number }[] };
       // Source keys are private, so the pair is found through storage.
-      const stored = await directStore.listTransactions({});
+      const stored = await directStore.listTransactions({ presence: "all" });
       const bySource = (part: string) =>
         stored.find((row) => row.sourceKey.includes(part))!.id;
       const pendingId = bySource("SYNTHETIC-AUTH-PENDING-POSTED");

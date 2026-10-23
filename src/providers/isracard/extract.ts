@@ -3,6 +3,7 @@ import { isLosslessNumber, parse } from "lossless-json";
 import { isCountryCode } from "../../domain/countries.js";
 import {
   emptyDetails,
+  isCityName,
   type JsonValue,
   transactionDateTimeSchema,
   type TransactionInput,
@@ -18,7 +19,12 @@ import {
   isracardCaptureSchema,
   isracardCardKey,
 } from "./capture.js";
-import { isracardDetailEvidence, isracardRowEvidence } from "./evidence.js";
+import { approvalPaymentContext, postedPaymentContext } from "./enrichment.js";
+import {
+  isracardDetailEvidence,
+  isracardRowEvidence,
+  mergeIsracardEvidence,
+} from "./evidence.js";
 import { isIsracardDigitalSuccess } from "./transport.js";
 
 type SourceRow = Record<string, unknown>;
@@ -123,18 +129,6 @@ function minor(value: unknown, currency: string | null): number | null {
   }
 }
 
-/** Only an explicit wallet name establishes a wallet. */
-function walletFromName(value: unknown): TransactionInput["wallet"] {
-  const name = text(value)?.trim().replace(/\s+/g, " ").toLowerCase();
-  return name === "apple pay"
-    ? "apple_pay"
-    : name === "google pay"
-      ? "google_pay"
-      : name === "samsung pay"
-        ? "samsung_pay"
-        : null;
-}
-
 /** The sign of a decimal source amount, number or numeric string; null otherwise. */
 function sourceSign(value: unknown): -1 | 0 | 1 | null {
   const lexical = token(value);
@@ -183,6 +177,18 @@ function digitalKind(row: SourceRow): TransactionInput["kind"] {
 }
 
 /** A source flag counts only when it is explicitly true. */
+/** Foreign rows state an all-zero merchant number, which names no merchant. */
+function merchantNumber(value: unknown): string | null {
+  const number = token(value);
+  return number !== null && /^0+$/.test(number) ? null : number;
+}
+
+/** A city slot can hold a phone number instead; that value stays raw only. */
+function cityName(value: unknown): string | null {
+  const city = text(value);
+  return city !== null && isCityName(city) ? city : null;
+}
+
 function flagged(value: unknown): boolean {
   return value === true || (typeof value === "string" && /^true$/i.test(value));
 }
@@ -465,6 +471,14 @@ function collectApprovals(
         if (details.issues.length > 1) {
           success = false;
         }
+        details.merchant.city = cityName(row.cityDescription);
+        const countryCode = text(row.countryCode);
+        details.merchant.countryCode =
+          countryCode !== null && isCountryCode(countryCode)
+            ? countryCode
+            : null;
+        const payment = approvalPaymentContext(row, details.issues);
+        details.issues = [...new Set(details.issues)];
         details.sourceRefs.push({
           runId: context.runId,
           path: `$.responses.digital.data.approvals.approvedTransactions[${index}]`,
@@ -489,7 +503,7 @@ function collectApprovals(
           sourceAliases: [],
           identityStrength: ambiguous ? "ambiguous" : "native",
           status: "pending",
-          description: null,
+          description: text(row.transactionDescription),
           counterpartyName: null,
           kind: "unknown",
           merchantName,
@@ -504,6 +518,8 @@ function collectApprovals(
           originalAmountMinor: null,
           originalCurrency: null,
           installmentCount: null,
+          providerTransactionCode: token(row.transactionCode),
+          ...payment,
           details,
         });
       }
@@ -1360,9 +1376,14 @@ function extractGroup(
       : row.dealSum;
   const originalMinor = minor(rawOriginal, evidenceCurrency);
   details.provider.isracard = {
-    identity: { baseKey, occurrenceCount },
-    rows: observations.map((item) =>
-      isracardRowEvidence(item.row, item.generation),
+    ...mergeIsracardEvidence(
+      {},
+      {
+        identity: { baseKey, occurrenceCount },
+        rows: observations.map((item) =>
+          isracardRowEvidence(item.row, item.generation),
+        ),
+      },
     ),
     observations: observations.map((item) => ({
       generation: item.generation,
@@ -1382,27 +1403,28 @@ function extractGroup(
     },
     billingMonth: capture.billingMonth,
   };
-  details.merchant.city = digital ? text(row.cityDescription) : text(row.city);
+  details.merchant.city = cityName(digital ? row.cityDescription : row.city);
   const countryCode = digital ? text(row.countryCode) : null;
   details.merchant.countryCode =
     countryCode !== null && isCountryCode(countryCode) ? countryCode : null;
-  // Conservative payment context. `presentCard` does not establish
-  // card presence; the security and wallet flags stay raw evidence.
-  const codeType = digitalRow ? token(digitalRow.tranzacCodeType) : null;
-  const wallets: TransactionInput["wallet"][] = [];
-  let counterpartyName: TransactionInput["counterpartyName"] =
-    kind === "transfer" ? undefined : null;
+  let detailBillingDate: string | null = null;
+  let boundDetail: SourceRow | null = null;
+  const namedParty = kind === "transfer" || (!digital && kind === "unknown");
+  let counterpartyName: TransactionInput["counterpartyName"] = namedParty
+    ? undefined
+    : null;
   // A detail projects facts only when its own voucher is the requested one;
   // an unbound detail stays in the archive alone.
   if (binding !== null) {
     if ("detail" in binding) {
       const { detail } = binding;
+      boundDetail = detail;
       details.merchant.address = text(detail.address);
       details.merchant.phone = text(detail.phoneNumber);
-      wallets.push(walletFromName(detail.transactionType));
-      wallets.push(walletFromName(detail.walletPayName));
-      // A transfer's bound detail names its other party.
-      if (kind === "transfer") {
+      // The bound voucher's own charge date, unlike a requested billing month.
+      detailBillingDate = sourceDate(detail.moedChiuvFull);
+      // A bound name states a party, not the unavailable Digital kind or role.
+      if (namedParty) {
         counterpartyName = text(detail.motavName)?.trim() || null;
       }
       details.provider.isracard.detail = isracardDetailEvidence(detail);
@@ -1414,10 +1436,13 @@ function extractGroup(
       issues.push(binding.issue);
     }
   }
-  const walletNames = [...new Set(wallets.filter((wallet) => wallet !== null))];
-  if (walletNames.length > 1) {
-    issues.push("conflicting_payment_context");
-  }
+  const payment = postedPaymentContext(
+    observations
+      .filter((item) => item.generation === "digital")
+      .map((item) => item.row),
+    boundDetail,
+    issues,
+  );
   const merchantName = text(
     digital
       ? row.businessName
@@ -1426,12 +1451,16 @@ function extractGroup(
         : row.fullSupplierNameHeb,
   );
   const billingDates = [
-    ...new Set(
-      observations.flatMap((item) =>
+    ...new Set([
+      ...observations.flatMap((item) =>
         item.billingDate === null ? [] : [item.billingDate],
       ),
-    ),
+      ...(detailBillingDate === null ? [] : [detailBillingDate]),
+    ]),
   ];
+  if (billingDates.length > 1) {
+    issues.push("conflicting_billing_date");
+  }
   details.issues = [...new Set(issues)];
   return {
     sourceScope: isracardCardKey(capture.card),
@@ -1447,7 +1476,9 @@ function extractGroup(
     counterpartyName,
     kind,
     merchantName,
-    merchantProviderId: token(digital ? row.businessNumber : row.supplierId),
+    merchantProviderId: merchantNumber(
+      digital ? row.businessNumber : row.supplierId,
+    ),
     merchantCategoryCode: null,
     transactionDate: observation.purchaseDate,
     bookingDate: null,
@@ -1480,15 +1511,7 @@ function extractGroup(
       installmentNumber: plan.installmentNumber,
     }),
     // Omitted payment facts have no evidence; null is conflicting evidence.
-    authorizationMethod:
-      codeType === "U" || codeType === "V" ? "online" : undefined,
-    wallet:
-      walletNames.length === 1
-        ? walletNames[0]!
-        : walletNames.length > 1
-          ? null
-          : undefined,
-    threeDSecureUsed: codeType === "V" ? true : undefined,
+    ...payment,
     recurring: observations.some((item) =>
       flagged(
         item.generation === "digital"
@@ -1618,7 +1641,9 @@ function extractPlanPurchase(
   issues.push("source_derived_amount_direction");
   const digitalRow = digitalRows[0];
   const legacyRow = legacyRows[0];
-  details.merchant.city = digitalRow ? text(digitalRow.cityDescription) : null;
+  details.merchant.city = digitalRow
+    ? cityName(digitalRow.cityDescription)
+    : null;
   const countryCode = digitalRow ? text(digitalRow.countryCode) : null;
   details.merchant.countryCode =
     countryCode !== null && isCountryCode(countryCode) ? countryCode : null;
@@ -1653,7 +1678,7 @@ function extractPlanPurchase(
     merchantName: text(
       digitalRow ? digitalRow.businessName : legacyRow?.fullSupplierNameHeb,
     ),
-    merchantProviderId: token(
+    merchantProviderId: merchantNumber(
       digitalRow ? digitalRow.businessNumber : legacyRow?.supplierId,
     ),
     merchantCategoryCode: null,

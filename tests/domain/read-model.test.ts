@@ -24,6 +24,12 @@ describe("spending total money roles", () => {
     const result = calculateTotals([
       { ...row, supersededById: "successor" },
       { ...row, presence: "removed" },
+      {
+        ...row,
+        presence: "not_returned",
+        sourceAbsence: { runId: "run", capturedAt: "2040-08-02T00:00:00Z" },
+        status: "pending",
+      },
       { ...row, status: "pending" },
       { ...row, kind: "income" },
       { ...row, kind: "transfer" },
@@ -31,9 +37,10 @@ describe("spending total money roles", () => {
     ]);
     expect(result).toMatchObject({
       includedCount: 0,
-      excludedCount: 6,
+      excludedCount: 7,
       excluded: {
         retiredOrRemoved: 2,
+        sourceAbsent: 1,
         pending: 1,
         transferOrIncome: 2,
         authorization: 1,
@@ -118,9 +125,15 @@ describe("perspectives", () => {
     ["billedLine", false, true],
     ["standaloneLine", true, true],
   ] as const)("places a %s row by its own facts", (role, spending, billing) => {
-    expect(inPerspective(roles[role], "spending")).toBe(spending);
-    expect(inPerspective(roles[role], "billing")).toBe(billing);
-    expect(inPerspective(roles[role], "all")).toBe(true);
+    expect(inPerspective(roles[role], "spending", false)).toBe(spending);
+    expect(inPerspective(roles[role], "billing", false)).toBe(billing);
+    expect(inPerspective(roles[role], "all", false)).toBe(true);
+  });
+
+  it("excludes a purchase with live billed lines even when its count is unknown", () => {
+    expect(inPerspective(roles.unknownCount, "billing", true)).toBe(false);
+    expect(inPerspective(roles.unknownCount, "spending", true)).toBe(true);
+    expect(inPerspective(roles.unknownCount, "all", true)).toBe(true);
   });
 
   const row: TotalRow = {

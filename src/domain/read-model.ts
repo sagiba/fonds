@@ -40,12 +40,12 @@ export function presentTransaction(
 }
 
 /**
- * Read perspectives. Membership depends only on a row's own facts,
- * never on whether children exist or on other request filters.
+ * Read perspectives. Live child associations are evaluated independently
+ * of other request filters.
  * - spending: every row without a purchase link (purchases, single charges,
  *   standalone billed rows, fees, cancellations);
  * - billing: every row except an installment plan's purchase (two or more
- *   payments and no ordinal of its own), which counts through its lines;
+ *   payments and no ordinal of its own, or live linked billed lines);
  * - all: every row; never totalled, because it would double-count.
  */
 export const PERSPECTIVES = ["spending", "billing", "all"] as const;
@@ -62,8 +62,8 @@ type MembershipFacts = Pick<
 
 /**
  * The membership rule as data, so storage compiles the same predicate into
- * SQL. `billing` is the null-safe form of NOT (count >= 2 AND number IS NULL):
- * a row with both facts null is a member.
+ * SQL. A plan purchase is one with live billed lines or a multi-payment count,
+ * so lines exclude their purchase even when its plan metadata is unknown.
  */
 export type PerspectiveRule =
   | { kind: "every_row" }
@@ -87,6 +87,7 @@ export function perspectiveRule(perspective: Perspective): PerspectiveRule {
 export function inPerspective(
   row: MembershipFacts,
   perspective: Perspective,
+  hasBilledLines: boolean,
 ): boolean {
   const rule = perspectiveRule(perspective);
   switch (rule.kind) {
@@ -96,11 +97,30 @@ export function inPerspective(
       return row.purchaseId === null;
     case "without_plan_purchase":
       return (
-        row.installmentCount === null ||
-        row.installmentCount < rule.minimumPayments ||
-        row.installmentNumber !== null
+        !hasBilledLines &&
+        (row.installmentCount === null ||
+          row.installmentCount < rule.minimumPayments ||
+          row.installmentNumber !== null)
       );
   }
+}
+
+/** The association survives absence, but not removal or retirement. */
+export function isLiveBilledLine(
+  row: Pick<Transaction, "purchaseId" | "presence" | "supersededById">,
+): boolean {
+  return (
+    row.purchaseId !== null && row.presence !== "removed" && !row.supersededById
+  );
+}
+
+export function billedLinesByPurchase(
+  rows: Iterable<Transaction>,
+): Map<string, Transaction[]> {
+  return Map.groupBy(
+    [...rows].filter(isLiveBilledLine),
+    (row) => row.purchaseId!,
+  );
 }
 
 export type TotalRow = Pick<
@@ -116,7 +136,7 @@ export type TotalRow = Pick<
   | "originalCurrency"
   | "fxFeeMinor"
   | "fxFeeCurrency"
->;
+> & { sourceAbsence?: Transaction["sourceAbsence"] | null };
 
 /**
  * A converted row bills in a currency other than its original money. Storage
@@ -142,7 +162,11 @@ export function calculateTotals(
 ) {
   const groups = new Map<
     string,
-    { currency: string; amountBasis: string | null; amounts: number[] }
+    {
+      currency: string;
+      amountBasis: Transaction["amountBasis"] | null;
+      amounts: number[];
+    }
   >();
   const fxFees = new Map<string, number[]>();
   let fxFeeUnknownCount = 0;
@@ -151,12 +175,17 @@ export function calculateTotals(
     authorization: 0,
     transferOrIncome: 0,
     retiredOrRemoved: 0,
+    sourceAbsent: 0,
     unresolved: 0,
   };
   let includedCount = 0;
   for (const row of rows) {
     if (row.supersededById || row.presence === "removed") {
       excluded.retiredOrRemoved++;
+      continue;
+    }
+    if (row.sourceAbsence != null) {
+      excluded.sourceAbsent++;
       continue;
     }
     if (row.status === "pending") {

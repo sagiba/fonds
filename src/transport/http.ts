@@ -6,7 +6,11 @@ import { bodyLimit } from "hono/body-limit";
 import { routePath } from "hono/route";
 
 import type { EventService } from "../application/events.js";
-import { type Application, publicError } from "../application/operations.js";
+import {
+  type Application,
+  type Operation,
+  publicError,
+} from "../application/operations.js";
 import {
   acceptedIdentity,
   FINANCIAL_SCOPES,
@@ -19,6 +23,8 @@ import {
   type TrustedIdentity,
 } from "./auth.js";
 import { createMcpHttpHandler, opensSubscriptionStream } from "./mcp.js";
+import { openApiDocument } from "./openapi.js";
+import { pathInputs, REST_ROUTES, type RestRoute } from "./rest-routes.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const LOG_HTTP_METHODS = [
@@ -80,6 +86,7 @@ export type HttpServiceOptions = {
   | {
       token: string;
       authProvider?: never;
+      publicApiDescription?: never;
       publicOrigin?: never;
       ownerId?: never;
       platformRoutes?: never;
@@ -98,6 +105,8 @@ export type HttpServiceOptions = {
       platformRoutes?: RouteHandler;
       /** Unauthenticated login/discovery routes, after the Host and body guards. */
       publicRoutes?: RouteHandler;
+      /** Serve the API description without authentication; a local service always does. */
+      publicApiDescription?: boolean;
     }
 );
 
@@ -139,6 +148,16 @@ export function createHttpService(
       !/^[A-Za-z0-9_-]{32,256}$/.test(options.token)
     ) {
       throw new Error("Invalid API token configuration");
+    }
+  }
+  const operations = new Map(
+    application.operations.map((operation) => [operation.name, operation]),
+  );
+  // The route table covers the catalog at compile time; an application
+  // assembled outside it could still carry an operation HTTP would not serve.
+  for (const name of operations.keys()) {
+    if (!REST_ROUTES.some((route) => route.operation === name)) {
+      throw new Error("Operation has no REST route");
     }
   }
   const token = Buffer.from(options.token ?? "");
@@ -275,6 +294,31 @@ export function createHttpService(
       ),
     );
   }
+  // The description holds no owner data, and importers fetch it before they
+  // hold a token; a hosted deployment advertises it only when the operator opts in.
+  if (!hosted || options.publicApiDescription) {
+    let apiDocument: ReturnType<typeof openApiDocument> | undefined;
+    app.get("/v1/openapi.json", (context) =>
+      context.json(
+        (apiDocument ??= openApiDocument(
+          application.operations,
+          hosted
+            ? {
+                origin: publicOrigin!,
+                security: {
+                  kind: "oauth2",
+                  authorizationUrl:
+                    options.authProvider.endpoints.authorization,
+                  tokenUrl: options.authProvider.endpoints.token,
+                  scopes: authorizationScopes,
+                  resource,
+                },
+              }
+            : { security: { kind: "bearer" } },
+        )),
+      ),
+    );
+  }
   const unauthenticated = (context: Context) => {
     context.header("WWW-Authenticate", challenge);
     return context.json(
@@ -331,29 +375,18 @@ export function createHttpService(
     context.json(failure("not_found", "Route not found."), 404),
   );
 
-  function hasOperation(name: string) {
-    return application.operations.some((operation) => operation.name === name);
-  }
-
   async function executeOperation(
     context: Context,
-    name: string,
+    operation: Operation,
     input: unknown,
-    /** A status other than 200 for some successful outputs. */
-    status?: (output: unknown) => 200 | 202,
+    accepted?: (output: unknown) => boolean,
   ) {
-    const operation = application.operations.find(
-      (entry) => entry.name === name,
-    );
-    if (!operation) {
-      throw new Error("Operation unavailable");
-    }
     const denied = authorize(context, operationScope(operation));
     if (denied) {
       return denied;
     }
     const output = await operation.execute(input);
-    return context.json(output, status?.(output) ?? 200);
+    return context.json(output, accepted?.(output) ? 202 : 200);
   }
 
   function authorize(context: Context, scope: FinancialScope) {
@@ -391,16 +424,7 @@ export function createHttpService(
     return values;
   }
 
-  /** Query input plus one path parameter, which the query must not also name. */
-  function parsePathInput(context: Context, name: string) {
-    const input = parseQueryInput(context);
-    if (Object.hasOwn(input, name)) {
-      throw new InputError();
-    }
-    return { ...input, [name]: context.req.param(name) };
-  }
-
-  async function parseJsonInput(context: Context, transactionId?: string) {
+  async function parseJsonInput(context: Context) {
     if (!isJsonContentType(context.req.header("Content-Type"))) {
       throw new InputError();
     }
@@ -413,11 +437,26 @@ export function createHttpService(
     if (input === null || typeof input !== "object" || Array.isArray(input)) {
       throw new InputError();
     }
-    if (transactionId !== undefined) {
-      if (Object.hasOwn(input, "transactionId")) {
-        throw new InputError();
-      }
-      return { ...input, transactionId };
+    return input as Record<string, unknown>;
+  }
+
+  /** An operation's input: its path segments, then its query or JSON body. */
+  async function routeInput(context: Context, route: RestRoute) {
+    const input =
+      route.method === "GET"
+        ? parseQueryInput(context)
+        : await parseJsonInput(context);
+    const path = pathInputs(route);
+    // An input the path carries, or the route refuses, never arrives otherwise.
+    if (
+      [...path, ...(route.excluded ?? [])].some((name) =>
+        Object.hasOwn(input, name),
+      )
+    ) {
+      throw new InputError();
+    }
+    for (const name of path) {
+      input[name] = context.req.param(name);
     }
     return input;
   }
@@ -433,138 +472,20 @@ export function createHttpService(
         scope: hosted ? "hosted-single-owner" : "local-single-owner",
       }),
   );
-  app.get("/v1/connections", (context) =>
-    executeOperation(context, "list_connections", parseQueryInput(context)),
-  );
-  app.get("/v1/connections/:connectionId", (context) =>
-    executeOperation(
-      context,
-      "get_connection",
-      parsePathInput(context, "connectionId"),
-    ),
-  );
-  app.get("/v1/accounts", (context) =>
-    executeOperation(context, "list_accounts", parseQueryInput(context)),
-  );
-  app.get("/v1/accounts/:accountId", (context) =>
-    executeOperation(
-      context,
-      "get_account",
-      parsePathInput(context, "accountId"),
-    ),
-  );
-  app.get("/v1/cards", (context) =>
-    executeOperation(context, "list_cards", parseQueryInput(context)),
-  );
-  app.get("/v1/cards/:cardId", (context) =>
-    executeOperation(context, "get_card", parsePathInput(context, "cardId")),
-  );
-  if (hasOperation("refresh_connection")) {
-    // A refresh still running answers 202 and continues in the background.
-    const accepted = (output: unknown) => {
-      const { refresh, refreshes = [] } = output as {
-        refresh?: { status: string };
-        refreshes?: { refresh: { status: string } | null }[];
-      };
-      return [refresh, ...refreshes.map((entry) => entry.refresh)].some(
-        (item) => item?.status === "pending" || item?.status === "running",
-      )
-        ? 202
-        : 200;
-    };
-    app.post("/v1/connections/:connectionId/refreshes", async (context) => {
-      const input = await parseJsonInput(context);
-      if (Object.hasOwn(input, "connectionId")) {
-        throw new InputError();
-      }
-      return executeOperation(
-        context,
-        "refresh_connection",
-        { ...input, connectionId: context.req.param("connectionId") },
-        accepted,
+  for (const route of REST_ROUTES) {
+    // An optional capability's operation is absent, and so is its route.
+    const operation = operations.get(route.operation);
+    if (operation) {
+      app.on(route.method, route.path, async (context) =>
+        executeOperation(
+          context,
+          operation,
+          await routeInput(context, route),
+          route.accepted,
+        ),
       );
-    });
-    app.post("/v1/refreshes", async (context) => {
-      const input = await parseJsonInput(context);
-      if (Object.hasOwn(input, "connectionId")) {
-        throw new InputError();
-      }
-      return executeOperation(context, "refresh_connection", input, accepted);
-    });
+    }
   }
-  app.get("/v1/connections/:connectionId/refreshes", (context) =>
-    executeOperation(
-      context,
-      "list_refreshes",
-      parsePathInput(context, "connectionId"),
-    ),
-  );
-  app.get("/v1/refreshes/:refreshId", (context) =>
-    executeOperation(
-      context,
-      "get_refresh",
-      parsePathInput(context, "refreshId"),
-    ),
-  );
-  app.get("/v1/transactions", (context) =>
-    executeOperation(context, "list_transactions", parseQueryInput(context)),
-  );
-  // Static paths precede the transaction ID route.
-  app.get("/v1/transactions/totals", (context) =>
-    executeOperation(
-      context,
-      "get_transaction_totals",
-      parseQueryInput(context),
-    ),
-  );
-  app.get("/v1/transactions/:transactionId", (context) =>
-    executeOperation(
-      context,
-      "get_transaction",
-      parsePathInput(context, "transactionId"),
-    ),
-  );
-  app.get("/v1/events", (context) =>
-    executeOperation(context, "list_events", parseQueryInput(context)),
-  );
-  app.get("/v1/connections/:connectionId/sync-runs", (context) =>
-    executeOperation(
-      context,
-      "list_sync_runs",
-      parsePathInput(context, "connectionId"),
-    ),
-  );
-  app.patch("/v1/transactions/:transactionId/annotation", async (context) =>
-    executeOperation(
-      context,
-      "update_annotation",
-      await parseJsonInput(context, context.req.param("transactionId")),
-    ),
-  );
-  app.post("/v1/annotations/undo", async (context) =>
-    executeOperation(context, "undo_annotation", await parseJsonInput(context)),
-  );
-  app.post("/v1/transactions/:transactionId/link-pending", async (context) =>
-    executeOperation(
-      context,
-      "link_pending_transaction",
-      await parseJsonInput(context, context.req.param("transactionId")),
-    ),
-  );
-  app.post("/v1/transactions/:transactionId/unlink-pending", async (context) =>
-    executeOperation(
-      context,
-      "unlink_pending_transaction",
-      await parseJsonInput(context, context.req.param("transactionId")),
-    ),
-  );
-  app.post("/v1/transactions/:transactionId/removal", async (context) =>
-    executeOperation(
-      context,
-      "confirm_removal",
-      await parseJsonInput(context, context.req.param("transactionId")),
-    ),
-  );
   app.all("/mcp", async (context) => {
     const identity = context.get("identity");
     // MCP needs at least one financial grant; each tool checks its own scope.

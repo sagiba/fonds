@@ -48,7 +48,7 @@ async function capture(
   day = 1,
   runId = `${name}-${day}`,
   responseText = fixture(name),
-  endpoint = "/synthetic-financial-response",
+  endpoint = "synthetic:cal/recent",
 ) {
   return await db.ingestRun(
     {
@@ -231,7 +231,7 @@ for (const backend of backends) {
               responses: [
                 {
                   accountKey,
-                  endpoint: "/synthetic-financial-response",
+                  endpoint: "synthetic:cal/recent",
                   capturedAt: `2040-08-0${index + 1}T00:00:00Z`,
                   responseText: JSON.stringify({
                     statusCode: 1,
@@ -455,7 +455,7 @@ for (const backend of backends) {
       ).toContain(weakBefore.id);
     });
 
-    it("retains spending and annotation while unlisted, then restores the same native ID", async () => {
+    it("retains CAL posted money and annotation through omission and reappearance on the same native ID", async () => {
       const recent = (name: string) =>
         fixture(name).replaceAll("2040-05-20", "2040-07-01");
       await capture(
@@ -485,9 +485,14 @@ for (const backend of backends) {
         recent("recent-02"),
       );
       expect(await db.getTransaction(vanished.id)).toMatchObject({
-        presence: "not_returned",
-        version: 2,
+        presence: "seen",
+        amountMinor: -6480,
+        annotation: { data: { notes: "Keep this note" } },
+        version: vanished.version,
       });
+      expect(
+        (await db.getTransaction(vanished.id))!.sourceAbsence,
+      ).toBeUndefined();
       const totalsBeforeReturn = await db.getTotals();
       await capture(
         db,
@@ -499,20 +504,19 @@ for (const backend of backends) {
       );
       expect(await db.getTransaction(vanished.id)).toMatchObject({
         presence: "seen",
-        version: 3,
+        version: vanished.version,
         annotation: { data: { notes: "Keep this note" } },
       });
-      expect(await db.getTotals()).toEqual(totalsBeforeReturn);
+      const totalsAfterReturn = await db.getTotals();
+      expect(totalsAfterReturn).toEqual(totalsBeforeReturn);
+      expect(
+        (await db.getTransaction(vanished.id))!.sourceAbsence,
+      ).toBeUndefined();
       expect(
         (await db.listEvents())
           .filter((change) => change.transactionId === vanished.id)
           .map((change) => change.type),
-      ).toEqual([
-        "transaction.imported",
-        "annotation.updated",
-        "transaction.unlisted",
-        "transaction.restored",
-      ]);
+      ).toEqual(["transaction.imported", "annotation.updated"]);
     });
 
     it("retains all prior pending listing state when its partition is malformed", async () => {
@@ -561,13 +565,45 @@ for (const backend of backends) {
       ]);
     });
 
-    it("does not restore or change current state from an older capture", async () => {
+    it("preserves newer facts and membership while accepting independently newer native observations", async () => {
       await capture(db, connectionId, "recent-01", 1);
       await capture(db, connectionId, "recent-02", 3);
       const current = await db.listTransactions();
       const changesBefore = await db.listEvents();
       await capture(db, connectionId, "recent-01", 2, "older-capture");
-      expect(await db.listTransactions()).toEqual(current);
+      const expected = structuredClone(current);
+      const advanced = expected.filter((row) =>
+        ["SYNTHETIC-AUTH-PENDING-POSTED", "SYNTHETIC-TXN-VANISH"].some((key) =>
+          row.sourceKey.includes(`"${key}"`),
+        ),
+      );
+      expect(advanced).toHaveLength(2);
+      for (const row of advanced) {
+        expect(row.lastSeenRunId).toBe("recent-01-1");
+        row.lastSeenAt = "2040-08-02T00:00:00.000Z";
+        row.lastSeenRunId = "older-capture";
+        row.details.sourceRefs = row.details.sourceRefs.map((ref) => ({
+          ...ref,
+          runId: "older-capture",
+        }));
+        row.details.provider.cal = {
+          ...(row.details.provider.cal as Record<string, never>),
+          identity: { currentRows: [0] },
+        };
+        for (const receipt of [
+          row.sourceEvidence?.identity,
+          row.sourceEvidence?.financial,
+        ]) {
+          if (receipt) {
+            receipt.runId = "older-capture";
+            receipt.capturedAt = row.lastSeenAt;
+          }
+        }
+      }
+      expect(await db.listTransactions()).toEqual(expected);
+      expect(await db.listEvents()).toEqual(changesBefore);
+      await capture(db, connectionId, "recent-01", 2, "older-capture");
+      expect(await db.listTransactions()).toEqual(expected);
       expect(await db.listEvents()).toEqual(changesBefore);
     });
 
@@ -876,7 +912,17 @@ for (const backend of backends) {
         JSON.stringify(envelope),
       );
       expect((await db.getTotals()).includedCount).toBe(0);
-      const active = await db.listTransactions({ presence: "seen" });
+      const generations = await db.listTransactions({ presence: "seen" });
+      expect(generations).toHaveLength(3);
+      expect(generations.every((row) => !row.sourceAbsence)).toBe(true);
+      const active = generations.filter(
+        (row) => !row.sourceEvidence?.identity?.retiredFromMatching,
+      );
+      expect(
+        generations.filter(
+          (row) => row.sourceEvidence?.identity?.retiredFromMatching,
+        ),
+      ).toHaveLength(2);
       expect(active).toHaveLength(1);
       expect(active[0]?.identityStrength).toBe("ambiguous");
       expect(

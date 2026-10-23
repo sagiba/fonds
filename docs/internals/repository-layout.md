@@ -54,7 +54,7 @@ kebab-case filenames. Add a provider under `providers/<name>/`, exporting its
 `runtime/`, the root executables and `targets/` own credential input, startup
 and wiring concrete implementations together. Each operation is defined once in
 `application/operations.ts`; HTTP routes, MCP tools and CLI commands derive from
-it. Within those dependencies, the
+it ([HTTP API internals](http-api.md)). Within those dependencies, the
 [ESLint configuration](../../eslint.config.mjs) enforces import boundaries in
 every form, including type-only imports, re-exports and `import()`, and
 `tests/tooling/module-boundaries.test.mjs` verifies them:
@@ -155,8 +155,8 @@ committed runtime inputs: preserve the embedded SQL byte for byte, never derive
 expected declarations from a private ledger and never relax validation to accept
 unexplained drift.
 
-Before first release, update `0001` in `migrations/` and
-`migrations/postgres/`; after release, append the next numbered migration.
+Preserve the current `0001` baseline in `migrations/` and
+`migrations/postgres/`; append the next numbered forward migration.
 Run `node --import tsx scripts/generate-storage-schema.ts` against disposable
 PostgreSQL 18 `FONDS_TEST_POSTGRES_URL` (the role needs `CREATEDB`). It embeds the files, writes the D1 copies, and records the
 declarations of fresh SQLite and PostgreSQL databases migrated to the latest

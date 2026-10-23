@@ -140,7 +140,7 @@ describe("Isracard extraction", () => {
       });
       const row = extract(capture).transactions[0]!;
       expect(row.wallet).toBe(wallet);
-      // presentCard does not establish card presence.
+      // A false presentCard states nothing: in-store wallet payments are false.
       expect(row.cardPresent ?? null).toBeNull();
       expect(row.details.provider.isracard!.detail).toMatchObject({
         walletPayName,
@@ -301,7 +301,7 @@ describe("Isracard extraction", () => {
       recurring: null,
       providerTransactionCode: "1",
     });
-    expect(discount.cardPresent).toBeNull();
+    expect(discount.cardPresent).toBe(false);
     expect(discount.details.provider.isracard!.rows).toContainEqual(
       expect.objectContaining({
         discountAmount: "10",
@@ -754,6 +754,79 @@ describe("Isracard extraction", () => {
   });
 
   it.each([
+    [0, null],
+    ["000", null],
+    [7000003, "7000003"],
+  ])(
+    "publishes no merchant number for the all-zero foreign sentinel %j",
+    (businessNumber, expected) => {
+      const capture = baseline();
+      updateDigital(capture, (rows) => {
+        Object.assign(rows[0]!, { businessNumber, isIsraelDeal: false });
+      });
+      const row = extract(capture).transactions[0]!;
+      expect(row.merchantProviderId).toBe(expected);
+      expect(row.details.provider.isracard!.rows).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ businessNumber: String(businessNumber) }),
+        ]),
+      );
+    },
+  );
+
+  it.each([
+    ["+99 999 9999999", null],
+    ["999-9999999", null],
+    ["+9 (999) 999-9999", null],
+    ["999.999.9999", null],
+    ["Synthetic City", "Synthetic City"],
+  ])("keeps only a city name in the merchant city: %j", (city, expected) => {
+    const capture = baseline();
+    updateDigital(capture, (rows) => {
+      rows[0]!.cityDescription = city;
+    });
+    expect(extract(capture).transactions[0]!.details.merchant.city).toBe(
+      expected,
+    );
+  });
+
+  it.each([
+    [null, "2040-07-10"],
+    ["10/07/2040", "2040-07-10"],
+    ["11/07/2040", null],
+  ])(
+    "uses a bound detail's charge date as a billing date: legacy=%s",
+    (legacyDate, expected) => {
+      const capture = baseline();
+      updateLegacy(capture, (rows) => {
+        rows[0]!.fullPaymentDate = legacyDate;
+      });
+      const entry = capture.responses.details![0]!;
+      entry.responseText = JSON.stringify({
+        Header: { Status: "1" },
+        PirteyIska_204Bean: {
+          voucherNumberRatz: entry.voucherNumber,
+          moedChiuvFull: "10/07/2040",
+          clearingData: "לא הוצג",
+          solek: "I  ",
+        },
+      });
+      const row = extract(capture).transactions.find((item) =>
+        item.sourceKey.includes("VOUCHER-1"),
+      )!;
+      expect(row.billingDate).toBe(expected);
+      expect(row.details.issues.includes("conflicting_billing_date")).toBe(
+        expected === null,
+      );
+      expect(row.details.provider.isracard!.detail).toMatchObject({
+        moedChiuvFull: "10/07/2040",
+        clearingData: "לא הוצג",
+        solek: "I  ",
+      });
+    },
+  );
+
+  it.each([
     ["10/07/2040", "11/07/2040", null],
     ["11/07/2040", "10/07/2040", null],
     ["10/07/2040", "10/07/2040", "2040-07-10"],
@@ -949,7 +1022,8 @@ describe("Isracard extraction", () => {
         // The issuer code stays opaque, as supplied.
         providerTransactionCode: String(code),
       });
-      expect(row.cardPresent ?? null).toBeNull();
+      // A presented physical card is source-stated card presence.
+      expect(row.cardPresent).toBe(true);
       expect(row.details.issues).not.toContain("unsupported_transaction_type");
       expect(row.details.issues).toContain("source_derived_amount_direction");
       for (const issue of [
@@ -1215,7 +1289,7 @@ describe("Isracard extraction", () => {
       const row = extract(capture).transactions[0]!;
       expect(row.kind, String(code)).toBe("unknown");
       expect(row.details.issues).toContain("unsupported_transaction_type");
-      expect(row.cardPresent ?? null).toBeNull();
+      expect(row.cardPresent).toBe(true);
     }
   });
 

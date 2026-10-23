@@ -363,6 +363,53 @@ export function paymentContextConflicts(
   );
 }
 
+export const sourceAbsenceSchema = z
+  .object({
+    runId: z.string().min(1).max(RESOURCE_ID_MAX_LENGTH),
+    capturedAt: z.string(),
+  })
+  .strict();
+
+export type SourceAbsence = z.infer<typeof sourceAbsenceSchema>;
+
+const sourceReceiptSchema = z
+  .object({
+    runId: z.string().min(1).max(RESOURCE_ID_MAX_LENGTH),
+    capturedAt: z.string(),
+  })
+  .strict();
+
+/** Engine-owned capture comparisons, separate from accepted financial facts. */
+export const sourceEvidenceSchema = z
+  .object({
+    identity: z
+      .object({
+        financialFingerprint: z.string().min(1).optional(),
+        runId: z.string().min(1).max(RESOURCE_ID_MAX_LENGTH).optional(),
+        capturedAt: z.string().optional(),
+        retiredFromMatching: z.boolean(),
+      })
+      .strict()
+      .refine(
+        (identity) =>
+          (identity.financialFingerprint !== undefined &&
+            identity.runId !== undefined &&
+            identity.capturedAt !== undefined) ||
+          (identity.retiredFromMatching &&
+            identity.financialFingerprint === undefined &&
+            identity.runId === undefined &&
+            identity.capturedAt === undefined),
+        "A source identity requires its captured comparison or explicit legacy retirement",
+      )
+      .optional(),
+    financial: sourceReceiptSchema
+      .extend({ continuitySignature: z.string().min(1).optional() })
+      .optional(),
+  })
+  .strict();
+
+export type SourceEvidence = z.infer<typeof sourceEvidenceSchema>;
+
 const retainedPendingSchema = z
   .object({
     ...sourceFactsShape,
@@ -372,6 +419,8 @@ const retainedPendingSchema = z
     id: z.string().min(1),
     connectionId: z.string().min(1),
     presence: presenceSchema,
+    sourceAbsence: sourceAbsenceSchema.optional(),
+    sourceEvidence: sourceEvidenceSchema.optional(),
     firstSeenAt: z.string(),
     lastSeenAt: z.string(),
     lastSeenRunId: z.string(),
@@ -393,6 +442,16 @@ const splitReceiptSchema = z
   })
   .strict();
 
+const postingOverlapSchema = z
+  .object({
+    postedId: z.string().min(1),
+    runId: z.string().min(1).max(RESOURCE_ID_MAX_LENGTH),
+    capturedAt: z.string(),
+    pendingFingerprint: z.string().min(1),
+    postedFingerprint: z.string().min(1),
+  })
+  .strict();
+
 const postingLinkSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -406,6 +465,7 @@ const postingLinkSchema = z
       .object({
         runId: z.string().min(1).max(RESOURCE_ID_MAX_LENGTH),
         capturedAt: z.string(),
+        overlap: postingOverlapSchema.optional(),
       })
       .strict()
       .nullable(),
@@ -415,6 +475,7 @@ const postingLinkSchema = z
 
 export const detailsSchema = sourceDetailsSchema.extend({
   postingLink: postingLinkSchema.optional(),
+  postingOverlap: postingOverlapSchema.optional(),
 });
 
 export type TransactionDetails = z.infer<typeof detailsSchema>;
@@ -511,6 +572,19 @@ export type StoredTransactionFacts = Omit<
   PaymentContextField
 > &
   Pick<LedgerFacts, PaymentContextField>;
+
+/** A city needs a name; phone-only values and explicit web/email addresses are not places. */
+export function isCityName(value: string): boolean {
+  // Recognize web hosts without rejecting arbitrary dotted place abbreviations.
+  const webHost =
+    /^(?:[a-z0-9-]+\.)+(?:com|net|org|edu|gov|biz|info|app|dev|shop|store|online|(?:co|com|net|org|gov|ac)\.[a-z]{2})(?::\d+)?(?:[/?#]\S*)?$/i;
+  return (
+    /\p{L}/u.test(value) &&
+    !/^(?:https?:\/\/|www\.)/i.test(value.trim()) &&
+    !webHost.test(value.trim()) &&
+    !/^\S+@\S+\.\S+$/.test(value.trim())
+  );
+}
 
 /** Billed lines (a purchase link or an ordinal) are never pending/posted matched. */
 export function isBilledLine(

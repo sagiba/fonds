@@ -15,6 +15,7 @@ import {
   presenceSchema,
   refreshFailureCodeSchema,
   RESOURCE_ID_MAX_LENGTH,
+  sourceAbsenceSchema,
   transactionDateTimeSchema,
   transactionStatusSchema,
   walletSchema,
@@ -122,6 +123,7 @@ export const transactionOutputSchema = z
       "Source report status; posted does not establish an account booking.",
     ),
     presence: presenceSchema,
+    sourceAbsence: sourceAbsenceSchema.nullable(),
     kind: kindSchema,
     amountBasis: amountBasisSchema,
     amount: moneyOutputSchema
@@ -258,12 +260,28 @@ function sourceTextPreview() {
   return preview;
 }
 
-/** Financial wire fields are deliberate; retained provider JSON never crosses this boundary. */
+type CompactTransaction = z.input<typeof transactionOutputSchema>;
+
+type DetailedTransaction = z.input<typeof transactionDetailOutputSchema>;
+
+/**
+ * Financial wire fields are deliberate; retained provider JSON never crosses
+ * this boundary. Compact unless `detail`; list pages are always compact.
+ */
+export function presentWireTransaction(
+  row: TransactionView,
+): CompactTransaction;
+export function presentWireTransaction(
+  row: TransactionView,
+  detail: boolean,
+  includeEvidence?: boolean,
+): CompactTransaction | DetailedTransaction;
+
 export function presentWireTransaction(
   row: TransactionView,
   detail = false,
   includeEvidence = false,
-) {
+): CompactTransaction | DetailedTransaction {
   const source = sourceTextPreview();
   const transaction = {
     id: row.id,
@@ -271,6 +289,7 @@ export function presentWireTransaction(
     cardId: row.cardId,
     status: row.status,
     presence: row.presence,
+    sourceAbsence: row.sourceAbsence ?? null,
     kind: row.kind,
     amountBasis: row.amountBasis,
     amount: presentMoney(row.amountMinor, row.currency),
@@ -703,6 +722,7 @@ export const totalsOutputSchema = z
         pending: versionSchema,
         transferOrIncome: versionSchema,
         retiredOrRemoved: versionSchema,
+        sourceAbsent: versionSchema,
         unresolved: versionSchema,
         authorization: versionSchema,
       })

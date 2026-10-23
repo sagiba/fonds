@@ -79,28 +79,6 @@ function exceedsOutputLimit(issues: readonly z.core.$ZodIssue[]): boolean {
   );
 }
 
-const outputSchemas: Record<string, z.ZodObject> = {
-  list_connections: connectionListOutputSchema,
-  list_cards: cardListOutputSchema,
-  get_connection: connectionReadOutputSchema,
-  get_card: cardReadOutputSchema,
-  list_accounts: accountListOutputSchema,
-  get_account: accountReadOutputSchema,
-  list_transactions: transactionListOutputSchema,
-  get_transaction: transactionReadOutputSchema,
-  get_transaction_totals: totalsOutputSchema,
-  list_events: eventListOutputSchema,
-  list_sync_runs: syncRunListOutputSchema,
-  update_annotation: annotationWriteOutputSchema,
-  undo_annotation: annotationWriteOutputSchema,
-  link_pending_transaction: transactionWriteOutputSchema,
-  unlink_pending_transaction: unlinkOutputSchema,
-  confirm_removal: transactionWriteOutputSchema,
-  refresh_connection: refreshStartOutputSchema,
-  get_refresh: refreshReadOutputSchema,
-  list_refreshes: refreshListOutputSchema,
-};
-
 export class ApplicationError extends Error {
   constructor(readonly code: "not_found") {
     super(code);
@@ -162,11 +140,14 @@ export function publicError(error: unknown) {
 }
 
 /** Store-independent contract of one operation; HTTP, MCP and the CLI derive from it. */
-export interface OperationDefinition {
+export interface OperationDefinition<
+  Input extends z.ZodObject = z.ZodObject,
+  Output extends z.ZodObject = z.ZodObject,
+> {
   name: string;
   description: string;
-  inputSchema: z.ZodObject;
-  outputSchema: z.ZodObject;
+  inputSchema: Input;
+  outputSchema: Output;
   /** The scope it needs: `read` requires `financial:read`, `write` `financial:write`. */
   access: "read" | "write";
   /** Whether it never changes state; a read that can continue collection is not. */
@@ -330,7 +311,7 @@ function syncRunAfter(cursor: string | undefined) {
 
 const transactionsDescription = [
   "Browse a bounded live page of compact transactions, newest transactionDate first (unknown dates last).",
-  "perspective selects rows from their own facts: spending (default) is every row without purchaseId, including fees and cancellations; billing is every row except installment-plan purchases, whose money appears through their billed lines; all is every row and counts a plan's money twice. A billed line has purchaseId (its purchase) and installmentNumber; filtering by purchaseId requires billing or all.",
+  "perspective selects which rows represent a plan: spending (default) is every row without purchaseId, including fees and cancellations; billing is every row except plan purchases (an installmentCount of 2 or more without installmentNumber, or live billed lines even when the count is unknown), whose money appears through their billed lines, and a held or unknown line amount is never replaced by the purchase's; all is every row and counts a plan's money twice. A billed line has purchaseId (its purchase) and installmentNumber; filtering by purchaseId requires billing or all.",
   "Money is exact decimal strings; keep each amount with its currency and amount basis.",
   "Pages may hold fewer rows to respect the response byte limit; follow nextCursor while hasMore is true. Reads are live: concurrent changes can shift later pages.",
   "cardId and billingAccountId must belong to connectionId when both are given; otherwise the input is invalid.",
@@ -356,19 +337,14 @@ const identifierKeys = [
   "refreshId",
 ] as const;
 
-function define<Schema extends z.ZodObject>(
-  name: string,
+function define<Input extends z.ZodObject, Output extends z.ZodObject>(
   description: string,
-  inputSchema: Schema,
+  inputSchema: Input,
+  outputSchema: Output,
   access: "read" | "write",
   options: { openWorld?: boolean; readOnly?: boolean } = {},
-): OperationDefinition & { inputSchema: Schema } {
-  const outputSchema = outputSchemas[name];
-  if (!outputSchema) {
-    throw new Error("Missing operation output schema");
-  }
+): Omit<OperationDefinition<Input, Output>, "name"> {
   return {
-    name,
     description,
     // Identifiers travel as REST path segments; every transport rejects the same ones.
     inputSchema: inputSchema.superRefine((input, context) => {
@@ -390,51 +366,67 @@ function define<Schema extends z.ZodObject>(
   };
 }
 
-const definitions = {
+type Named<Definitions> = {
+  [Name in keyof Definitions & string]: Definitions[Name] & { name: Name };
+};
+
+/** Names each definition by its key, which is also its MCP tool name. */
+function named<
+  Definitions extends Record<string, Omit<OperationDefinition, "name">>,
+>(definitions: Definitions): Named<Definitions> {
+  // Object.fromEntries keeps the pairs but not their types; Named restores them.
+  return Object.fromEntries(
+    Object.entries(definitions).map(([name, definition]) => [
+      name,
+      { name, ...definition },
+    ]),
+  ) as Named<Definitions>;
+}
+
+const definitions = named({
   list_connections: define(
-    "list_connections",
     "List every configured financial connection in one unpaged page (hasMore is always false), without credentials. latestRefresh is the newest refresh, or null before any; requiresAttention means the provider needs the owner. Does not call the provider.",
     z.object({}).strict(),
+    connectionListOutputSchema,
     "read",
   ),
   get_connection: define(
-    "get_connection",
     "Read one connection with latestRefresh, its newest refresh or recorded scheduled occurrence, or null before any. Does not call the provider.",
     connectionScopeSchema,
+    connectionReadOutputSchema,
     "read",
   ),
   list_cards: define(
-    "list_cards",
     "Browse a bounded live page of one connection's cards, oldest first. A card's id matches transaction cardId. Unknown metadata stays null, and omission from discovery does not establish closure. Follow nextCursor while hasMore is true; concurrent changes can shift later pages.",
     catalogListSchema,
+    cardListOutputSchema,
     "read",
   ),
   get_card: define(
-    "get_card",
     "Read one card by its id. Unknown metadata stays null; no issuance date or lifecycle status is inferred.",
     z.object({ cardId: resourceKeySchema }).strict(),
+    cardReadOutputSchema,
     "read",
   ),
   list_accounts: define(
-    "list_accounts",
     "Browse a bounded live page of one connection's accounts, oldest first: the bank accounts the provider reports as paying card bills. Filter transactions by billingAccountId to see the spending billed to one. Unknown metadata stays null; accounts are never merged by name or mask. Follow nextCursor while hasMore is true.",
     catalogListSchema,
+    accountListOutputSchema,
     "read",
   ),
   get_account: define(
-    "get_account",
     "Read one account by its id. Balances and holder details are not stored, and the provider's account key (possibly a full account number) is never returned, only mask.",
     z.object({ accountId: resourceKeySchema }).strict(),
+    accountReadOutputSchema,
     "read",
   ),
   list_transactions: define(
-    "list_transactions",
     transactionsDescription,
     transactionListSchema,
+    transactionListOutputSchema,
     "read",
   ),
   get_transaction: define(
-    "get_transaction",
     "Read one transaction with its current version and annotation version (the versions writes expect), annotation, source identity, posting match and review context. Default detail includes bounded review candidates and reasons; review.truncated and review.counts identify incomplete lists. Set detail=false for compact output; includeEvidence=true adds a diagnostic preview with an explicit truncation flag.",
     z
       .object({
@@ -446,40 +438,40 @@ const definitions = {
       .refine((input) => input.detail || !input.includeEvidence, {
         message: "Evidence requires transaction detail",
       }),
+    transactionReadOutputSchema,
     "read",
   ),
   get_transaction_totals: define(
-    "get_transaction_totals",
     totalsDescription,
     totalsSchema,
+    totalsOutputSchema,
     "read",
   ),
   list_events: define(
-    "list_events",
     "Read a bounded page of the durable event feed after cursor; omit cursor to start from the beginning. Reading does not acknowledge delivery or start a refresh. Events are thin: refetch the transaction for current state. nextCursor is always a resumable checkpoint, even on an empty page.",
     connectionScopeSchema.extend({
       cursor: listCursorSchema.optional(),
       limit: z.number().int().min(1).max(200).default(100),
     }),
+    eventListOutputSchema,
     "read",
   ),
   list_sync_runs: define(
-    "list_sync_runs",
     "Browse recent sync run metadata, newest first, without returning raw source snapshots. Does not start a refresh.",
     connectionScopeSchema.extend({
       cursor: listCursorSchema.optional(),
       limit: z.number().int().min(1).max(100).default(20),
     }),
+    syncRunListOutputSchema,
     "read",
   ),
   update_annotation: define(
-    "update_annotation",
     "Patch a transaction's owner annotation; expectedVersion is its current annotation version (0 if none). Omitted fields are unchanged. notes and category: a string sets, null clears. tags replaces the whole set; [] clears. metadata merges key by key (values may be any JSON): a key set to null is deleted, and metadata null clears all. review records the owner decision against the current money, currency, amount basis and kind (the server stamps them), or null removes it; it requires expectedTransactionVersion from the current transaction. Source facts are never edited.",
     annotationUpdateInputSchema,
+    annotationWriteOutputSchema,
     "write",
   ),
   refresh_connection: define(
-    "refresh_connection",
     "Start a refresh from the financial provider: of connectionId, or of every connection with stored credentials when it is omitted. This calls the external provider and updates stored financial observations. Without from/to it rereads the recent window; inclusive from and to (YYYY-MM-DD, given together, at most 120 months) backfill that range month by month. Returns within about 10 seconds with the refresh (one refreshes entry per connection when none was named): completed, partial or failed, or running when it continues in the background; read it later with get_refresh. A connection already refreshing answers refresh_in_progress (in refreshes, reason busy); one whose provider needs the owner, requires_attention; one refreshed within the last minute returns that refresh (reason cooldown).",
     z
       .object({
@@ -507,28 +499,28 @@ const definitions = {
           }
         }
       }),
+    refreshStartOutputSchema,
     "write",
     { openWorld: true },
   ),
   get_refresh: define(
-    "get_refresh",
     "Read one refresh: its status or skip reason, range, timing, counts, failures and, for a ranged refresh, its month windows newest first. Reading a pending or running refresh whose process stopped continues it, which calls the provider.",
     z.object({ refreshId: idSchema }).strict(),
+    refreshReadOutputSchema,
     "read",
     // Reading an abandoned refresh continues it.
     { openWorld: true, readOnly: false },
   ),
   list_refreshes: define(
-    "list_refreshes",
     "Browse one connection's refreshes and recorded scheduled occurrences, newest first, without windows. Does not call the provider.",
     connectionScopeSchema.extend({
       cursor: listCursorSchema.optional(),
       limit: z.number().int().min(1).max(100).default(20),
     }),
+    refreshListOutputSchema,
     "read",
   ),
   undo_annotation: define(
-    "undo_annotation",
     "Undo only the current annotation edit using its annotation.updated event ID and expectedVersion (the current annotation version). The exact previous document is restored, including its review basis.",
     z
       .object({
@@ -536,36 +528,43 @@ const definitions = {
         expectedVersion: versionSchema,
       })
       .strict(),
+    annotationWriteOutputSchema,
     "write",
   ),
   link_pending_transaction: define(
-    "link_pending_transaction",
     "Explicitly confirm that a pending transaction (transactionId, which survives) and a posted transaction (postedId, which is retired) are the same purchase. First get_transaction with detail=true for both and inspect their candidates and review reasons; then pass both transaction versions, both current annotation versions and a reason. Candidates suggest review, not proof of a pairing; review.truncated means the lists are incomplete, so never infer a unique pairing from a truncated list.",
     postingInputSchema,
+    transactionWriteOutputSchema,
     "write",
   ),
   unlink_pending_transaction: define(
-    "unlink_pending_transaction",
     "Undo a pending-to-posted link on the surviving pending transaction (transactionId) and its retired posted transaction (postedId), keeping annotations on their IDs and current posted corrections. Requires both transaction versions, both annotation versions and a reason; both rows are then excluded from automatic relinking.",
     postingInputSchema,
+    unlinkOutputSchema,
     "write",
   ),
   confirm_removal: define(
-    "confirm_removal",
     "Explicitly mark a transaction removed with expectedTransactionVersion and a reason. An absent source row alone is not deletion evidence.",
     removalInputSchema,
+    transactionWriteOutputSchema,
     "write",
   ),
-};
+});
+
+type Definitions = typeof definitions;
+
+/** An operation's name: its catalog key, MCP tool name and REST route key. */
+export type OperationName = keyof Definitions;
 
 /** Every operation in API order; refresh_connection needs a collection capability. */
-export const operationDefinitions: readonly OperationDefinition[] =
+export const operationDefinitions: readonly Definitions[OperationName][] =
   Object.values(definitions);
 
+/** Each executor returns what its output schema accepts, before parsing. */
 type Executors = {
-  [Name in keyof typeof definitions]: (
-    input: z.output<(typeof definitions)[Name]["inputSchema"]>,
-  ) => unknown;
+  [Name in OperationName]: (
+    input: z.output<Definitions[Name]["inputSchema"]>,
+  ) => Promise<z.input<Definitions[Name]["outputSchema"]>>;
 };
 
 function bindOperation(
@@ -784,7 +783,7 @@ export function createApplication(
       .map((definition) =>
         bindOperation(
           definition,
-          executors[definition.name as keyof Executors],
+          executors[definition.name],
           definition.access === "write" &&
             definition.name !== "refresh_connection"
             ? capabilities.afterWrite

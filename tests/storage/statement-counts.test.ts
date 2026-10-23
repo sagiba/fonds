@@ -84,8 +84,9 @@ for (const backend of backends) {
     // D1's bound-parameter limit applies independently to each physical table.
     const [transactionRows, changeRows] =
       backend === "d1-local" ? [2, 11] : [25, 100];
+    // Reconciliation has 11 columns: floor(100 / 11) permits nine D1 rows.
     const [observationRows, reconciliationRows, postingLinkRows] =
-      backend === "d1-local" ? [25, 11, 50] : [100, 100, 100];
+      backend === "d1-local" ? [25, 9, 50] : [100, 100, 100];
     const capture = (
       rows = [
         row("pending", { status: "pending", amountBasis: "authorization" }),
@@ -296,6 +297,7 @@ for (const backend of backends) {
           connectionId,
           limit: 200,
           includeSuperseded: true,
+          presence: "all",
         })
       ).transactions.length;
       expect(counts.writes).toBeLessThanOrEqual(
