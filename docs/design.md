@@ -137,10 +137,10 @@ receipt origins remain unknown until fresh support is observed.
 Membership is independent of posting links. Only explicit, accepted coverage
 proves absence; comparability alone grants no omission authority. Shared engine
 coverage crosses origins only when declared; failed, incomplete or out-of-domain
-captures cannot exclude valid money. Newer retained coverage also
-governs historical discovery: later imports cannot resurrect proven omissions,
-while out-of-window history stays eligible. Billed lines are not
-absence-comparable; observed components can support synthesized purchases.
+captures cannot exclude valid money. Newer retained coverage also governs
+historical discovery: later imports cannot resurrect proven omissions, while
+out-of-window history stays eligible. Billed lines are not absence-comparable;
+observed components can support synthesized purchases.
 
 Absence retains records, annotations and evidence without implying
 cancellation/refund, but excludes current reads/totals. Unknown membership,
@@ -148,13 +148,14 @@ including `not_returned`, does not exclude. Positive freshness governs facts;
 negative evidence applies only within its proven scope. Corrections re-evaluate
 retained coverage without discarding unreconstructable receipts. Within scope,
 restoration requires strictly newer positive evidence; equal-time absence wins.
-Repeated omissions advance receipts quietly. Reappearance must postdate owner removal. [API fields](api.md#fields) owns inspectable state and
-queries.
+Repeated omissions advance receipts quietly. Reappearance must postdate owner
+removal. [API fields](api.md#fields) owns inspectable state and queries.
 
-Adapters may reject an implausibly empty recent capture while covered,
-eligible rows remain. This is a failed, applied `implausible_empty` run that
-cannot be replayed into the ledger. Legitimate final-population disappearance can also be blocked until completeness
-is established; cancellation reconciliation is not guaranteed.
+Adapters may reject an implausibly empty recent capture while covered, eligible
+rows remain. This is a failed, applied `implausible_empty` run that cannot be
+replayed into the ledger. Legitimate final-population disappearance can also be
+blocked until completeness is established; cancellation reconciliation is not
+guaranteed.
 
 ## Purchases and billed lines
 
