@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 
 import { shellWord } from "./cli-invocation.js";
-import { hasTerminalControls } from "./cli-output.js";
+import { runnable } from "./cli-output.js";
 import { CommandInputError } from "./operation-cli.js";
 
 export const MCP_CLIENTS = [
@@ -46,12 +46,12 @@ const sections: Record<McpClient, (server: Server) => string[]> = {
 
 /**
  * Setup is copied exactly, so it cannot be escaped for the terminal: output
- * whose paths hold control characters is refused instead of printed.
+ * whose paths hold control or invisible characters is refused instead.
  */
 function plainOutput(lines: readonly string[]): string {
-  if (lines.some(hasTerminalControls)) {
+  if (lines.some((line) => runnable(line) === undefined)) {
     throw new CommandInputError(
-      "Client setup cannot print paths that contain control characters; use a plain path.",
+      "Client setup cannot print paths that contain control or invisible characters; use a plain path.",
     );
   }
   return lines.join("\n");

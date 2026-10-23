@@ -8,6 +8,7 @@ import type {
   transactionReadOutputSchema,
 } from "../application/wire-output.js";
 import type { SyncResult } from "../domain/plans/sync.js";
+import { option } from "./cli-invocation.js";
 import {
   details,
   dim,
@@ -113,6 +114,9 @@ function notes(transaction: Transaction): string[] {
     transaction.presence === "seen" ? undefined : words(transaction.presence),
     transaction.sourceAbsence ? "proven absent" : undefined,
     installments(transaction),
+    transaction.purchaseId !== null
+      ? `line of purchase ${safeId(transaction.purchaseId)}`
+      : undefined,
     transaction.supersededById !== null ? "superseded" : undefined,
     reviewNote(transaction.review),
     transaction.detailsTruncated ? "clipped" : undefined,
@@ -191,11 +195,11 @@ export const transactionListView: View<TransactionPage> = (
         )
         .join("\n");
   const details = runnable(
-    context.command(["get", "--transaction-id", page.data[0]!.id]),
+    context.command(["get", ...option("--transaction-id", page.data[0]!.id)]),
   );
   const more =
     page.nextCursor !== null
-      ? runnable(context.again(["--cursor", page.nextCursor]))
+      ? runnable(context.again(option("--cursor", page.nextCursor)))
       : undefined;
   return [
     rendered,
@@ -504,7 +508,11 @@ export const transactionView: View<
       : undefined,
   ];
   const record = runnable(
-    context.command(["get", "--transaction-id", transaction.id, "--json"]),
+    context.command([
+      "get",
+      ...option("--transaction-id", transaction.id),
+      "--json",
+    ]),
   );
   return [
     `Transaction ${safeId(transaction.id)}`,
@@ -639,7 +647,7 @@ export const connectionListView: View<ConnectionPage> = (page, p, context) => {
   ]);
   const more =
     page.nextCursor !== null
-      ? runnable(context.again(["--cursor", page.nextCursor]))
+      ? runnable(context.again(option("--cursor", page.nextCursor)))
       : undefined;
   return `${
     table(
@@ -701,7 +709,9 @@ export function connectView(
           `Saved credentials for connection ${id} (${provider})`,
         ),
         "  Not yet checked with the provider; a refresh signs in.",
-        nextStep(next(["refresh", "--connection", result.connectionId])),
+        nextStep(
+          next(["refresh", ...option("--connection", result.connectionId)]),
+        ),
       ].join("\n")
     : [
         headline(
@@ -873,8 +883,7 @@ export function refreshView(
               ? next(["list-connections"])
               : next([
                   "list-refreshes",
-                  "--connection-id",
-                  options.connectionId,
+                  ...option("--connection-id", options.connectionId),
                 ]),
             options.connectionId === undefined
               ? "Each connection's latest refresh"

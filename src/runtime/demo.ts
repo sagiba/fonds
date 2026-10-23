@@ -6,7 +6,7 @@ import {
   inProcessInvoker,
 } from "../application/operations.js";
 import type { Database } from "../storage/sqlite/database.js";
-import { commandLine } from "./cli-invocation.js";
+import { commandLine, option } from "./cli-invocation.js";
 import {
   headline,
   joined,
@@ -105,7 +105,7 @@ export async function demoSummary(
     count += page.data.length;
     cursor = page.nextCursor ?? undefined;
   } while (cursor);
-  const db = ["--db", databasePath];
+  const db = option("--db", databasePath);
   const run = (args: string[]) => runnable(commandLine(command, args));
   const sections = [
     {

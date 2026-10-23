@@ -118,7 +118,8 @@ it("accepts only server names that are one safe shell word", () => {
 });
 
 it("refuses setup that would print control characters from any path", () => {
-  const refused = /cannot print paths that contain control characters/;
+  const refused =
+    /cannot print paths that contain control or invisible characters/;
   // The launcher's own path, not only the database's, reaches the chooser.
   expect(() =>
     mcpClientChooser("/data/ledger.sqlite", (args) =>
@@ -130,6 +131,15 @@ it("refuses setup that would print control characters from any path", () => {
       "/data/ledger.sqlite",
       "/data/\u202estate",
       pathToFileURL("/opt/fonds/cli.js").href,
+    ),
+  ).toThrow(refused);
+  // An invisible mark would be copied into the client's configuration.
+  expect(() =>
+    localMcpSetup(
+      "/data/ledger\u200f.sqlite",
+      "/data/state",
+      pathToFileURL("/opt/fonds/cli.js").href,
+      { client: "codex" },
     ),
   ).toThrow(refused);
 });

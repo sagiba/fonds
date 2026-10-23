@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import tty from "node:tty";
+import { parseArgs } from "node:util";
 
 import stringWidth from "string-width";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +17,7 @@ import {
   transactionOutputSchema,
 } from "../../src/application/wire-output.js";
 import { main } from "../../src/cli.js";
+import { commandLine } from "../../src/runtime/cli-invocation.js";
 import {
   type Presentation,
   presentation,
@@ -24,6 +26,7 @@ import {
 } from "../../src/runtime/cli-output.js";
 import {
   connectionListView,
+  connectView,
   ingestView,
   refreshView,
   totalsView,
@@ -616,8 +619,14 @@ describe("list notes", () => {
           originalAmount: { currency: "USD", amount: "-10.00" },
           fxFee: { currency: "ILS", amount: "-0.50" },
         }),
+        transaction({
+          id: "00000000-0000-4000-8000-0000000000a5",
+          purchaseId: "purchase-1",
+          installmentCount: 3,
+          installmentNumber: 1,
+        }),
       ]),
-      plain(120),
+      plain(160),
       context({ presence: "all" }),
     );
     const notes = (id: string) =>
@@ -630,6 +639,10 @@ describe("list notes", () => {
     expect(notes("0000000000a3")).not.toContain("from");
     expect(notes("0000000000a4")).toContain(
       "from -10.00 USD · FX fee -0.50 ILS",
+    );
+    // A billed line names its purchase, which spending counts instead.
+    expect(notes("0000000000a5")).toContain(
+      "payment 1/3 · line of purchase purchase-1",
     );
     // Cautionary notes are not dimmed with the ID.
     vi.stubEnv("FORCE_COLOR", "1");
@@ -687,6 +700,24 @@ describe("display width", () => {
     );
     expect(text).toContain("id\\u001b[2J");
     expect(text).not.toMatch(/^(Details|More):/m);
+  });
+});
+
+describe("printed commands", () => {
+  it("attaches a value that looks like a flag, so it parses as typed", () => {
+    const text = connectView(
+      plain(),
+      { connectionId: "--cal", provider: "cal", credentials: "stored" },
+      (args) => commandLine("fonds", args),
+    );
+    const command = nextCommand(text);
+    expect(command).toBe("fonds refresh --connection=--cal");
+    const { values } = parseArgs({
+      args: command.split(" ").slice(2),
+      options: { connection: { type: "string" } },
+      strict: true,
+    });
+    expect(values.connection).toBe("--cal");
   });
 });
 
@@ -1210,8 +1241,11 @@ describe("commands in a terminal", () => {
     expect(result.stdout).toContain("Commands for this ledger are not shown");
   });
 
-  it("refuses MCP setup for a path with control characters", async () => {
-    const hostile = join(root, `ledger${ESC}[2J.sqlite`);
+  it.each([
+    ["control", `ledger${ESC}[2J.sqlite`],
+    ["invisible", "ledger\u200f.sqlite"],
+  ])("refuses MCP setup for a path with %s characters", async (_kind, file) => {
+    const hostile = join(root, file);
     const { mkdirSync, copyFileSync } = await import("node:fs");
     mkdirSync(join(root, "home"), { recursive: true });
     copyFileSync(db, hostile);
@@ -1225,7 +1259,7 @@ describe("commands in a terminal", () => {
       expect(result.status).toBe(1);
       expect(result.stdout).toBe("");
       expect(result.stderr).toBe(
-        "Client setup cannot print paths that contain control characters; use a plain path.\n",
+        "Client setup cannot print paths that contain control or invisible characters; use a plain path.\n",
       );
     }
   });

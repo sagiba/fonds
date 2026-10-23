@@ -35,6 +35,14 @@ function entryCommand(path: string): string {
   );
 }
 
+/** An installed launcher as a person reruns it: `fonds` when PATH finds it. */
+export function launcherCommand(launcher: string): string {
+  const onPath =
+    basename(launcher) === "fonds" &&
+    (process.env.PATH ?? "").split(delimiter).includes(dirname(launcher));
+  return onPath ? "fonds" : shellWord(launcher);
+}
+
 /**
  * How a person reruns this CLI, for printed next steps: `fonds` when it is
  * the installed command on PATH, otherwise the launcher or entry point.
@@ -45,13 +53,18 @@ export function cliCommand(
   launcher: string | undefined = installedLauncher(),
 ): string {
   if (launcher) {
-    const onPath =
-      basename(launcher) === "fonds" &&
-      (process.env.PATH ?? "").split(delimiter).includes(dirname(launcher));
-    return onPath ? "fonds" : shellWord(launcher);
+    return launcherCommand(launcher);
   }
   const entry = entryCommand(fileURLToPath(moduleUrl));
   return moduleUrl.endsWith(".ts") ? `npx tsx ${entry}` : `node ${entry}`;
+}
+
+/**
+ * A flag and its value for a printed command; a value that looks like a flag
+ * is attached with `=`, which is the only way the parser reads it as a value.
+ */
+export function option(flag: string, value: string): string[] {
+  return value.startsWith("-") ? [`${flag}=${value}`] : [flag, value];
 }
 
 /** One printable command line; every argument is quoted on its own. */

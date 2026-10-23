@@ -74,11 +74,6 @@ export function runnable(command: string): string | undefined {
   return safeId(command) === command ? command : undefined;
 }
 
-/** Text that must be printed exactly, so cannot be escaped, has to be free of controls. */
-export function hasTerminalControls(text: string): boolean {
-  return safe(text) !== text;
-}
-
 type Tone = "ok" | "attention" | "error";
 
 const marks: Record<Tone, readonly [string, string]> = {

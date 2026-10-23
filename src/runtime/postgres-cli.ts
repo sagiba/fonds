@@ -1,4 +1,5 @@
 import { enclosingCheckout } from "./checkout.js";
+import { installedLauncher, launcherCommand } from "./cli-invocation.js";
 import { issueHostedLoginLink } from "./hosted-node.js";
 import { HostedConfigurationError } from "./hosted-service.js";
 import {
@@ -20,6 +21,7 @@ export function postgresBackend(
   // Resolved at most once per process, and only by a command that needs it;
   // a command that may create the database (init) may create the state too.
   let resolved: ReturnType<typeof postgresInstallation> | undefined;
+  const launcher = installedLauncher();
   const installation = (create: boolean) =>
     (resolved ??= postgresInstallation(processEnv, { create }));
   return {
@@ -27,7 +29,7 @@ export function postgresBackend(
     title: "PostgreSQL target",
     invocation: "fonds",
     // The package and image launcher; PostgreSQL has no source-only CLI path.
-    command: "fonds",
+    command: launcher ? launcherCommand(launcher) : "fonds",
     description: `fonds serve runs the loopback HTTP/MCP API, --transport stdio serves MCP over stdio
 to a trusted local client, and --hosted runs the hosted service at FONDS_PUBLIC_ORIGIN.
 The database is FONDS_DATABASE_URL; without it, fonds uses SQLite. Secrets come only

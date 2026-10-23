@@ -297,6 +297,22 @@ describe("one operator CLI for every backend", () => {
     },
   );
 
+  it("prints PostgreSQL next steps with the launcher that is running", () => {
+    vi.stubEnv("PATH", "/usr/bin");
+    const argv = process.argv[1];
+    try {
+      process.argv[1] = "/opt/elsewhere/fonds";
+      expect(postgresBackend({}, undefined).command).toBe(
+        "/opt/elsewhere/fonds",
+      );
+      vi.stubEnv("PATH", "/opt/elsewhere:/usr/bin");
+      expect(postgresBackend({}, undefined).command).toBe("fonds");
+    } finally {
+      process.argv[1] = argv!;
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("selects PostgreSQL by its connection URL, otherwise SQLite", async () => {
     expect(selectedBackend({})).toBe("sqlite");
     expect(

@@ -23,7 +23,7 @@ import { CredentialInputError } from "../domain/credentials.js";
 import { refreshFailureCodeSchema } from "../domain/model.js";
 import { ProviderConfigurationError } from "../domain/source-adapter.js";
 import { NewerSchemaError } from "../storage/migrations.js";
-import { commandLine } from "./cli-invocation.js";
+import { commandLine, option } from "./cli-invocation.js";
 import {
   present,
   type Presentation,
@@ -1053,7 +1053,7 @@ function parseValues(
 /** `--name value` for each global option given, so a next step targets the same database. */
 function globalArgs(globals: Readonly<Record<string, unknown>>): string[] {
   return Object.entries(globals).flatMap(([name, value]) =>
-    typeof value === "string" ? [`--${name}`, value] : [],
+    typeof value === "string" ? option(`--${name}`, value) : [],
   );
 }
 
