@@ -20,6 +20,7 @@ import {
   type Presentation,
   presentation,
   safe,
+  safeId,
 } from "../../src/runtime/cli-output.js";
 import {
   connectionListView,
@@ -143,6 +144,17 @@ describe("output mode", () => {
     const terminal = jsonOutput(value, { isTTY: true });
     expect(terminal).toBe('{\n  "name": "x\\u202ey\\u009bz\\u2028"\n}\n');
     expect(JSON.parse(terminal)).toEqual(value);
+    // Deprecated shaping controls too; a supplementary character keeps its pair.
+    const deprecated = { name: "a\u206ab\u{1bca0}" };
+    const shaped = jsonOutput(deprecated, { isTTY: true });
+    expect(shaped).toContain("a\\u206ab\u{1bca0}");
+    expect(JSON.parse(shaped)).toEqual(deprecated);
+    expect(safe("a\u206ab")).toBe("a\\u206ab");
+    expect(safeId("id\u{1bca0}\u200f\u3164")).toBe(
+      "id\\ud82f\\udca0\\u200f\\u3164",
+    );
+    // Hebrew prose keeps its bidi marks; identifiers show them.
+    expect(safe("שלום\u200f 1")).toBe("שלום\u200f 1");
     // Piped output stays the exact wire bytes.
     expect(jsonOutput(value, { isTTY: false })).toBe(
       `${JSON.stringify(value)}\n`,
@@ -514,7 +526,7 @@ describe("every detailed field", () => {
       source:
         /Source +weak identity · first seen 2040-01-02T00:00:00Z · last seen 2040-01-04T00:00:00Z · last run run-9$/m,
       postingMatch:
-        /Posting match +matched automatically · retired posted row posted-2 · policy policy-1 · run run-match captured 2040-01-03T00:00:00Z$/m,
+        /Posting match +matched automatically, retiring posted row posted-2 · policy policy-1 · run run-match captured 2040-01-03T00:00:00Z$/m,
       diagnosticsTruncated: /Shortened for output: .*evidence/,
       diagnosticCounts: /Evidence \(1 of 5\) +run-1 \$\.items\[0\]$/m,
       evidence: /run-1 \$\.items\[0\]/,
@@ -572,7 +584,7 @@ describe("every detailed field", () => {
       context(),
     );
     expect(split).toMatch(
-      /Posting match +unlinked by the owner · retired posted row posted-2 · policy policy-1$/m,
+      /Posting match +split by the owner from posted row posted-2 · policy policy-1$/m,
     );
     expect(split).not.toContain("Shortened");
   });
@@ -598,6 +610,12 @@ describe("list notes", () => {
           id: "00000000-0000-4000-8000-0000000000a3",
           originalAmount: { currency: "ILS", amount: "-12.30" },
         }),
+        transaction({
+          id: "00000000-0000-4000-8000-0000000000a4",
+          amount: { currency: "ILS", amount: "-36.10" },
+          originalAmount: { currency: "USD", amount: "-10.00" },
+          fxFee: { currency: "ILS", amount: "-0.50" },
+        }),
       ]),
       plain(120),
       context({ presence: "all" }),
@@ -610,6 +628,9 @@ describe("list notes", () => {
     );
     // The same money as the amount column is not repeated.
     expect(notes("0000000000a3")).not.toContain("from");
+    expect(notes("0000000000a4")).toContain(
+      "from -10.00 USD · FX fee -0.50 ILS",
+    );
     // Cautionary notes are not dimmed with the ID.
     vi.stubEnv("FORCE_COLOR", "1");
     vi.stubEnv("NO_COLOR", undefined);
@@ -1174,6 +1195,19 @@ describe("commands in a terminal", () => {
     } finally {
       await new Promise((closed) => server.close(closed));
     }
+  });
+
+  it("prints no demo command for a path it would have to escape", async () => {
+    const hidden = join(root, "demo\u200b.sqlite");
+    const result = await inTerminal(["demo", "--db", hidden], {
+      env: { NO_COLOR: "1" },
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      "ledger " + join(root, "demo\\u200b.sqlite"),
+    );
+    expect(result.stdout).not.toMatch(/^Try:|--db/m);
+    expect(result.stdout).toContain("Commands for this ledger are not shown");
   });
 
   it("refuses MCP setup for a path with control characters", async () => {

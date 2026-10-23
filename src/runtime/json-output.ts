@@ -1,13 +1,21 @@
 /**
  * Characters JSON.stringify leaves raw that can still drive a terminal: DEL,
- * C1 controls, line separators and bidi embeddings, overrides and isolates.
+ * C1 controls, line separators, bidi embeddings, overrides and isolates, and
+ * the deprecated shaping and mirroring controls.
  */
 const RAW_TERMINAL_CONTROLS =
-  /[\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
+  /[\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u206f]/g;
 
-/** `\uXXXX`: in JSON, the same string value, and inert on a terminal. */
-export function unicodeEscape(character: string): string {
-  return `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`;
+/**
+ * `\uXXXX` for each UTF-16 unit: in JSON, the same string value, and inert
+ * on a terminal. A supplementary character becomes its surrogate pair.
+ */
+export function unicodeEscape(text: string): string {
+  let escaped = "";
+  for (let index = 0; index < text.length; index++) {
+    escaped += `\\u${text.charCodeAt(index).toString(16).padStart(4, "0")}`;
+  }
+  return escaped;
 }
 
 /**

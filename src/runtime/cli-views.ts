@@ -15,6 +15,7 @@ import {
   headline,
   joined,
   type Presentation,
+  runnable,
   safe,
   safeId,
   table,
@@ -55,14 +56,6 @@ export type View<T> = (
   p: Presentation,
   context: ViewContext,
 ) => string;
-
-/**
- * A command to copy, or undefined when it holds characters that would have
- * to be escaped for display, which would make it name something else.
- */
-function runnable(command: string): string | undefined {
-  return safeId(command) === command ? command : undefined;
-}
 
 const basisShort: Record<string, string> = {
   booked_entry: "booked",
@@ -116,6 +109,7 @@ function originalNote(transaction: Transaction): string | undefined {
 function notes(transaction: Transaction): string[] {
   return [
     originalNote(transaction),
+    transaction.fxFee ? `FX fee ${money(transaction.fxFee)}` : undefined,
     transaction.presence === "seen" ? undefined : words(transaction.presence),
     transaction.sourceAbsence ? "proven absent" : undefined,
     installments(transaction),
@@ -313,13 +307,12 @@ function postingMatch(
   p: Presentation,
   match: NonNullable<TransactionDetail["postingMatch"]>,
 ): string {
+  const posted = safeId(match.supersededTransactionId);
   return joined(p, [
+    // Unlinking restores the posted row, so it is no longer retired.
     match.unlinked
-      ? "unlinked by the owner"
-      : match.automatic
-        ? "matched automatically"
-        : "confirmed by the owner",
-    `retired posted row ${safeId(match.supersededTransactionId)}`,
+      ? `split by the owner from posted row ${posted}`
+      : `${match.automatic ? "matched automatically" : "confirmed by the owner"}, retiring posted row ${posted}`,
     `policy ${safe(match.policyVersion)}`,
     ...(match.evidence
       ? [

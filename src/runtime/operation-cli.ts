@@ -213,6 +213,8 @@ interface Field {
   required: boolean;
   nullable: boolean;
   choices?: string[];
+  /** The value an omitted flag takes, as help shows it. */
+  default?: string;
 }
 
 /** Zod's published union of its schema kinds, discriminated by `def.type`. */
@@ -227,9 +229,16 @@ type Schema = z.core.$ZodTypes;
 function fieldOf(key: string, schema: Schema): Field {
   let required = true;
   let nullable = false;
+  let fallback: string | undefined;
   let current = schema;
   for (;;) {
     const { def } = current._zod;
+    if (def.type === "default") {
+      const value: unknown = def.defaultValue;
+      if (["string", "number", "boolean"].includes(typeof value)) {
+        fallback ??= String(value);
+      }
+    }
     if (def.type === "optional" || def.type === "default") {
       required = false;
     } else if (def.type === "nullable") {
@@ -245,6 +254,7 @@ function fieldOf(key: string, schema: Schema): Field {
     kind: valueKind(key, current),
     required,
     nullable,
+    ...(fallback !== undefined && { default: fallback }),
     ...(current._zod.def.type === "enum" && {
       choices: Object.values(current._zod.def.entries).map(String),
     }),
@@ -333,14 +343,18 @@ function inputIssues(
   definition: OperationDefinition,
   error: z.ZodError,
 ): string {
-  const flags = new Map(
-    operationFields(definition).map((field) => [field.key, field.flag]),
+  const fields = new Map(
+    operationFields(definition).map((field) => [field.key, field]),
   );
   const messages = error.issues.map((issue) => {
     const key = issue.path[0];
-    const flag = typeof key === "string" ? flags.get(key) : undefined;
+    const field = typeof key === "string" ? fields.get(key) : undefined;
+    const flag = field?.flag;
     if (issue.code === "custom") {
       return flag ? `--${flag}: ${issue.message}` : issue.message;
+    }
+    if (issue.code === "invalid_value" && field?.choices) {
+      return `--${flag} must be one of ${field.choices.join(", ")}`;
     }
     const text = issueText[issue.code] ?? "is invalid";
     return flag ? `--${flag} ${text}` : `The input ${text}`;
@@ -411,8 +425,25 @@ function flagHelp(field: Field): string {
   const value =
     field.choices?.join("|") ?? (field.kind === "json" ? "JSON" : field.kind);
   return `  --${field.flag} <${value}>${
-    field.nullable ? " (empty text or JSON null clears)" : ""
-  }`;
+    field.default !== undefined ? ` (default ${field.default})` : ""
+  }${field.nullable ? " (empty text or JSON null clears)" : ""}`;
+}
+
+/**
+ * Prose wrapped at spaces to 80 columns, for entry points without terminal
+ * libraries; help prose is plain text, one column per character.
+ */
+function wrapWords(text: string, width = 80): string {
+  const lines: string[] = [];
+  for (const word of text.split(/\s+/).filter(Boolean)) {
+    const last = lines.at(-1);
+    if (last !== undefined && last.length + 1 + word.length <= width) {
+      lines[lines.length - 1] = `${last} ${word}`;
+    } else {
+      lines.push(word);
+    }
+  }
+  return lines.join("\n");
 }
 
 /** Purpose, example, then the schema's own flags: required first. */
@@ -454,7 +485,7 @@ export function operationHelp(
     ]),
     ...section("Example:", [`  ${commandLine(command, example)}`]),
     "",
-    options.wrap?.(definition.description) ?? definition.description,
+    (options.wrap ?? wrapWords)(definition.description),
     ...section("Required:", required.map(flagHelp)),
     ...section("Options:", optional),
     ...section("Global options:", [
@@ -540,6 +571,7 @@ function parseOperationArgs(
   definition: OperationDefinition,
   args: string[],
   globalOptions: Readonly<Record<string, { type: "string" | "boolean" }>>,
+  name = kebab(definition.name),
 ) {
   // Derived outside the try: an unsupported schema is not an argument error.
   const options = {
@@ -554,7 +586,7 @@ function parseOperationArgs(
       .values as Record<string, string | boolean | undefined>;
   } catch {
     throw new CommandInputError(
-      `Invalid arguments. Use ${kebab(definition.name)} --help for its flags.`,
+      `Invalid arguments. Use ${name} --help for its flags.`,
     );
   }
 }
@@ -602,6 +634,7 @@ export async function runOperationCli(options: {
       definition,
       options.args,
       options.globalOptions ?? {},
+      options.name,
     );
     if (values.help) {
       process.stdout.write(

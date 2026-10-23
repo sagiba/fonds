@@ -7,7 +7,13 @@ import {
 } from "../application/operations.js";
 import type { Database } from "../storage/sqlite/database.js";
 import { commandLine } from "./cli-invocation.js";
-import { headline, joined, type Presentation, safe } from "./cli-output.js";
+import {
+  headline,
+  joined,
+  type Presentation,
+  runnable,
+  safeId,
+} from "./cli-output.js";
 import { CommandInputError } from "./operation-cli.js";
 import { runtimeProvider } from "./providers.js";
 
@@ -100,19 +106,37 @@ export async function demoSummary(
     cursor = page.nextCursor ?? undefined;
   } while (cursor);
   const db = ["--db", databasePath];
-  const run = (args: string[]) => `  ${safe(commandLine(command, args))}`;
+  const run = (args: string[]) => runnable(commandLine(command, args));
+  const sections = [
+    {
+      title: "Try:",
+      commands: [run(["list", ...db, "--limit", "5"]), run(["totals", ...db])],
+    },
+    {
+      title: "Connect an assistant:",
+      commands: [run(["mcp-config", ...db, "--name", DEMO_SERVER_NAME])],
+    },
+  ];
+  const init = run(["init"]);
+  // A path that must be escaped for display cannot be copied as a command.
+  const shown = sections.every(({ commands }) =>
+    commands.every((line) => line !== undefined),
+  );
   return [
     headline(p, "ok", "Demo ready: synthetic CAL data, no real accounts"),
-    `  ${joined(p, [`${count} transactions`, `ledger ${safe(databasePath)}`])}`,
+    `  ${joined(p, [`${count} transactions`, `ledger ${safeId(databasePath)}`])}`,
     "",
-    "Try:",
-    run(["list", ...db, "--limit", "5"]),
-    run(["totals", ...db]),
+    ...(shown
+      ? sections.flatMap(({ title, commands }, index) => [
+          ...(index ? [""] : []),
+          title,
+          ...commands.map((line) => `  ${line}`),
+        ])
+      : [
+          "Commands for this ledger are not shown: its path has characters a terminal cannot show as typed.",
+        ]),
     "",
-    "Connect an assistant:",
-    run(["mcp-config", ...db, "--name", DEMO_SERVER_NAME]),
-    "",
-    `Running demo again changes nothing. For your own data, start with ${safe(commandLine(command, ["init"]))}.`,
+    `Running demo again changes nothing.${init ? ` For your own data, start with ${init}.` : ""}`,
     "",
   ].join("\n");
 }

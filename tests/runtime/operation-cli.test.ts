@@ -203,6 +203,14 @@ describe("operation commands", () => {
     }
     expect(message).toMatch(/^Invalid input: --review /);
     expect(message).not.toContain("synthetic-secret");
+    // A choice names the allowed values, never the supplied one.
+    expect(() =>
+      operationInput(operationForCommand("totals")!, {
+        perspective: "synthetic-secret",
+      }),
+    ).toThrow(
+      /^Invalid input: --perspective must be one of spending, billing\.$/,
+    );
     for (const flag of ["billing-account-id", "purchase-id", "card-id"]) {
       expect(() =>
         operationInput(operationForCommand("list")!, {
@@ -238,6 +246,20 @@ describe("operation commands", () => {
     },
   );
 
+  it("points invalid flags to the help of the command as typed", async () => {
+    let stderr = "";
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+      stderr += String(chunk);
+      return true;
+    });
+    try {
+      expect(await main(["list", "--bogus"])).toBe(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+    expect(stderr).toBe("Invalid arguments. Use list --help for its flags.\n");
+  });
+
   it("gives an always-JSON entry point help that runs as printed", async () => {
     let stdout = "";
     vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
@@ -255,6 +277,15 @@ describe("operation commands", () => {
     }
     expect(stdout).toMatch(/^Example:\n {2}node server\.js list --limit 5$/m);
     expect(stdout).not.toContain("--json");
+    // Prose wraps for a terminal without the terminal libraries.
+    for (const line of stdout.split("\n")) {
+      expect(line.length, line).toBeLessThanOrEqual(80);
+    }
+    // Defaults the schema applies are named.
+    expect(stdout).toContain("  --limit <number> (default 50)\n");
+    expect(stdout).toContain(
+      "  --perspective <spending|billing|all> (default spending)\n",
+    );
   });
 
   it.each(aliasNames())("names the %s alias in both helps", (alias) => {

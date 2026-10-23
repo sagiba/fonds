@@ -43,10 +43,11 @@ export function present<T>(
 
 /**
  * Controls that would let source text drive the terminal (C0, DEL, C1, line
- * separators, bidi embeddings, overrides and isolates), shown as escapes.
+ * separators, bidi embeddings, overrides and isolates, deprecated shaping
+ * controls), shown as escapes. Bidi marks stay: Hebrew prose needs them.
  */
 const TERMINAL_CONTROLS =
-  /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
+  /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u206f]/g;
 
 /** Every dynamic string a view prints passes through here. */
 export function safe(text: string): string {
@@ -54,15 +55,23 @@ export function safe(text: string): string {
 }
 
 /**
- * Invisible format characters: legitimate in prose such as Hebrew, but they
- * would make two different identifiers look the same.
+ * Format characters (bidi marks, joiners, soft hyphens, tags) and blank
+ * fillers: legitimate in prose such as Hebrew, but they would make two
+ * different identifiers or commands look the same.
  */
-const INVISIBLE_FORMAT =
-  /[\u00ad\u061c\u180e\u200b-\u200f\u2060-\u2064\ufeff]/g;
+const INVISIBLE = /[\p{Cf}\u034f\u115f\u1160\u3164\uffa0]/gu;
 
 /** An identifier or command, shown so that what you see is what you copy. */
 export function safeId(text: string): string {
-  return safe(text).replace(INVISIBLE_FORMAT, unicodeEscape);
+  return safe(text).replace(INVISIBLE, unicodeEscape);
+}
+
+/**
+ * A command to copy, or undefined when it holds characters that would have
+ * to be escaped for display, which would make it name something else.
+ */
+export function runnable(command: string): string | undefined {
+  return safeId(command) === command ? command : undefined;
 }
 
 /** Text that must be printed exactly, so cannot be escaped, has to be free of controls. */
