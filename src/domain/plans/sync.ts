@@ -302,7 +302,6 @@ function withFinancialState(
 
 const POSTING_MATCH_ISSUE = "possible_pending_posted_match";
 
-/** Both rows state a native identity that no capture has marked ambiguous. */
 function unambiguousNative(
   current: TransactionFacts,
   previous: TransactionFacts,
@@ -2036,7 +2035,6 @@ export function planRun(
         fingerprints,
       } = index.groups.get(base)!;
       const matches = index.matches(input.sourceKey);
-      // The capture states this native key once and one stored row owns it.
       const uniqueNative = (facts: TransactionFacts, row: TransactionFacts) =>
         matches.count === 1 &&
         newGroup.length === 1 &&
@@ -2630,7 +2628,6 @@ export function planRun(
       absence,
       observedIds,
     });
-    // Covered rows this capture omitted gain, or quietly advance, a receipt.
     for (const previous of current) {
       if (
         !absence.covers(previous) ||
