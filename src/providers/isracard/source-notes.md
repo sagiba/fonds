@@ -321,10 +321,10 @@ and every code had one label. That label is the evidence for a kind:
   details remain evidence through sparse refreshes, so omitting them cannot clear
   their conflicts. Valid same-row
   city and ISO alpha-3 country fields are used on pending and posted rows; phone-only
-  cities and explicit web/email addresses are rejected. Bound `motavName`
-  identifies a party, not its role or unavailable Digital classification.
-  Bound empty clears; absent detail preserves a uniquely matched native
-  transfer's prior name through retained financial support.
+  cities and explicit web/email addresses are rejected. Bound `motavName` names
+  a party, not its role or kind. An empty bound name clears it; retained support
+  restoring a non-transfer kind drops it; a missing detail keeps a uniquely
+  matched native transfer's name.
 - **Checks:** [payment context] covers independent payment facts and conflicts;
   [pending] covers approval enrichment; [extraction] covers bound-detail and
   merchant projection.
