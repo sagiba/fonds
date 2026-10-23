@@ -84,10 +84,10 @@ become review candidates.
 Posted omissions change neither observation state nor totals. Pending omissions
 establish absence only within declared coverage. Wholly empty responses with
 covered pending rows fail `implausible_empty`; quiet cards can retain stale pending
-rows indefinitely, after out-of-window refreshes succeed. Verify
-against CAL before using [`confirm_removal`](../api.md#operations): history and
+rows indefinitely. Successful captures no longer covering the pending date prove
+no absence. Verify against CAL before using [`confirm_removal`](../api.md#operations): history and
 annotations remain, but removal is an owner decision, not provider-proven
-cancellation. Retries and age alone prove nothing.
+cancellation.
 See [coverage rationale](../../src/providers/cal/source-notes.md#calwindow-recent-window-and-search-coverage).
 
 Authentication challenges, invalid credentials and rate limits stop the refresh,
