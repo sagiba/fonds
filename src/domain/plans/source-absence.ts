@@ -135,6 +135,8 @@ export function responseAbsence({
   };
 }
 
+export type ResponseAbsence = ReturnType<typeof responseAbsence>;
+
 /** Empty-response safeguards cannot grant coverage the source did not declare. */
 export function implausiblyEmpty({
   adapter,

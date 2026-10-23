@@ -67,7 +67,11 @@ import {
   refreshDuplicatePlans,
 } from "./lifecycle.js";
 import { postingOverlapPairs } from "./posting-overlap.js";
-import { implausiblyEmpty, responseAbsence } from "./source-absence.js";
+import {
+  implausiblyEmpty,
+  type ResponseAbsence,
+  responseAbsence,
+} from "./source-absence.js";
 import {
   declaredIdentityBase,
   financialFacts,
@@ -1327,6 +1331,141 @@ function stalePartition(
   return latest !== undefined && latest > response.capturedAt;
 }
 
+/** Retain current authorization facts independently of the posted survivor. */
+function reconcileLinkedComponents({
+  plan,
+  adapter,
+  runId,
+  response,
+  result,
+  inputs,
+  absence,
+  observedIds,
+}: {
+  plan: FinancialPlan;
+  adapter: SourceAdapter;
+  runId: string;
+  response: FinancialResponse;
+  result: ExtractionResult;
+  inputs: readonly SourceIdentityFacts[];
+  absence: ResponseAbsence;
+  observedIds: Set<string>;
+}): void {
+  for (const row of plan.account(response.accountKey)) {
+    const link = row.details.postingLink;
+    if (!link || link.split || row.supersededById) {
+      continue;
+    }
+    let pending = structuredClone(link.pending);
+    const authorizations = inputs.filter(
+      (input) =>
+        input.status === "pending" &&
+        link.pendingKeys.includes(input.sourceKey),
+    );
+    const authorization = authorizations[0];
+    if (authorization) {
+      const owners = plan
+        .account(response.accountKey)
+        .filter(
+          (candidate) =>
+            !candidate.supersededById &&
+            !candidate.sourceEvidence?.identity?.retiredFromMatching &&
+            ownsSourceKey(candidate, authorization.sourceKey),
+        );
+      // A collision is not a choice of component, nor proof of its absence.
+      if (
+        authorizations.length !== 1 ||
+        owners.length !== 1 ||
+        owners[0]!.id !== row.id ||
+        !unambiguousNative(authorization, pending) ||
+        authorization.sourceScope !== pending.sourceScope ||
+        authorization.cardId !== pending.cardId
+      ) {
+        // Keep the observation trail even when no candidate can supply
+        // current component facts, freshness, or evidence of restoration.
+        plan.updateTransaction(row.id, {
+          details: {
+            ...row.details,
+            sourceRefs: retainObservations(
+              row.details.sourceRefs,
+              authorizations.flatMap((input) => input.details.sourceRefs),
+            ),
+          },
+        });
+        continue;
+      }
+      observedIds.add(row.id);
+      pending.details.sourceRefs = retainObservations(
+        pending.details.sourceRefs,
+        authorization.details.sourceRefs,
+      );
+      const removal =
+        pending.presence === "removed"
+          ? plan.snapshot.removals.find(
+              (entry) => entry.transactionId === pending.id,
+            )
+          : undefined;
+      if (
+        !result.historical &&
+        pending.lastSeenAt < response.capturedAt &&
+        (!removal || removal.createdAt < response.capturedAt)
+      ) {
+        const accepted = structuredClone(authorization);
+        const financial = reconcileFinancialBundle({
+          counterpartyKinds: adapter.counterpartyKinds,
+          previous: pending,
+          input: accepted,
+          authority: adapter.financialAuthority?.(accepted, result) ?? {
+            kind: "asserted",
+          },
+          receipt: { runId, capturedAt: response.capturedAt },
+          retainEligible: false,
+        });
+        Object.assign(accepted, financial.facts);
+        retainEvidence(pending, accepted, adapter);
+        const sourceAbsence = absence.reconciled(accepted, pending);
+        pending = {
+          ...pending,
+          ...accepted,
+          status: "pending",
+          ...storedPaymentContext(accepted, pending),
+          sourceEvidence: {
+            ...pending.sourceEvidence,
+            ...accepted.sourceEvidence,
+            financial: financial.financialReceipt,
+          },
+          presence: sourceAbsence ? "not_returned" : "seen",
+          sourceAbsence,
+          lastSeenAt: response.capturedAt,
+          lastSeenRunId: runId,
+        };
+      }
+    } else if (pending.presence !== "removed" && absence.covers(pending)) {
+      pending.presence = "not_returned";
+      if (
+        !pending.sourceAbsence ||
+        pending.sourceAbsence.capturedAt < response.capturedAt
+      ) {
+        pending.sourceAbsence = { runId, capturedAt: response.capturedAt };
+      }
+    }
+    plan.updateTransaction(row.id, {
+      details: {
+        ...row.details,
+        ...(authorization
+          ? {
+              sourceRefs: retainObservations(
+                row.details.sourceRefs,
+                authorization.details.sourceRefs,
+              ),
+            }
+          : {}),
+        postingLink: { ...link, pending },
+      },
+    });
+  }
+}
+
 /** Every financial operation uses the same content rule, including indirect review changes. */
 export function finishTransactionContent(
   plan: FinancialPlan,
@@ -2064,7 +2203,7 @@ export function planRun(
         }
       }
       // Historical archives can add evidence but cannot replace current observations.
-      if (previous && (result.historical || hasNewerCurrent)) {
+      if (previous && result.historical) {
         markSeen(previous.id);
         continue;
       }
@@ -2481,122 +2620,17 @@ export function planRun(
         updated++;
       }
     }
-    // Retain current authorization facts independently of the posted survivor.
-    for (const row of plan.account(response.accountKey)) {
-      const link = row.details.postingLink;
-      if (!link || link.split || row.supersededById) {
-        continue;
-      }
-      let pending = structuredClone(link.pending);
-      const authorizations = inputs.filter(
-        (input) =>
-          input.status === "pending" &&
-          link.pendingKeys.includes(input.sourceKey),
-      );
-      const authorization = authorizations[0];
-      if (authorization) {
-        const owners = plan
-          .account(response.accountKey)
-          .filter(
-            (candidate) =>
-              !candidate.supersededById &&
-              !candidate.sourceEvidence?.identity?.retiredFromMatching &&
-              ownsSourceKey(candidate, authorization.sourceKey),
-          );
-        // A collision is not a choice of component, nor proof of its absence.
-        if (
-          authorizations.length !== 1 ||
-          owners.length !== 1 ||
-          owners[0]!.id !== row.id ||
-          !unambiguousNative(authorization, pending) ||
-          authorization.sourceScope !== pending.sourceScope ||
-          authorization.cardId !== pending.cardId
-        ) {
-          // Keep the observation trail even when no candidate can supply
-          // current component facts, freshness, or evidence of restoration.
-          plan.updateTransaction(row.id, {
-            details: {
-              ...row.details,
-              sourceRefs: retainObservations(
-                row.details.sourceRefs,
-                authorizations.flatMap((input) => input.details.sourceRefs),
-              ),
-            },
-          });
-          continue;
-        }
-        observedIds.add(row.id);
-        pending.details.sourceRefs = retainObservations(
-          pending.details.sourceRefs,
-          authorization.details.sourceRefs,
-        );
-        const removal =
-          pending.presence === "removed"
-            ? plan.snapshot.removals.find(
-                (entry) => entry.transactionId === pending.id,
-              )
-            : undefined;
-        if (
-          !result.historical &&
-          pending.lastSeenAt < response.capturedAt &&
-          (pending.presence !== "removed" ||
-            (pending.lastSeenAt < response.capturedAt &&
-              (!removal || removal.createdAt < response.capturedAt)))
-        ) {
-          const accepted = structuredClone(authorization);
-          const financial = reconcileFinancialBundle({
-            counterpartyKinds: adapter.counterpartyKinds,
-            previous: pending,
-            input: accepted,
-            authority: adapter.financialAuthority?.(accepted, result) ?? {
-              kind: "asserted",
-            },
-            receipt: { runId, capturedAt: response.capturedAt },
-            retainEligible: false,
-          });
-          Object.assign(accepted, financial.facts);
-          retainEvidence(pending, accepted, adapter);
-          const sourceAbsence = absence.reconciled(accepted, pending);
-          pending = {
-            ...pending,
-            ...accepted,
-            status: "pending",
-            ...storedPaymentContext(accepted, pending),
-            sourceEvidence: {
-              ...pending.sourceEvidence,
-              ...accepted.sourceEvidence,
-              financial: financial.financialReceipt,
-            },
-            presence: sourceAbsence ? "not_returned" : "seen",
-            sourceAbsence,
-            lastSeenAt: response.capturedAt,
-            lastSeenRunId: runId,
-          };
-        }
-      } else if (pending.presence !== "removed" && absence.covers(pending)) {
-        pending.presence = "not_returned";
-        if (
-          !pending.sourceAbsence ||
-          pending.sourceAbsence.capturedAt < response.capturedAt
-        ) {
-          pending.sourceAbsence = { runId, capturedAt: response.capturedAt };
-        }
-      }
-      plan.updateTransaction(row.id, {
-        details: {
-          ...row.details,
-          ...(authorization
-            ? {
-                sourceRefs: retainObservations(
-                  row.details.sourceRefs,
-                  authorization.details.sourceRefs,
-                ),
-              }
-            : {}),
-          postingLink: { ...link, pending },
-        },
-      });
-    }
+    reconcileLinkedComponents({
+      plan,
+      adapter,
+      runId,
+      response,
+      result,
+      inputs,
+      absence,
+      observedIds,
+    });
+    // Covered rows this capture omitted gain, or quietly advance, a receipt.
     for (const previous of current) {
       if (
         !absence.covers(previous) ||
