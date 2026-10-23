@@ -16,6 +16,7 @@ import {
   joined,
   type Presentation,
   safe,
+  safeId,
   table,
   wrap,
 } from "./cli-output.js";
@@ -35,12 +36,18 @@ type TransactionDetail = z.infer<typeof transactionDetailOutputSchema>;
 
 type Money = { currency: string; amount: string } | null;
 
+type Command = (args: string[]) => string;
+
 /** What a view knows about the request besides its result. */
 export interface ViewContext {
   /** The validated input, with defaults applied. */
   input: Readonly<Record<string, unknown>>;
-  /** A runnable follow-up command on the same database or deployment. */
-  command(args: string[]): string;
+  /** A runnable operation command on the same database or deployment. */
+  command: Command;
+  /** This command as typed, with these arguments in place of its cursor. */
+  again: Command;
+  /** An operator command on the same ledger; absent for a remote deployment. */
+  local?: Command | undefined;
 }
 
 export type View<T> = (
@@ -48,6 +55,14 @@ export type View<T> = (
   p: Presentation,
   context: ViewContext,
 ) => string;
+
+/**
+ * A command to copy, or undefined when it holds characters that would have
+ * to be escaped for display, which would make it name something else.
+ */
+function runnable(command: string): string | undefined {
+  return safeId(command) === command ? command : undefined;
+}
 
 const basisShort: Record<string, string> = {
   booked_entry: "booked",
@@ -90,9 +105,19 @@ function reviewNote(review: Transaction["review"]): string | undefined {
     : undefined;
 }
 
+/** Original money the amount column does not already show. */
+function originalNote(transaction: Transaction): string | undefined {
+  return transaction.originalAmount &&
+    money(transaction.originalAmount) !== money(transaction.amount)
+    ? `from ${money(transaction.originalAmount)}`
+    : undefined;
+}
+
 function notes(transaction: Transaction): string[] {
   return [
+    originalNote(transaction),
     transaction.presence === "seen" ? undefined : words(transaction.presence),
+    transaction.sourceAbsence ? "proven absent" : undefined,
     installments(transaction),
     transaction.supersededById !== null ? "superseded" : undefined,
     reviewNote(transaction.review),
@@ -105,7 +130,7 @@ function label(transaction: Transaction): string {
     transaction.merchant.name ??
       transaction.counterpartyName ??
       transaction.description ??
-      "—",
+      "(no description)",
   );
 }
 
@@ -129,7 +154,7 @@ export const transactionListView: View<TransactionPage> = (
   }
   const rows = page.data.map((transaction) => ({
     cells: [
-      transaction[dateFields[role]] ?? "—",
+      transaction[dateFields[role]] ?? "unknown",
       money(transaction.amount),
       basisShort[transaction.amountBasis]!,
       transaction.status,
@@ -137,9 +162,10 @@ export const transactionListView: View<TransactionPage> = (
       label(transaction),
     ],
     // The whole ID, never shortened, with what the columns leave out.
-    detail: dim(
+    detail: flow(
       p,
-      flow(p, [safe(transaction.id), ...notes(transaction)], "  "),
+      [dim(p, safeId(transaction.id)), ...notes(transaction)],
+      "  ",
     ),
   }));
   const header = role === "transaction" ? "Date" : `${words(role)} date`;
@@ -170,37 +196,38 @@ export const transactionListView: View<TransactionPage> = (
           ].join("\n"),
         )
         .join("\n");
+  const details = runnable(
+    context.command(["get", "--transaction-id", page.data[0]!.id]),
+  );
+  const more =
+    page.nextCursor !== null
+      ? runnable(context.again(["--cursor", page.nextCursor]))
+      : undefined;
   return [
     rendered,
     "",
     dim(
       p,
       joined(p, [
-        `${page.data.length} shown`,
+        `${page.data.length} shown${page.nextCursor !== null ? ", more available" : ""}`,
         `${perspective} perspective`,
         ...(role === "transaction" ? [] : [`${words(role)} dates`]),
       ]),
     ),
-    `Details: ${safe(context.command(["get", "--transaction-id", page.data[0]!.id]))}`,
-    ...(page.nextCursor !== null
-      ? [`More: repeat with --cursor ${safe(page.nextCursor)}`]
-      : []),
+    ...(details ? [`Details: ${details}`] : []),
+    ...(more ? [`More: ${more}`] : []),
     "",
   ].join("\n");
 };
 
-/** Converted as totals count it: stated steps, or original money in another currency. */
-function converted(
-  transaction: Pick<
-    Transaction,
-    "currencyExchange" | "originalAmount" | "amount"
-  >,
+/** A conversion the row itself shows: original money in another currency. */
+function shownAsConverted(
+  transaction: Pick<Transaction, "originalAmount" | "amount">,
 ): boolean {
   return (
-    transaction.currencyExchange !== null ||
-    (transaction.originalAmount !== null &&
-      transaction.amount !== null &&
-      transaction.originalAmount.currency !== transaction.amount.currency)
+    transaction.originalAmount !== null &&
+    transaction.amount !== null &&
+    transaction.originalAmount.currency !== transaction.amount.currency
   );
 }
 
@@ -215,17 +242,90 @@ function exchange(steps: NonNullable<Transaction["currencyExchange"]>): string {
     .join("; ");
 }
 
+const authorizationMethods: Record<
+  NonNullable<Transaction["authorizationMethod"]>,
+  string
+> = {
+  chip: "chip",
+  contactless: "contactless",
+  keyed_in: "keyed in",
+  online: "online",
+  swipe: "swipe",
+};
+
+const wallets: Record<NonNullable<Transaction["wallet"]>, string> = {
+  apple_pay: "Apple Pay",
+  google_pay: "Google Pay",
+  samsung_pay: "Samsung Pay",
+};
+
+/** How the source says the card was used; unstated facts stay out. */
+function payment(
+  transaction: Pick<
+    Transaction,
+    | "cardPresent"
+    | "authorizationMethod"
+    | "wallet"
+    | "threeDSecureUsed"
+    | "recurring"
+  >,
+): string[] {
+  const flag = (value: boolean | null, yes: string, no: string) =>
+    value === null ? [] : [value ? yes : no];
+  return [
+    ...flag(transaction.cardPresent, "card present", "card not present"),
+    ...(transaction.authorizationMethod
+      ? [authorizationMethods[transaction.authorizationMethod]]
+      : []),
+    ...(transaction.wallet ? [wallets[transaction.wallet]] : []),
+    ...flag(transaction.threeDSecureUsed, "3-D Secure", "no 3-D Secure"),
+    ...flag(transaction.recurring, "recurring", "not recurring"),
+  ];
+}
+
 function annotation(
   p: Presentation,
-  value: TransactionDetail["annotation"],
+  value: Transaction["annotation"] | TransactionDetail["annotation"],
 ): string | undefined {
   if (!value) {
     return undefined;
   }
-  return joined(p, [
+  const parts = [
     ...(value.category !== null ? [safe(value.category)] : []),
     ...(value.tags.length ? [value.tags.map(safe).join(", ")] : []),
-    ...(value.notes !== null ? [safe(value.notes)] : []),
+    ...("notes" in value
+      ? value.notes !== null
+        ? [safe(value.notes)]
+        : []
+      : value.hasNotes
+        ? ["has notes"]
+        : []),
+  ];
+  return parts.length ? joined(p, parts) : undefined;
+}
+
+/** A list label, with how many there are when the output holds fewer. */
+function counted(name: string, shown: number, total: number): string {
+  return total > shown ? `${name} (${shown} of ${total})` : name;
+}
+
+function postingMatch(
+  p: Presentation,
+  match: NonNullable<TransactionDetail["postingMatch"]>,
+): string {
+  return joined(p, [
+    match.unlinked
+      ? "unlinked by the owner"
+      : match.automatic
+        ? "matched automatically"
+        : "confirmed by the owner",
+    `retired posted row ${safeId(match.supersededTransactionId)}`,
+    `policy ${safe(match.policyVersion)}`,
+    ...(match.evidence
+      ? [
+          `run ${safeId(match.evidence.runId)} captured ${safe(match.evidence.capturedAt)}`,
+        ]
+      : []),
   ]);
 }
 
@@ -243,6 +343,20 @@ export const transactionView: View<
     detail?.additionalInformationCount !== undefined &&
       "additional information",
   ].filter((entry) => typeof entry === "string");
+  const paid = payment(transaction);
+  const annotated = annotation(p, transaction.annotation);
+  const information = detail?.additionalInformation ?? [];
+  const merchantParts = [
+    ...(merchant.name !== null ? [safe(merchant.name)] : []),
+    ...(merchant.categoryCode !== null ? [`MCC ${merchant.categoryCode}`] : []),
+    ...(merchant.addressLine !== null ? [safe(merchant.addressLine)] : []),
+    ...(merchant.city !== null ? [safe(merchant.city)] : []),
+    ...(merchant.countryCode !== null ? [merchant.countryCode] : []),
+    ...(merchant.phone !== null ? [safe(merchant.phone)] : []),
+    ...(merchant.providerId !== null
+      ? [`merchant ID ${safeId(merchant.providerId)}`]
+      : []),
+  ];
   const rows: ([string, string] | undefined)[] = [
     [
       "Amount",
@@ -262,6 +376,12 @@ export const transactionView: View<
         words(transaction.kind),
       ]),
     ],
+    transaction.sourceAbsence
+      ? [
+          "Absence",
+          `proven by run ${safeId(transaction.sourceAbsence.runId)}, captured ${safe(transaction.sourceAbsence.capturedAt)}`,
+        ]
+      : undefined,
     [
       "Date",
       transaction.transactionDateTime?.replace("T", " ") ??
@@ -273,32 +393,34 @@ export const transactionView: View<
     transaction.description !== null
       ? ["Description", safe(transaction.description)]
       : undefined,
-    merchant.name !== null || merchant.categoryCode !== null
-      ? [
-          "Merchant",
-          joined(p, [
-            ...(merchant.name !== null ? [safe(merchant.name)] : []),
-            ...(merchant.categoryCode !== null
-              ? [`MCC ${merchant.categoryCode}`]
-              : []),
-            ...(merchant.city !== null ? [safe(merchant.city)] : []),
-            ...(merchant.countryCode !== null ? [merchant.countryCode] : []),
-          ]),
-        ]
-      : undefined,
+    merchantParts.length ? ["Merchant", joined(p, merchantParts)] : undefined,
     transaction.counterpartyName !== null
       ? ["Counterparty", safe(transaction.counterpartyName)]
+      : undefined,
+    paid.length ? ["Payment", joined(p, paid)] : undefined,
+    information.length
+      ? [
+          counted(
+            "Information",
+            information.length,
+            detail?.additionalInformationCount ?? information.length,
+          ),
+          information.map(safe).join("; "),
+        ]
       : undefined,
     installments(transaction)
       ? ["Installments", installments(transaction)!]
       : undefined,
     transaction.purchaseId !== null
-      ? ["Purchase", safe(transaction.purchaseId)]
+      ? ["Purchase", safeId(transaction.purchaseId)]
       : undefined,
     transaction.supersededById !== null
-      ? ["Superseded by", safe(transaction.supersededById)]
+      ? ["Superseded by", safeId(transaction.supersededById)]
       : undefined,
-    transaction.currencyExchange
+    detail?.postingMatch
+      ? ["Posting match", postingMatch(p, detail.postingMatch)]
+      : undefined,
+    transaction.currencyExchange?.length
       ? ["Exchange", exchange(transaction.currencyExchange)]
       : undefined,
     transaction.fxFee
@@ -306,14 +428,17 @@ export const transactionView: View<
           "FX fee",
           `${money(transaction.fxFee)}, already included in the amount`,
         ]
-      : converted(transaction)
+      : shownAsConverted(transaction)
         ? ["FX fee", "unknown"]
         : undefined,
     [
       "Card",
-      transaction.cardId !== null ? safe(transaction.cardId) : "unknown",
+      transaction.cardId !== null ? safeId(transaction.cardId) : "unknown",
     ],
-    ["Connection", safe(transaction.connectionId)],
+    ["Connection", safeId(transaction.connectionId)],
+    transaction.providerTransactionCode !== null
+      ? ["Provider code", safe(transaction.providerTransactionCode)]
+      : undefined,
     [
       "Review",
       joined(p, [
@@ -323,20 +448,36 @@ export const transactionView: View<
       ]),
     ],
     detail?.review.reasons.length
-      ? ["Reasons", detail.review.reasons.map(safe).join("; ")]
+      ? [
+          counted(
+            "Reasons",
+            detail.review.reasons.length,
+            detail.review.counts.reasons,
+          ),
+          detail.review.reasons.map(safe).join("; "),
+        ]
       : undefined,
     detail?.review.sourceIssues.length
-      ? ["Source issues", detail.review.sourceIssues.map(safe).join("; ")]
+      ? [
+          counted(
+            "Source issues",
+            detail.review.sourceIssues.length,
+            detail.review.counts.sourceIssues,
+          ),
+          detail.review.sourceIssues.map(safe).join("; "),
+        ]
       : undefined,
     detail?.review.pendingPostingCandidateIds.length
       ? [
-          "Candidates",
-          detail.review.pendingPostingCandidateIds.map(safe).join(", "),
+          counted(
+            "Candidates",
+            detail.review.pendingPostingCandidateIds.length,
+            detail.review.counts.pendingPostingCandidateIds,
+          ),
+          detail.review.pendingPostingCandidateIds.map(safeId).join(", "),
         ]
       : undefined,
-    detail && annotation(p, detail.annotation)
-      ? ["Annotation", annotation(p, detail.annotation)!]
-      : undefined,
+    annotated ? ["Annotation", annotated] : undefined,
     [
       "Version",
       `${transaction.version}${
@@ -352,20 +493,28 @@ export const transactionView: View<
             `${detail.source.identityStrength} identity`,
             `first seen ${safe(detail.source.firstSeenAt)}`,
             `last seen ${safe(detail.source.lastSeenAt)}`,
+            `last run ${safeId(detail.source.lastSyncRunId)}`,
           ]),
         ]
       : undefined,
     detail?.evidence?.length
       ? [
-          "Evidence",
+          counted(
+            "Evidence",
+            detail.evidence.length,
+            detail.diagnosticCounts?.evidence ?? detail.evidence.length,
+          ),
           detail.evidence
-            .map((entry) => `${safe(entry.runId)} ${safe(entry.path)}`)
+            .map((entry) => `${safeId(entry.runId)} ${safe(entry.path)}`)
             .join("\n"),
         ]
       : undefined,
   ];
+  const record = runnable(
+    context.command(["get", "--transaction-id", transaction.id, "--json"]),
+  );
   return [
-    `Transaction ${safe(transaction.id)}`,
+    `Transaction ${safeId(transaction.id)}`,
     details(rows, p.width),
     ...(truncated.length
       ? [
@@ -378,24 +527,23 @@ export const transactionView: View<
         ]
       : []),
     "",
-    `JSON record: ${safe(context.command(["get", "--transaction-id", transaction.id, "--json"]))}`,
-    "",
+    ...(record ? [`JSON record: ${record}`, ""] : []),
   ].join("\n");
 };
 
+type Totals = z.infer<typeof totalsOutputSchema>;
+
+/** Every exclusion reason; a new one fails to compile until it has a name. */
 const exclusions = {
   pending: "pending",
   transferOrIncome: "transfer or income",
   retiredOrRemoved: "retired or removed",
+  sourceAbsent: "absent from source",
   unresolved: "unresolved",
   authorization: "authorization",
-} as const;
+} as const satisfies Record<keyof Totals["excluded"], string>;
 
-export const totalsView: View<z.infer<typeof totalsOutputSchema>> = (
-  totals,
-  p,
-  context,
-) => {
+export const totalsView: View<Totals> = (totals, p, context) => {
   const perspective = String(context.input.perspective);
   const billing = totals.totals.every(
     (group) => group.amountBasis === undefined,
@@ -405,12 +553,11 @@ export const totalsView: View<z.infer<typeof totalsOutputSchema>> = (
     group.amount,
     ...(billing ? [] : [basisLong[group.amountBasis!]!]),
   ]);
-  const excluded = Object.entries(exclusions)
-    .filter(([key]) => totals.excluded[key as keyof typeof exclusions] > 0)
-    .map(
-      ([key, name]) =>
-        `${totals.excluded[key as keyof typeof exclusions]} ${name}`,
-    );
+  const excluded = (
+    Object.entries(exclusions) as [keyof Totals["excluded"], string][]
+  )
+    .filter(([key]) => totals.excluded[key] > 0)
+    .map(([key, name]) => `${totals.excluded[key]} ${name}`);
   const unknownFees = totals.fxFeeUnknownCount;
   return [
     wrap(joined(p, ["Totals", `${perspective} perspective`]), p.width),
@@ -423,7 +570,16 @@ export const totalsView: View<z.infer<typeof totalsOutputSchema>> = (
             ...(billing ? [] : [{ header: "Basis" }]),
           ],
           groups,
-        ) ?? groups.map((group) => flow(p, group)).join("\n"))
+        ) ??
+        // Too narrow: one group per line, its money kept whole.
+        totals.totals
+          .map((group) =>
+            flow(p, [
+              money(group),
+              ...(billing ? [] : [basisLong[group.amountBasis!]!]),
+            ]),
+          )
+          .join("\n"))
       : wrap(
           "No eligible transactions match; this does not show that collection is complete.",
           p.width,
@@ -479,14 +635,19 @@ function lastRefresh(
 
 export const connectionListView: View<ConnectionPage> = (page, p, context) => {
   if (!page.data.length) {
-    return `No connections yet. Add one: ${safe(context.command(["connect", "cal"]))}\n`;
+    const add = context.local && runnable(context.local(["connect", "cal"]));
+    return `No connections yet.${add ? ` Add one: ${add}` : ""}\n`;
   }
   const rows = page.data.map((connection) => [
-    safe(connection.id),
+    safeId(connection.id),
     safe(connection.provider),
     safe(connection.displayName),
     lastRefresh(connection.latestRefresh),
   ]);
+  const more =
+    page.nextCursor !== null
+      ? runnable(context.again(["--cursor", page.nextCursor]))
+      : undefined;
   return `${
     table(
       p,
@@ -497,8 +658,8 @@ export const connectionListView: View<ConnectionPage> = (page, p, context) => {
         { header: "Last refresh" },
       ],
       rows,
-    ) ?? rows.map((row) => joined(p, row)).join("\n")
-  }\n`;
+    ) ?? rows.map((row) => flow(p, row)).join("\n")
+  }\n${more ? `\nMore: ${more}\n` : ""}`;
 };
 
 /** Operation results with a terminal view; the rest stay JSON. */
@@ -509,16 +670,17 @@ export const operationViews: Readonly<Record<string, View<never>>> = {
   list_connections: connectionListView,
 };
 
-type Next = (args: string[]) => string;
-
 function nextStep(next: string, explanation?: string): string {
-  return `\nNext: ${safe(next)}\n${explanation ? `  ${safe(explanation)}\n` : ""}`;
+  const command = runnable(next);
+  return command
+    ? `\nNext: ${command}\n${explanation ? `  ${safe(explanation)}\n` : ""}`
+    : "\n";
 }
 
 export function initView(
   p: Presentation,
   location: string | undefined,
-  next: Next,
+  next: Command,
   providers: readonly string[],
 ): string {
   return [
@@ -534,9 +696,9 @@ export function initView(
 export function connectView(
   p: Presentation,
   result: { connectionId: string; provider: string; credentials: string },
-  next: Next,
+  next: Command,
 ): string {
-  const id = safe(result.connectionId);
+  const id = safeId(result.connectionId);
   const provider = safe(result.provider);
   return result.credentials === "stored"
     ? [
@@ -562,7 +724,7 @@ export function disconnectView(
   p: Presentation,
   result: { connectionId: string; credentials: string },
 ): string {
-  const id = safe(result.connectionId);
+  const id = safeId(result.connectionId);
   return `${
     result.credentials === "removed"
       ? headline(
@@ -589,7 +751,12 @@ export function backupView(
 
 function transactionCounts(
   p: Presentation,
-  counts: { created: number; updated: number; unchanged?: number | undefined },
+  counts: {
+    created: number;
+    updated: number;
+    unlisted: number;
+    unchanged?: number | undefined;
+  },
 ): string {
   return `Transactions: ${joined(p, [
     `${counts.created} added`,
@@ -597,6 +764,8 @@ function transactionCounts(
     ...(counts.unchanged !== undefined
       ? [`${counts.unchanged} unchanged`]
       : []),
+    // Absence marks: rows a comparable response no longer returned.
+    ...(counts.unlisted ? [`${counts.unlisted} no longer returned`] : []),
   ])}`;
 }
 
@@ -656,7 +825,7 @@ function diagnosticLine(
 export function refreshView(
   p: Presentation,
   summary: RefreshSummary,
-  next: Next,
+  next: Command,
   options: { connectionId: string | undefined; nothingToRefresh: boolean },
 ): string {
   if (options.nothingToRefresh) {
@@ -677,6 +846,7 @@ export function refreshView(
       created: summary.created,
       updated: summary.updated,
       unchanged: summary.unchangedTransactions,
+      unlisted: summary.unlisted,
     })}`,
     `  Captures: ${summary.captures}${summary.unchanged ? ` (${summary.unchanged} unchanged)` : ""}`,
     ...(summary.failures

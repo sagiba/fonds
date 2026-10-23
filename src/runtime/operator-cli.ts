@@ -65,6 +65,7 @@ import {
   CommandInputError,
   globalHelp,
   JSON_HELP,
+  operationCommandNames,
   operationForCommand,
   operationUsage,
   remoteInvoker,
@@ -952,8 +953,8 @@ input fields as kebab-case flags and the same JSON output. Booleans take true or
 integers are decimal, and object or list fields take JSON. --remote calls a Fonds
 deployment's /v1 API (https, or http on this machine) with a bearer from --token-file,
 which --remote requires; it never comes from the environment or the local state.
-In a terminal, list, get, totals, list-connections and operator results print as text;
---json, or redirected output, prints the JSON result. consume always prints JSON lines.
+In a terminal, common results print as text and the rest as indented JSON; --json,
+or redirected output, prints the JSON result. consume always prints JSON lines.
 Aliases: ${aliasNames().join(", ")}.
 ${operationUsage()}
 
@@ -1068,6 +1069,50 @@ function globalsOf(backend: OperatorBackend, values: Values): Globals {
   );
 }
 
+const HELP = new Set(["help", "--help", "-h"]);
+
+/** Edit distance, for suggesting the command a typo meant. */
+function distance(left: string, right: string): number {
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (const [row, letter] of [...left].entries()) {
+    const current = [row + 1];
+    for (const [column, other] of [...right].entries()) {
+      current.push(
+        Math.min(
+          previous[column + 1]! + 1,
+          current[column]! + 1,
+          previous[column]! + (letter === other ? 0 : 1),
+        ),
+      );
+    }
+    previous = current;
+  }
+  return previous[right.length]!;
+}
+
+/** A fixed message that names only a known command, never the typed text. */
+function unknownCommand(name: string): string {
+  const [closest] = [
+    ...operatorCommands.map((command) => command.name),
+    ...operationCommandNames(),
+    "help",
+  ]
+    .map((candidate) => ({ candidate, edits: distance(name, candidate) }))
+    .filter(({ edits }) => edits <= Math.min(2, name.length / 3))
+    .sort((left, right) => left.edits - right.edits);
+  return `Unknown command.${closest ? ` Did you mean ${closest.candidate}?` : ""} Use --help for usage.`;
+}
+
+/** Typed arguments without their cursor, to repeat a list from another page. */
+function withoutCursor(args: readonly string[]): string[] {
+  return args.filter(
+    (arg, index) =>
+      arg !== "--cursor" &&
+      !arg.startsWith("--cursor=") &&
+      args[index - 1] !== "--cursor",
+  );
+}
+
 /** One operation, embedded on the backend's database or through --remote. */
 function runOperation(
   backend: OperatorBackend,
@@ -1081,7 +1126,7 @@ function runOperation(
     name,
     invocation: backend.invocation,
     wrap: (text) => wrap(text, HELP_WIDTH),
-    render(output, { input, json, globals }) {
+    render(output, { input, json, globals, args: typed }) {
       const p = presentation(json);
       const view = operationViews[definition.name] as View<unknown> | undefined;
       // A remote result is unvalidated; one that fails its schema stays JSON.
@@ -1098,6 +1143,21 @@ function runOperation(
               input,
               command: (args) =>
                 commandLine(backend.command, [...args, ...globalArgs(globals)]),
+              again: (args) =>
+                commandLine(backend.command, [
+                  name,
+                  ...withoutCursor(typed),
+                  ...args,
+                ]),
+              // Operator commands never run against a remote deployment.
+              local:
+                globals.remote === undefined
+                  ? (args) =>
+                      commandLine(backend.command, [
+                        ...args,
+                        ...globalArgs(globals),
+                      ])
+                  : undefined,
             })),
       );
     },
@@ -1152,17 +1212,18 @@ export async function runOperatorCli(
     process.stdout.write(operatorOverview(backend));
     return EXIT_CODES.ok;
   }
-  if (name === "help" || name === "--help" || name === "-h") {
-    if (args.length === 0) {
+  if (HELP.has(name)) {
+    const [topic] = args;
+    if (topic === undefined || HELP.has(topic)) {
       process.stdout.write(operatorOverview(backend));
       return EXIT_CODES.ok;
     }
-    if (args.length === 1 && args[0] === "--all") {
+    if (topic === "--all" && args.length === 1) {
       process.stdout.write(operatorUsage(backend));
       return EXIT_CODES.ok;
     }
-    if (name === "help" && !args[0]!.startsWith("-")) {
-      return runOperatorCli(backend, [...args, "--help"]);
+    if (!topic.startsWith("-")) {
+      return runOperatorCli(backend, [topic, "--help"]);
     }
     process.stderr.write("Use help, help --all or help <command>.\n");
     return EXIT_CODES.failed;
@@ -1181,7 +1242,7 @@ export async function runOperatorCli(
       throw new CommandInputError(
         name.startsWith("-")
           ? "Specify one command. Use --help for usage."
-          : "Unknown command. Use --help for usage.",
+          : unknownCommand(name),
       );
     }
     if (args.some((value) => /^--remote(=|$)/.test(value))) {
@@ -1199,11 +1260,13 @@ export async function runOperatorCli(
       },
       command.name,
     );
+    const reason = backend.unavailable[command.name as OptionalCommand];
     if (values.help) {
-      process.stdout.write(commandHelp(command, backend));
+      process.stdout.write(
+        `${commandHelp(command, backend)}${reason ? `\n${reason}\n` : ""}`,
+      );
       return EXIT_CODES.ok;
     }
-    const reason = backend.unavailable[command.name as OptionalCommand];
     if (reason) {
       process.stderr.write(`${reason}\n`);
       return EXIT_CODES.unavailable;

@@ -225,7 +225,6 @@ export async function main(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<number> {
   const asksForHelp =
-    argv.length === 0 ||
     ["--help", "-h", "help", "--version"].includes(argv[0]!) ||
     argv.includes("--help") ||
     argv.includes("-h");

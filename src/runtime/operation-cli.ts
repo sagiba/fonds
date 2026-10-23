@@ -196,6 +196,14 @@ export function aliasNames(): string[] {
   return [...aliases.keys()];
 }
 
+/** Every operation command name and alias. */
+export function operationCommandNames(): string[] {
+  return [
+    ...operationDefinitions.map((definition) => kebab(definition.name)),
+    ...aliases.keys(),
+  ];
+}
+
 type FieldKind = "string" | "number" | "boolean" | "json";
 
 interface Field {
@@ -415,6 +423,8 @@ export function operationHelp(
     name?: string;
     invocation?: string;
     wrap?: (text: string) => string;
+    /** False where output is always JSON, so --json selects nothing. */
+    json?: boolean;
   } = {},
 ): string {
   const { alias, summary, example } = operationPresentation(definition);
@@ -449,7 +459,7 @@ export function operationHelp(
     ...section("Options:", optional),
     ...section("Global options:", [
       ...globalHelp(globals).split("\n").filter(Boolean),
-      JSON_HELP,
+      ...(options.json === false ? [] : [JSON_HELP]),
       "  -h, --help",
     ]),
     "",
@@ -576,6 +586,8 @@ export async function runOperationCli(options: {
       input: Record<string, unknown>;
       json: boolean;
       globals: Globals;
+      /** The arguments as typed after the command name. */
+      args: readonly string[];
     },
   ) => string;
   connect: (
@@ -593,7 +605,10 @@ export async function runOperationCli(options: {
     );
     if (values.help) {
       process.stdout.write(
-        operationHelp(definition, options.globalOptions, options),
+        operationHelp(definition, options.globalOptions, {
+          ...options,
+          json: options.render !== undefined,
+        }),
       );
       return 0;
     }
@@ -615,6 +630,7 @@ export async function runOperationCli(options: {
         input: definition.inputSchema.parse(input) as Record<string, unknown>,
         json: values.json === true,
         globals,
+        args: options.args,
       }) ?? jsonOutput(output),
     );
   } catch (error) {
@@ -636,8 +652,8 @@ export async function runEmbeddedOperation(
   args: string[],
   open: () => Promise<FinancialStore & { close(): Promise<void> | void }>,
 ): Promise<number> {
-  const [command, ...rest] = args;
-  const definition = command ? operationForCommand(command) : undefined;
+  const [command = "", ...rest] = args;
+  const definition = operationForCommand(command);
   if (!definition) {
     process.stderr.write("Unknown command. Use --help for usage.\n");
     return 1;
@@ -645,6 +661,8 @@ export async function runEmbeddedOperation(
   return runOperationCli({
     definition,
     args: rest,
+    name: command,
+    invocation: "node server.js",
     async connect() {
       const store = await open();
       return {

@@ -54,7 +54,6 @@
     "@modelcontextprotocol/server": "2.3.1",
     "better-auth": "1.7.10",
     "better-call": "1.4.2",
-    "cli-table3": "0.6.5",
     "drizzle-orm": "^0.45.4",
     "hono": "4.13.13",
     "ipaddr.js": "2.5.0",

@@ -34,6 +34,7 @@ import {
   operationHelp,
   operationInput,
   operationOptions,
+  runEmbeddedOperation,
   runOperationCli,
 } from "../../src/runtime/operation-cli.js";
 import { openDatabase } from "../../src/storage/sqlite/database.js";
@@ -236,6 +237,25 @@ describe("operation commands", () => {
       ).not.toThrow();
     },
   );
+
+  it("gives an always-JSON entry point help that runs as printed", async () => {
+    let stdout = "";
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+      stdout += String(chunk);
+      return true;
+    });
+    try {
+      expect(
+        await runEmbeddedOperation(["list", "--help"], () => {
+          throw new Error("help opens no database");
+        }),
+      ).toBe(0);
+    } finally {
+      vi.restoreAllMocks();
+    }
+    expect(stdout).toMatch(/^Example:\n {2}node server\.js list --limit 5$/m);
+    expect(stdout).not.toContain("--json");
+  });
 
   it.each(aliasNames())("names the %s alias in both helps", (alias) => {
     const definition = operationForCommand(alias)!;

@@ -164,10 +164,9 @@ fonds annotate --db "$DEMO_DB" \
   --transaction-id TRANSACTION_ID --expected-version 0 --notes "Synthetic note" --tags '["demo"]'
 ```
 
-In a terminal, `list`, `get`, `totals`, `list-connections` and operator commands
-print readable text, not a stable format, or JSON with `--json`. Piped or
-redirected output is always the API's compact wire format; `consume` always
-prints JSON lines. Booleans take `true` or `false`, integers are decimal, list
+In a terminal, common results print as readable text, which is not a stable
+format; `--json` prints JSON instead. Piped or redirected output is always the
+API's compact wire format; `consume` always prints JSON lines. Booleans take `true` or `false`, integers are decimal, list
 and object fields take JSON, and an empty value clears a nullable text field.
 Input is validated before the database opens.
 

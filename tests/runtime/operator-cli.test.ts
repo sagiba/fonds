@@ -181,6 +181,40 @@ describe("one operator CLI for every backend", () => {
       stdout: "",
       stderr: "Use help, help --all or help <command>.\n",
     });
+    // Every help spelling reaches the same command help; extra words are ignored.
+    const list = await entryPoints.sqlite(["list", "--help"]);
+    for (const args of [
+      ["--help", "list"],
+      ["-h", "list"],
+      ["help", "list", "extra"],
+    ]) {
+      expect(await entryPoints.sqlite(args), args.join(" ")).toEqual(list);
+    }
+    const overview = await entryPoints.sqlite([]);
+    for (const args of [
+      ["help", "help"],
+      ["help", "-h"],
+      ["-h", "--help"],
+    ]) {
+      expect(await entryPoints.sqlite(args), args.join(" ")).toEqual(overview);
+    }
+  });
+
+  it("suggests the command a typo meant, naming only known commands", async () => {
+    expect(await entryPoints.sqlite(["lst"])).toEqual({
+      status: EXIT_CODES.failed,
+      stdout: "",
+      stderr: "Unknown command. Did you mean list? Use --help for usage.\n",
+    });
+    expect((await entryPoints.sqlite(["refesh"])).stderr).toBe(
+      "Unknown command. Did you mean refresh? Use --help for usage.\n",
+    );
+    expect((await entryPoints.sqlite(["help", "totls"])).stderr).toBe(
+      "Unknown command. Did you mean totals? Use --help for usage.\n",
+    );
+    expect((await entryPoints.sqlite(["xyzzy-unrelated"])).stderr).toBe(
+      "Unknown command. Use --help for usage.\n",
+    );
   });
 
   it.each(commands)("gives %s a summary and a valid example", async (name) => {
@@ -221,12 +255,16 @@ describe("one operator CLI for every backend", () => {
   ])(
     "offers %s with the same flags and help on every backend",
     async (name) => {
+      // Help says when the backend lacks the command; nothing else differs.
+      const shared = (text: string) =>
+        text
+          .replace("  --db <string>\n", "")
+          .replace(/\n[a-z-]+ is not available on \w+: [^\n]+\n$/, "");
       const sqlite = await entryPoints.sqlite([name, "--help"]);
       expect(sqlite).toMatchObject({ status: EXIT_CODES.ok, stderr: "" });
-      expect(await entryPoints.postgres([name, "--help"])).toEqual({
-        ...sqlite,
-        stdout: sqlite.stdout.replace("  --db <string>\n", ""),
-      });
+      const postgres = await entryPoints.postgres([name, "--help"]);
+      expect(postgres).toMatchObject({ status: EXIT_CODES.ok, stderr: "" });
+      expect(shared(postgres.stdout)).toBe(shared(sqlite.stdout));
     },
   );
 
@@ -243,7 +281,11 @@ describe("one operator CLI for every backend", () => {
         ).toBe(missing.includes(command));
       }
       for (const command of missing) {
-        const result = await entryPoints[name as keyof typeof entryPoints](
+        const run = entryPoints[name as keyof typeof entryPoints];
+        expect((await run([command, "--help"])).stdout).toMatch(
+          new RegExp(`\n${command} is not available on ${label}: [^\n]+\n$`),
+        );
+        const result = await run(
           command === "backup" ? [command, "--out", "/unused"] : [command],
         );
         expect(result.status).toBe(EXIT_CODES.unavailable);
@@ -265,12 +307,15 @@ describe("one operator CLI for every backend", () => {
     );
     vi.stubEnv("FONDS_DATABASE_URL", "postgresql://127.0.0.1:1/unused");
     try {
-      expect(await entryPoints.sqlite(["list-connections"])).toEqual({
-        status: EXIT_CODES.failed,
-        stdout: "",
-        stderr:
-          "FONDS_DATABASE_URL selects PostgreSQL, which the fonds command runs; unset it to use SQLite.\n",
-      });
+      // Bare, too: the SQLite overview would offer commands PostgreSQL lacks.
+      for (const args of [["list-connections"], []]) {
+        expect(await entryPoints.sqlite(args)).toEqual({
+          status: EXIT_CODES.failed,
+          stdout: "",
+          stderr:
+            "FONDS_DATABASE_URL selects PostgreSQL, which the fonds command runs; unset it to use SQLite.\n",
+        });
+      }
     } finally {
       vi.unstubAllEnvs();
     }

@@ -22,6 +22,8 @@ import {
   safe,
 } from "../../src/runtime/cli-output.js";
 import {
+  connectionListView,
+  ingestView,
   refreshView,
   totalsView,
   transactionListView,
@@ -39,6 +41,9 @@ function plain(width = 100, ascii = false): Presentation {
 const context = (input: Record<string, unknown> = {}) => ({
   input: { perspective: "spending", ...input },
   command: (args: string[]) => ["fonds", ...args].join(" "),
+  again: (args: string[]) =>
+    ["fonds", "list", "--limit", "1", ...args].join(" "),
+  local: (args: string[]) => ["fonds", ...args].join(" "),
 });
 
 /** Check the copied command's shell syntax without running a provider operation. */
@@ -64,6 +69,7 @@ function transaction(overrides: Partial<Transaction> = {}): Transaction {
     cardId: null,
     status: "posted",
     presence: "seen",
+    sourceAbsence: null,
     kind: "purchase",
     amountBasis: "purchase_commitment",
     amount: { currency: "ILS", amount: "-12.30" },
@@ -250,7 +256,7 @@ describe("transaction list view", () => {
     expect(text).toContain(
       "Details: fonds get --transaction-id 00000000-0000-4000-8000-000000000001",
     );
-    expect(text).toContain("More: repeat with --cursor CURSOR-2");
+    expect(text).toContain("More: fonds list --limit 1 --cursor CURSOR-2");
     expect(transactionListView(page([]), plain(), context())).toBe(
       "No transactions match (spending perspective).\n",
     );
@@ -371,6 +377,310 @@ describe("unknown detail money", () => {
   });
 });
 
+describe("every detailed field", () => {
+  it("is shown, so a new wire field must be given a place before it ships", () => {
+    const detail = transactionDetailOutputSchema.parse({
+      ...transaction({
+        cardId: "card-7",
+        status: "pending",
+        presence: "not_returned",
+        sourceAbsence: {
+          runId: "run-absent",
+          capturedAt: "2040-01-05T00:00:00Z",
+        },
+        amountBasis: "booked_entry",
+        amount: { currency: "ILS", amount: "-36.10" },
+        originalAmount: { currency: "USD", amount: "-10.00" },
+        description: "Invented description",
+        counterpartyName: "Invented counterparty",
+        merchant: {
+          name: "Synthetic Grocer",
+          providerId: "M-1",
+          categoryCode: "5411",
+          addressLine: "1 Example Street",
+          city: "Testville",
+          phone: "000-0000",
+          countryCode: "USA",
+        },
+        transactionDateTime: "2040-01-02T10:11:12",
+        bookingDate: "2040-01-03",
+        billingDate: "2040-02-10",
+        cardPresent: false,
+        authorizationMethod: "keyed_in",
+        wallet: "apple_pay",
+        threeDSecureUsed: true,
+        recurring: true,
+        currencyExchange: [
+          {
+            sourceCurrency: "USD",
+            targetCurrency: "ILS",
+            unitCurrency: "USD",
+            exchangeRate: "3.61",
+            quotationDate: null,
+          },
+        ],
+        fxFee: { currency: "ILS", amount: "-0.50" },
+        providerTransactionCode: "CODE-9",
+        installmentCount: 3,
+        installmentNumber: 1,
+        purchaseId: "purchase-1",
+        supersededById: "posted-2",
+        version: 4,
+        detailsTruncated: true,
+      }),
+      additionalInformation: ["Invented information"],
+      additionalInformationCount: 12,
+      review: {
+        required: true,
+        status: "needs_review",
+        stale: false,
+        reasons: ["synthetic_reason"],
+        sourceIssues: ["synthetic_issue"],
+        pendingPostingCandidateIds: ["candidate-1"],
+        truncated: true,
+        counts: { reasons: 3, sourceIssues: 1, pendingPostingCandidateIds: 1 },
+      },
+      source: {
+        identityStrength: "weak",
+        firstSeenAt: "2040-01-02T00:00:00Z",
+        lastSeenAt: "2040-01-04T00:00:00Z",
+        lastSyncRunId: "run-9",
+      },
+      annotation: {
+        version: 2,
+        notes: "Invented note",
+        category: "groceries",
+        tags: ["synthetic"],
+        metadata: {},
+        review: null,
+        updatedAt: "2040-01-04T00:00:00Z",
+      },
+      postingMatch: {
+        supersededTransactionId: "posted-2",
+        automatic: true,
+        policyVersion: "policy-1",
+        evidence: { runId: "run-match", capturedAt: "2040-01-03T00:00:00Z" },
+        unlinked: false,
+      },
+      diagnosticsTruncated: true,
+      diagnosticCounts: { evidence: 5 },
+      evidence: [{ runId: "run-1", path: "$.items[0]" }],
+    });
+    const text = transactionView(
+      { transaction: detail },
+      plain(240),
+      context(),
+    );
+    // Hand-written, one entry per wire field: the keys must match the schema.
+    const shown: Record<keyof typeof detail, RegExp> = {
+      id: /^Transaction 00000000-0000-4000-8000-000000000001$/m,
+      connectionId: /Connection +synthetic$/m,
+      cardId: /Card +card-7$/m,
+      status: /Status +pending · /,
+      presence: /Status +pending · not returned · purchase$/m,
+      sourceAbsence:
+        /Absence +proven by run run-absent, captured 2040-01-05T00:00:00Z$/m,
+      kind: / · purchase$/m,
+      amountBasis: /Amount +-36\.10 ILS \(booked entry\)$/m,
+      amount: /Amount +-36\.10 ILS/,
+      originalAmount: /Original +-10\.00 USD$/m,
+      description: /Description +Invented description$/m,
+      counterpartyName: /Counterparty +Invented counterparty$/m,
+      merchant:
+        /Merchant +Synthetic Grocer · MCC 5411 · 1 Example Street · Testville · USA · 000-0000 · merchant ID M-1$/m,
+      transactionDate: /Date +2040-01-02/,
+      transactionDateTime: /Date +2040-01-02 10:11:12$/m,
+      bookingDate: /Booked +2040-01-03$/m,
+      billingDate: /Billed +2040-02-10$/m,
+      cardPresent: /Payment +card not present · /,
+      authorizationMethod: /Payment .* · keyed in · /,
+      wallet: /Payment .* · Apple Pay · /,
+      threeDSecureUsed: /Payment .* · 3-D Secure · /,
+      recurring: /Payment .* · recurring$/m,
+      currencyExchange: /Exchange +USD to ILS at 3\.61 \(unit USD\)$/m,
+      fxFee: /FX fee +-0\.50 ILS, already included in the amount$/m,
+      providerTransactionCode: /Provider code +CODE-9$/m,
+      installmentCount: /Installments +payment 1\/3$/m,
+      installmentNumber: /Installments +payment 1\//,
+      purchaseId: /Purchase +purchase-1$/m,
+      supersededById: /Superseded by +posted-2$/m,
+      version: /Version +4 \(annotation 2\)$/m,
+      review: /Review +needs review · required$/m,
+      annotation: /Annotation +groceries · synthetic · Invented note$/m,
+      detailsTruncated: /Shortened for output: source text, /,
+      additionalInformation: /Information \(1 of 12\) +Invented information$/m,
+      additionalInformationCount:
+        /Shortened for output: .*additional information\.$/m,
+      source:
+        /Source +weak identity · first seen 2040-01-02T00:00:00Z · last seen 2040-01-04T00:00:00Z · last run run-9$/m,
+      postingMatch:
+        /Posting match +matched automatically · retired posted row posted-2 · policy policy-1 · run run-match captured 2040-01-03T00:00:00Z$/m,
+      diagnosticsTruncated: /Shortened for output: .*evidence/,
+      diagnosticCounts: /Evidence \(1 of 5\) +run-1 \$\.items\[0\]$/m,
+      evidence: /run-1 \$\.items\[0\]/,
+    };
+    expect(Object.keys(shown).sort()).toEqual(
+      Object.keys(transactionDetailOutputSchema.shape).sort(),
+    );
+    for (const [field, pattern] of Object.entries(shown)) {
+      expect(text, field).toMatch(pattern);
+    }
+    expect(text).toMatch(/Reasons \(1 of 3\) +synthetic_reason$/m);
+    expect(text).toMatch(/Source issues +synthetic_issue$/m);
+    expect(text).toMatch(/Candidates +candidate-1$/m);
+  });
+
+  it("keeps an owner's split and a stated-only original visible", () => {
+    const split = transactionView(
+      {
+        transaction: {
+          ...transactionDetailOutputSchema.parse({
+            ...transaction(),
+            additionalInformation: [],
+            review: {
+              required: false,
+              status: "unreviewed",
+              stale: false,
+              reasons: [],
+              sourceIssues: [],
+              pendingPostingCandidateIds: [],
+              truncated: false,
+              counts: {
+                reasons: 0,
+                sourceIssues: 0,
+                pendingPostingCandidateIds: 0,
+              },
+            },
+            source: {
+              identityStrength: "native",
+              firstSeenAt: "2040-01-02T00:00:00Z",
+              lastSeenAt: "2040-01-02T00:00:00Z",
+              lastSyncRunId: "run-1",
+            },
+            annotation: null,
+            postingMatch: {
+              supersededTransactionId: "posted-2",
+              automatic: false,
+              policyVersion: "policy-1",
+              evidence: null,
+              unlinked: true,
+            },
+          }),
+        },
+      },
+      plain(),
+      context(),
+    );
+    expect(split).toMatch(
+      /Posting match +unlinked by the owner · retired posted row posted-2 · policy policy-1$/m,
+    );
+    expect(split).not.toContain("Shortened");
+  });
+});
+
+describe("list notes", () => {
+  it("shows stated original money, proven absence and the facts the columns leave out", () => {
+    const text = transactionListView(
+      page([
+        transaction({
+          id: "00000000-0000-4000-8000-0000000000a1",
+          amount: null,
+          originalAmount: { currency: "USD", amount: "-10.00" },
+        }),
+        transaction({
+          id: "00000000-0000-4000-8000-0000000000a2",
+          amount: { currency: "ILS", amount: "-36.10" },
+          originalAmount: { currency: "USD", amount: "-10.00" },
+          presence: "not_returned",
+          sourceAbsence: { runId: "run-1", capturedAt: "2040-01-05T00:00:00Z" },
+        }),
+        transaction({
+          id: "00000000-0000-4000-8000-0000000000a3",
+          originalAmount: { currency: "ILS", amount: "-12.30" },
+        }),
+      ]),
+      plain(120),
+      context({ presence: "all" }),
+    );
+    const notes = (id: string) =>
+      text.split("\n").find((line) => line.includes(id))!;
+    expect(notes("0000000000a1")).toContain("from -10.00 USD");
+    expect(notes("0000000000a2")).toMatch(
+      /from -10\.00 USD · not returned · proven absent/,
+    );
+    // The same money as the amount column is not repeated.
+    expect(notes("0000000000a3")).not.toContain("from");
+    // Cautionary notes are not dimmed with the ID.
+    vi.stubEnv("FORCE_COLOR", "1");
+    vi.stubEnv("NO_COLOR", undefined);
+    const styled = transactionListView(
+      page([transaction({ supersededById: "posted-2" })]),
+      plain(120),
+      context(),
+    );
+    vi.unstubAllEnvs();
+    expect(styled).toMatch(/\u001b\[22m · superseded$/m);
+  });
+});
+
+describe("display width", () => {
+  it("keeps IDs whole and fits combining and invisible characters", () => {
+    // Niqqud are zero-width combining marks; an RLM is invisible.
+    const id = "חֶשְׁבּוֹן-1";
+    const connections = {
+      data: [
+        {
+          id,
+          provider: "cal",
+          displayName: "מַכּוֹלֶת\u200f סניף תל אביב",
+          createdAt: "2040-01-01T00:00:00Z",
+          latestRefresh: null,
+        },
+      ],
+      hasMore: false,
+      nextCursor: null,
+    };
+    for (const width of [40, 80]) {
+      const text = connectionListView(connections, plain(width), context());
+      expect(text).toContain(id);
+      for (const line of text.split("\n")) {
+        expect(stringWidth(line), line).toBeLessThanOrEqual(width);
+      }
+    }
+    const wide = connectionListView(connections, plain(80), context());
+    expect(wide).toContain("סניף תל אביב");
+    // A look-alike ID shows its invisible character.
+    const lookalike = connectionListView(
+      { ...connections, data: [{ ...connections.data[0]!, id: "cal\u200b" }] },
+      plain(80),
+      context(),
+    );
+    expect(lookalike).toContain("cal\\u200b");
+  });
+
+  it("prints no command it would have to escape", () => {
+    const text = transactionListView(
+      page([transaction({ id: "id\u001b[2J" })], "next\u200b"),
+      plain(),
+      context(),
+    );
+    expect(text).toContain("id\\u001b[2J");
+    expect(text).not.toMatch(/^(Details|More):/m);
+  });
+});
+
+describe("connections view", () => {
+  it("suggests connect only where an operator command can run", () => {
+    const empty = { data: [], hasMore: false, nextCursor: null };
+    expect(connectionListView(empty, plain(), context())).toBe(
+      "No connections yet. Add one: fonds connect cal\n",
+    );
+    expect(
+      connectionListView(empty, plain(), { ...context(), local: undefined }),
+    ).toBe("No connections yet.\n");
+  });
+});
+
 describe("totals view", () => {
   it("keeps every group separate and names exclusions and fees", () => {
     const totals = totalsOutputSchema.parse({
@@ -391,6 +701,7 @@ describe("totals view", () => {
         pending: 3,
         transferOrIncome: 0,
         retiredOrRemoved: 0,
+        sourceAbsent: 0,
         unresolved: 1,
         authorization: 0,
       },
@@ -404,6 +715,31 @@ describe("totals view", () => {
     expect(text).toContain("5 included · 4 excluded (3 pending, 1 unresolved)");
     expect(text).toContain("FX fees, already in the amounts: -1.20 ILS");
     expect(text).toContain("2 converted transactions have an unknown FX fee");
+  });
+
+  it("names every exclusion, including proven source absence", () => {
+    const text = totalsView(
+      totalsOutputSchema.parse({
+        totals: [],
+        fxFees: [],
+        fxFeeUnknownCount: 0,
+        includedCount: 0,
+        excludedCount: 3,
+        excluded: {
+          pending: 1,
+          transferOrIncome: 0,
+          retiredOrRemoved: 0,
+          sourceAbsent: 2,
+          unresolved: 0,
+          authorization: 0,
+        },
+      }),
+      plain(),
+      context(),
+    );
+    expect(text).toContain(
+      "0 included · 3 excluded (1 pending, 2 absent from source)",
+    );
   });
 
   it("stacks groups that do not fit, keeping each amount whole", () => {
@@ -424,6 +760,7 @@ describe("totals view", () => {
           pending: 3,
           transferOrIncome: 0,
           retiredOrRemoved: 0,
+          sourceAbsent: 0,
           unresolved: 1,
           authorization: 0,
         },
@@ -435,7 +772,7 @@ describe("totals view", () => {
       expect(stringWidth(line), line).toBeLessThanOrEqual(24);
     }
     expect(text).not.toMatch(/^Currency/m);
-    expect(text).toMatch(/^ILS · -350\.00$/m);
+    expect(text).toMatch(/^-350\.00 ILS$/m);
     expect(text).toMatch(/^purchase commitment$/m);
   });
 
@@ -451,6 +788,7 @@ describe("totals view", () => {
           pending: 0,
           transferOrIncome: 0,
           retiredOrRemoved: 0,
+          sourceAbsent: 0,
           unresolved: 0,
           authorization: 0,
         },
@@ -472,6 +810,7 @@ describe("totals view", () => {
           pending: 0,
           transferOrIncome: 0,
           retiredOrRemoved: 0,
+          sourceAbsent: 0,
           unresolved: 0,
           authorization: 0,
         },
@@ -522,6 +861,31 @@ describe("refresh view", () => {
       { connectionId: undefined, nothingToRefresh: false },
     );
     expect(nextCommand(all)).toBe("fonds list-connections");
+  });
+
+  it("counts rows the provider no longer returned", () => {
+    const text = refreshView(
+      plain(),
+      { ...summary, unlisted: 5 },
+      (args) => `fonds ${args.join(" ")}`,
+      { connectionId: "cal", nothingToRefresh: false },
+    );
+    expect(text).toContain(
+      "Transactions: 2 added · 1 updated · 6 unchanged · 5 no longer returned",
+    );
+    expect(
+      ingestView(plain(), {
+        runId: "run-1",
+        replayed: false,
+        created: 0,
+        updated: 0,
+        unchanged: 12,
+        unlisted: 5,
+        status: "completed",
+      }),
+    ).toContain(
+      "Transactions: 0 added · 0 updated · 12 unchanged · 5 no longer returned",
+    );
   });
 
   it("does not present a refresh without saved credentials as a success", () => {
@@ -780,6 +1144,38 @@ describe("commands in a terminal", () => {
     }
   });
 
+  it("suggests no operator command for a remote deployment", async () => {
+    const { createServer } = await import("node:http");
+    const { writeFileSync } = await import("node:fs");
+    const server = createServer((_request, response) => {
+      response.setHeader("content-type", "application/json");
+      response.end(
+        JSON.stringify({ data: [], hasMore: false, nextCursor: null }),
+      );
+    });
+    await new Promise<void>((listening) =>
+      server.listen(0, "127.0.0.1", listening),
+    );
+    const { port } = server.address() as { port: number };
+    const tokenFile = join(root, "token");
+    writeFileSync(tokenFile, `${"t".repeat(43)}\n`, { mode: 0o600 });
+    try {
+      const shown = await inTerminal([
+        "list-connections",
+        "--remote",
+        `http://127.0.0.1:${port}`,
+        "--token-file",
+        tokenFile,
+      ]);
+      expect(shown).toMatchObject({
+        status: 0,
+        stdout: "No connections yet.\n",
+      });
+    } finally {
+      await new Promise((closed) => server.close(closed));
+    }
+  });
+
   it("refuses MCP setup for a path with control characters", async () => {
     const hostile = join(root, `ledger${ESC}[2J.sqlite`);
     const { mkdirSync, copyFileSync } = await import("node:fs");
@@ -813,6 +1209,11 @@ describe("commands in a terminal", () => {
     for (const { id } of wire.data) {
       expect(human.stdout).toContain(id);
     }
-    expect(human.stdout).toContain("More: repeat with --cursor ");
+    const more = /^More: (.+)$/m.exec(human.stdout)?.[1];
+    // The command as typed, on the same ledger, from the next page.
+    expect(more).toMatch(/ list --db .+ --limit 5 --cursor \S+$/);
+    expect(
+      spawnSync("/bin/sh", ["-n"], { input: more, encoding: "utf8" }).status,
+    ).toBe(0);
   });
 });

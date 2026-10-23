@@ -1,6 +1,5 @@
 import { styleText } from "node:util";
 
-import Table from "cli-table3";
 import stringWidth from "string-width";
 import wrapAnsi from "wrap-ansi";
 
@@ -52,6 +51,18 @@ const TERMINAL_CONTROLS =
 /** Every dynamic string a view prints passes through here. */
 export function safe(text: string): string {
   return text.replace(TERMINAL_CONTROLS, unicodeEscape);
+}
+
+/**
+ * Invisible format characters: legitimate in prose such as Hebrew, but they
+ * would make two different identifiers look the same.
+ */
+const INVISIBLE_FORMAT =
+  /[\u00ad\u061c\u180e\u200b-\u200f\u2060-\u2064\ufeff]/g;
+
+/** An identifier or command, shown so that what you see is what you copy. */
+export function safeId(text: string): string {
+  return safe(text).replace(INVISIBLE_FORMAT, unicodeEscape);
 }
 
 /** Text that must be printed exactly, so cannot be escaped, has to be free of controls. */
@@ -117,13 +128,21 @@ export function wrap(text: string, width: number, indent = ""): string {
     .join("\n");
 }
 
-/** Label/value rows with the values aligned. */
+/** Narrower than this, a value goes under its label rather than beside it. */
+const MIN_VALUE_WIDTH = 24;
+
+/** Label/value rows with the values aligned, or each value under its label. */
 export function details(
   rows: readonly (readonly [string, string] | undefined)[],
   width: number,
 ): string {
   const present = rows.filter((row) => row !== undefined);
   const labelWidth = Math.max(...present.map(([label]) => label.length)) + 2;
+  if (width - 2 - labelWidth < MIN_VALUE_WIDTH) {
+    return present
+      .map(([label, value]) => `  ${label}\n${wrap(value, width, "    ")}`)
+      .join("\n");
+  }
   return present
     .map(([label, value]) => {
       const lines = wrap(value, width - 2 - labelWidth).split("\n");
@@ -146,10 +165,28 @@ interface Column {
 const GAP = 2;
 const MIN_FLEXIBLE = 12;
 
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/** The text cut to a display width, never inside a grapheme, with an ellipsis. */
+function truncate(text: string, width: number, ellipsis: string): string {
+  const room = width - stringWidth(ellipsis);
+  let kept = "";
+  let used = 0;
+  for (const { segment } of graphemes.segment(text)) {
+    used += stringWidth(segment);
+    if (used > room) {
+      break;
+    }
+    kept += segment;
+  }
+  return `${kept}${ellipsis}`;
+}
+
 /**
  * A borderless table that fits the width, or undefined when it cannot: when
  * its fixed columns are too wide, or leave a flexible one unreadable. Callers
- * then stack each row.
+ * then stack each row. Widths are display columns, so wide and combining
+ * characters align, and only the flexible column is ever shortened.
  */
 export function table(
   p: Presentation,
@@ -179,37 +216,21 @@ export function table(
     index === flexible ? Math.min(width, available) : width,
   );
   const ellipsis = p.ascii ? "~" : "…";
-  const layout = new Table({
-    head: columns.map((column) => column.header),
-    colWidths: widths,
-    colAligns: columns.map((column) => column.align ?? "left"),
-    wordWrap: false,
-    truncate: ellipsis,
-    chars: {
-      top: "",
-      "top-mid": "",
-      "top-left": "",
-      "top-right": "",
-      bottom: "",
-      "bottom-mid": "",
-      "bottom-left": "",
-      "bottom-right": "",
-      left: "",
-      "left-mid": "",
-      mid: "",
-      "mid-mid": "",
-      right: "",
-      "right-mid": "",
-      middle: " ".repeat(GAP),
-    },
-    style: { head: [], border: [], "padding-left": 0, "padding-right": 0 },
-  });
-  layout.push(...rows.map((row) => [...row]));
-  return layout
-    .toString()
-    .split("\n")
-    .map((line, index) =>
-      index === 0 ? dim(p, line.trimEnd()) : line.trimEnd(),
-    )
-    .join("\n");
+  const line = (cells: readonly string[]) =>
+    cells
+      .map((cell, index) => {
+        const width = widths[index]!;
+        const shown =
+          stringWidth(cell) > width ? truncate(cell, width, ellipsis) : cell;
+        const padding = " ".repeat(width - stringWidth(shown));
+        return columns[index]!.align === "right"
+          ? `${padding}${shown}`
+          : `${shown}${padding}`;
+      })
+      .join(" ".repeat(GAP))
+      .trimEnd();
+  return [
+    dim(p, line(columns.map((column) => column.header))),
+    ...rows.map(line),
+  ].join("\n");
 }
