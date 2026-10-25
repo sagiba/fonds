@@ -9,6 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { parseArgs } from "node:util";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -27,9 +28,13 @@ import {
 } from "../../src/runtime/checkout.js";
 import { startNodeService } from "../../src/runtime/node-service.js";
 import {
+  aliasNames,
   operationFields,
   operationForCommand,
+  operationHelp,
   operationInput,
+  operationOptions,
+  runEmbeddedOperation,
   runOperationCli,
 } from "../../src/runtime/operation-cli.js";
 import { openDatabase } from "../../src/storage/sqlite/database.js";
@@ -198,6 +203,14 @@ describe("operation commands", () => {
     }
     expect(message).toMatch(/^Invalid input: --review /);
     expect(message).not.toContain("synthetic-secret");
+    // A choice names the allowed values, never the supplied one.
+    expect(() =>
+      operationInput(operationForCommand("totals")!, {
+        perspective: "synthetic-secret",
+      }),
+    ).toThrow(
+      /^Invalid input: --perspective must be one of spending, billing\.$/,
+    );
     for (const flag of ["billing-account-id", "purchase-id", "card-id"]) {
       expect(() =>
         operationInput(operationForCommand("list")!, {
@@ -206,6 +219,83 @@ describe("operation commands", () => {
         }),
       ).toThrow(`--${flag}: Identifiers cannot be`);
     }
+  });
+
+  it.each(operationDefinitions.map((definition) => definition.name))(
+    "gives %s a summary and an example its operation accepts",
+    (name) => {
+      const definition = operationDefinitions.find(
+        (entry) => entry.name === name,
+      )!;
+      const command = name.replaceAll("_", "-");
+      const help = operationHelp(definition);
+      expect(help.split("\n")[0]).toMatch(new RegExp(`^${command} — \\S`));
+      const example = /^Example:\n {2}(.+)$/m.exec(help)![1]!;
+      const [typed, ...args] = [...example.matchAll(/'([^']*)'|(\S+)/g)].map(
+        (match) => match[1] ?? match[2]!,
+      );
+      expect(typed).toBe(command);
+      const { values } = parseArgs({
+        args,
+        strict: true,
+        options: operationOptions(definition),
+      });
+      expect(() =>
+        operationInput(definition, values as Record<string, string>),
+      ).not.toThrow();
+    },
+  );
+
+  it("points invalid flags to the help of the command as typed", async () => {
+    let stderr = "";
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+      stderr += String(chunk);
+      return true;
+    });
+    try {
+      expect(await main(["list", "--bogus"])).toBe(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+    expect(stderr).toBe("Invalid arguments. Use list --help for its flags.\n");
+  });
+
+  it("gives an always-JSON entry point help that runs as printed", async () => {
+    let stdout = "";
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+      stdout += String(chunk);
+      return true;
+    });
+    try {
+      expect(
+        await runEmbeddedOperation(["list", "--help"], () => {
+          throw new Error("help opens no database");
+        }),
+      ).toBe(0);
+    } finally {
+      vi.restoreAllMocks();
+    }
+    expect(stdout).toMatch(/^Example:\n {2}node server\.js list --limit 5$/m);
+    expect(stdout).not.toContain("--json");
+    // Prose wraps for a terminal without the terminal libraries.
+    for (const line of stdout.split("\n")) {
+      expect(line.length, line).toBeLessThanOrEqual(80);
+    }
+    // Defaults the schema applies are named.
+    expect(stdout).toContain("  --limit <number> (default 50)\n");
+    expect(stdout).toContain(
+      "  --perspective <spending|billing|all> (default spending)\n",
+    );
+  });
+
+  it.each(aliasNames())("names the %s alias in both helps", (alias) => {
+    const definition = operationForCommand(alias)!;
+    expect(operationHelp(definition, {}, { name: alias })).toMatch(
+      new RegExp(
+        `^${alias} — .*\\nAlias of ${definition.name.replaceAll("_", "-")}\\.`,
+      ),
+    );
+    expect(operationHelp(definition)).toContain(`Alias: ${alias}.`);
   });
 
   it("matches the application in process and over REST for every read and mutation", async () => {
@@ -481,6 +571,29 @@ describe("operation commands", () => {
       expect(JSON.parse(remote.stdout).data).toEqual([
         expect.objectContaining({ id: "synthetic-cli", provider: "cal" }),
       ]);
+      // A terminal renders a remote result exactly as the embedded one.
+      const tty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+      Object.defineProperty(process.stdout, "isTTY", {
+        value: true,
+        configurable: true,
+      });
+      try {
+        const shown = await cli(
+          "list-connections",
+          "--remote",
+          running.url,
+          "--token-file",
+          tokenFile,
+        );
+        expect(shown.stdout).toMatch(/ID +Provider +Name +Last refresh/);
+        expect(shown).toEqual(await cli("list-connections", "--db", seed));
+      } finally {
+        if (tty) {
+          Object.defineProperty(process.stdout, "isTTY", tty);
+        } else {
+          delete (process.stdout as { isTTY?: boolean }).isTTY;
+        }
+      }
       // No token is sent without an explicit --token-file, not even the
       // environment's or the local state's to a loopback port.
       vi.stubEnv("FONDS_API_TOKEN", token);

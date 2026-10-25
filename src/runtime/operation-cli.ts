@@ -25,37 +25,183 @@ import {
   RemoteOperationError,
   remoteOrigin,
 } from "../transport/rest-client.js";
+import { commandLine } from "./cli-invocation.js";
 import { jsonOutput } from "./json-output.js";
 import { StateError } from "./state.js";
 
 /** Fixed, value-free messages for invalid command lines. */
 export class CommandInputError extends Error {}
 
-/** Short command names, each an alias of one operation. */
-const aliases: Readonly<Record<string, string>> = {
-  list: "list_transactions",
-  get: "get_transaction",
-  totals: "get_transaction_totals",
-  events: "list_events",
-  annotate: "update_annotation",
-  link: "link_pending_transaction",
-  remove: "confirm_removal",
+/**
+ * How help presents each operation: a summary, an example that is valid as it
+ * stands, and the short alias where one exists. Flags stay schema-derived.
+ */
+const presentations: Readonly<
+  Record<string, { alias?: string; summary: string; example: string[] }>
+> = {
+  list_connections: {
+    summary: "List connections and their latest refresh",
+    example: [],
+  },
+  get_connection: {
+    summary: "Show one connection",
+    example: ["--connection-id", "cal"],
+  },
+  list_cards: {
+    summary: "List a connection's cards",
+    example: ["--connection-id", "cal"],
+  },
+  get_card: { summary: "Show one card", example: ["--card-id", "CARD_ID"] },
+  list_accounts: {
+    summary: "List a connection's accounts",
+    example: ["--connection-id", "cal"],
+  },
+  get_account: {
+    summary: "Show one account",
+    example: ["--account-id", "ACCOUNT_ID"],
+  },
+  list_transactions: {
+    alias: "list",
+    summary: "Browse transactions",
+    example: ["--limit", "5"],
+  },
+  get_transaction: {
+    alias: "get",
+    summary: "Show one transaction",
+    example: ["--transaction-id", "TRANSACTION_ID"],
+  },
+  get_transaction_totals: {
+    alias: "totals",
+    summary: "Sum amounts by currency and amount basis",
+    example: ["--perspective", "billing"],
+  },
+  list_events: {
+    alias: "events",
+    summary: "Read a connection's change feed",
+    example: ["--connection-id", "cal", "--limit", "20"],
+  },
+  list_sync_runs: {
+    summary: "List a connection's recent sync runs",
+    example: ["--connection-id", "cal"],
+  },
+  update_annotation: {
+    alias: "annotate",
+    summary: "Add notes, a category or tags to a transaction",
+    example: [
+      "--transaction-id",
+      "TRANSACTION_ID",
+      "--expected-version",
+      "0",
+      "--notes",
+      "Team lunch",
+    ],
+  },
+  refresh_connection: {
+    summary: "Ask a running service to refresh a connection",
+    example: ["--connection-id", "cal"],
+  },
+  get_refresh: {
+    summary: "Show one refresh and its windows",
+    example: ["--refresh-id", "REFRESH_ID"],
+  },
+  list_refreshes: {
+    summary: "List a connection's refreshes",
+    example: ["--connection-id", "cal"],
+  },
+  undo_annotation: {
+    summary: "Undo one annotation change",
+    example: ["--event-id", "42", "--expected-version", "3"],
+  },
+  link_pending_transaction: {
+    alias: "link",
+    summary: "Confirm that a pending and a posted transaction are one purchase",
+    example: postingExample("Same purchase"),
+  },
+  unlink_pending_transaction: {
+    summary: "Undo a pending-to-posted link",
+    example: postingExample("Different purchases"),
+  },
+  confirm_removal: {
+    alias: "remove",
+    summary: "Mark a transaction removed",
+    example: [
+      "--transaction-id",
+      "TRANSACTION_ID",
+      "--expected-transaction-version",
+      "1",
+      "--reason",
+      "Cancelled by the merchant",
+    ],
+  },
 };
+
+function postingExample(reason: string): string[] {
+  return [
+    "--transaction-id",
+    "PENDING_ID",
+    "--posted-id",
+    "POSTED_ID",
+    "--expected-pending-transaction-version",
+    "1",
+    "--expected-posted-transaction-version",
+    "1",
+    "--expected-pending-annotation-version",
+    "0",
+    "--expected-posted-annotation-version",
+    "0",
+    "--reason",
+    reason,
+  ];
+}
 
 const kebab = (name: string) =>
   name
     .replace(/_/g, "-")
     .replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
 
+const aliases = new Map(
+  Object.entries(presentations).flatMap(([operation, { alias }]) =>
+    alias ? [[alias, operation] as const] : [],
+  ),
+);
+
 /** A command is an operation name in kebab case (`list-transactions`) or an alias. */
 export function operationForCommand(
   command: string,
 ): OperationDefinition | undefined {
-  const name = aliases[command] ?? command.replace(/-/g, "_");
+  const name = aliases.get(command) ?? command.replace(/-/g, "_");
   const definition = operationDefinitions.find((entry) => entry.name === name);
-  return definition && (aliases[command] || kebab(name) === command)
+  return definition && (aliases.has(command) || kebab(name) === command)
     ? definition
     : undefined;
+}
+
+/** An operation's help presentation; every operation has one. */
+export function operationPresentation(definition: OperationDefinition) {
+  const presentation = presentations[definition.name];
+  if (!presentation) {
+    throw new Error(`Operation ${definition.name} has no help presentation.`);
+  }
+  return presentation;
+}
+
+/** The one-line summary help gives an alias, such as `list`. */
+export function aliasSummary(command: string): string | undefined {
+  const operation = aliases.get(command);
+  return operation && presentations[operation]?.summary;
+}
+
+/** Every alias, as `help --all` lists them. */
+export function aliasNames(): string[] {
+  return [...aliases.keys()];
+}
+
+/** Every operation command name and alias. */
+export function operationCommandNames(): string[] {
+  return [
+    ...operationDefinitions.map((definition) => kebab(definition.name)),
+    ...aliases.keys(),
+  ];
 }
 
 type FieldKind = "string" | "number" | "boolean" | "json";
@@ -67,6 +213,8 @@ interface Field {
   required: boolean;
   nullable: boolean;
   choices?: string[];
+  /** The value an omitted flag takes, as help shows it. */
+  default?: string;
 }
 
 /** Zod's published union of its schema kinds, discriminated by `def.type`. */
@@ -81,9 +229,16 @@ type Schema = z.core.$ZodTypes;
 function fieldOf(key: string, schema: Schema): Field {
   let required = true;
   let nullable = false;
+  let fallback: string | undefined;
   let current = schema;
   for (;;) {
     const { def } = current._zod;
+    if (def.type === "default") {
+      const value: unknown = def.defaultValue;
+      if (["string", "number", "boolean"].includes(typeof value)) {
+        fallback ??= String(value);
+      }
+    }
     if (def.type === "optional" || def.type === "default") {
       required = false;
     } else if (def.type === "nullable") {
@@ -99,6 +254,7 @@ function fieldOf(key: string, schema: Schema): Field {
     kind: valueKind(key, current),
     required,
     nullable,
+    ...(fallback !== undefined && { default: fallback }),
     ...(current._zod.def.type === "enum" && {
       choices: Object.values(current._zod.def.entries).map(String),
     }),
@@ -187,14 +343,18 @@ function inputIssues(
   definition: OperationDefinition,
   error: z.ZodError,
 ): string {
-  const flags = new Map(
-    operationFields(definition).map((field) => [field.key, field.flag]),
+  const fields = new Map(
+    operationFields(definition).map((field) => [field.key, field]),
   );
   const messages = error.issues.map((issue) => {
     const key = issue.path[0];
-    const flag = typeof key === "string" ? flags.get(key) : undefined;
+    const field = typeof key === "string" ? fields.get(key) : undefined;
+    const flag = field?.flag;
     if (issue.code === "custom") {
       return flag ? `--${flag}: ${issue.message}` : issue.message;
+    }
+    if (issue.code === "invalid_value" && field?.choices) {
+      return `--${flag} must be one of ${field.choices.join(", ")}`;
     }
     const text = issueText[issue.code] ?? "is invalid";
     return flag ? `--${flag} ${text}` : `The input ${text}`;
@@ -261,26 +421,84 @@ export function operationUsage(): string {
     .join("\n");
 }
 
+function flagHelp(field: Field): string {
+  const value =
+    field.choices?.join("|") ?? (field.kind === "json" ? "JSON" : field.kind);
+  return `  --${field.flag} <${value}>${
+    field.default !== undefined ? ` (default ${field.default})` : ""
+  }${field.nullable ? " (empty text or JSON null clears)" : ""}`;
+}
+
+/**
+ * Prose wrapped at spaces to 80 columns, for entry points without terminal
+ * libraries; help prose is plain text, one column per character.
+ */
+function wrapWords(text: string, width = 80): string {
+  const lines: string[] = [];
+  for (const word of text.split(/\s+/).filter(Boolean)) {
+    const last = lines.at(-1);
+    if (last !== undefined && last.length + 1 + word.length <= width) {
+      lines[lines.length - 1] = `${last} ${word}`;
+    } else {
+      lines.push(word);
+    }
+  }
+  return lines.join("\n");
+}
+
+/** Purpose, example, then the schema's own flags: required first. */
 export function operationHelp(
   definition: OperationDefinition,
   globals: GlobalOptions = {},
+  options: {
+    name?: string;
+    invocation?: string;
+    wrap?: (text: string) => string;
+    /** False where output is always JSON, so --json selects nothing. */
+    json?: boolean;
+  } = {},
 ): string {
-  const fields = operationFields(definition)
-    .map(
-      (field) =>
-        `  --${field.flag} <${field.choices?.join("|") ?? (field.kind === "json" ? "JSON" : field.kind)}>${
-          field.required ? " (required)" : ""
-        }${field.nullable ? " (empty text or JSON null clears)" : ""}`,
-    )
-    .join("\n");
-  return `${kebab(definition.name)}${
-    definition.readOnly ? "" : " (changes data)"
-  }\n${definition.description}\n${fields}\n${
-    "connectionId" in definition.inputSchema.shape
-      ? "  --connection <string> (alias for --connection-id)\n"
-      : ""
-  }${globalHelp(globals)}`;
+  const { alias, summary, example } = operationPresentation(definition);
+  const name = options.name ?? kebab(definition.name);
+  const command = [options.invocation, name].filter(Boolean).join(" ");
+  const fields = operationFields(definition);
+  const required = fields.filter((field) => field.required);
+  const optional = [
+    ...fields.filter((field) => !field.required).map(flagHelp),
+    ...("connectionId" in definition.inputSchema.shape
+      ? ["  --connection <string> (alias for --connection-id)"]
+      : []),
+  ];
+  const section = (title: string, lines: readonly string[]) =>
+    lines.length ? ["", title, ...lines] : [];
+  return [
+    `${command} — ${summary}${definition.readOnly ? "" : " (changes data)"}`,
+    ...(alias
+      ? [
+          name === alias
+            ? `Alias of ${kebab(definition.name)}.`
+            : `Alias: ${alias}.`,
+        ]
+      : []),
+    ...section("Usage:", [
+      `  ${[command, ...required.map((field) => `--${field.flag} <${field.flag}>`), "[options]"].join(" ")}`,
+    ]),
+    ...section("Example:", [`  ${commandLine(command, example)}`]),
+    "",
+    (options.wrap ?? wrapWords)(definition.description),
+    ...section("Required:", required.map(flagHelp)),
+    ...section("Options:", optional),
+    ...section("Global options:", [
+      ...globalHelp(globals).split("\n").filter(Boolean),
+      ...(options.json === false ? [] : [JSON_HELP]),
+      "  -h, --help",
+    ]),
+    "",
+  ].join("\n");
 }
+
+export const JSON_HELP =
+  "  --json  Print the JSON result, the default when output is redirected";
 
 export function globalHelp(globals: GlobalOptions): string {
   return Object.entries(globals)
@@ -353,44 +571,78 @@ function parseOperationArgs(
   definition: OperationDefinition,
   args: string[],
   globalOptions: Readonly<Record<string, { type: "string" | "boolean" }>>,
+  name = kebab(definition.name),
 ) {
   // Derived outside the try: an unsupported schema is not an argument error.
-  const options = { ...operationOptions(definition), ...globalOptions };
+  const options = {
+    ...operationOptions(definition),
+    ...globalOptions,
+    // Presentation only: never operation input or a connection setting.
+    json: { type: "boolean" as const },
+    help: { type: "boolean" as const, short: "h" },
+  };
   try {
     return parseArgs({ args, allowPositionals: false, strict: true, options })
       .values as Record<string, string | boolean | undefined>;
   } catch {
     throw new CommandInputError(
-      `Invalid arguments. Use ${kebab(definition.name)} --help for its flags.`,
+      `Invalid arguments. Use ${name} --help for its flags.`,
     );
   }
 }
 
 type GlobalOptions = Readonly<Record<string, { type: "string" | "boolean" }>>;
 
+type Globals = Readonly<Record<string, string | boolean | undefined>>;
+
 /**
- * Runs one operation command and prints only its JSON output. Each entry point
- * supplies the invoker: an embedded store of its own driver, or a remote client.
- * Global option values are passed to `connect`; operation flags never are.
+ * Runs one operation command and prints only its result. Each entry point
+ * supplies the invoker: an embedded store of its own driver, or a remote
+ * client. Global option values are passed to `connect`; operation flags never
+ * are. Terminal presentation is the caller's: without `render` the output is
+ * JSON, so entry points that do not render need no terminal libraries.
  */
 export async function runOperationCli(options: {
   definition: OperationDefinition;
   args: string[];
   globalOptions?: GlobalOptions;
+  /** The command as typed, such as `list`, and how its CLI is invoked. */
+  name?: string;
+  invocation?: string;
+  /** Wraps help prose; without it, prose prints as written. */
+  wrap?: (text: string) => string;
+  /** The result for stdout; `input` is validated, with defaults applied. */
+  render?: (
+    output: unknown,
+    request: {
+      input: Record<string, unknown>;
+      json: boolean;
+      globals: Globals;
+      /** The arguments as typed after the command name. */
+      args: readonly string[];
+    },
+  ) => string;
   connect: (
-    globals: Readonly<Record<string, string | boolean | undefined>>,
+    globals: Globals,
   ) => Promise<{ invoker: OperationInvoker; close?: () => Promise<void> }>;
 }): Promise<number> {
   const { definition } = options;
   let close: (() => Promise<void>) | undefined;
   let status = 0;
   try {
-    const values = parseOperationArgs(definition, options.args, {
-      help: { type: "boolean" },
-      ...options.globalOptions,
-    });
+    const values = parseOperationArgs(
+      definition,
+      options.args,
+      options.globalOptions ?? {},
+      options.name,
+    );
     if (values.help) {
-      process.stdout.write(operationHelp(definition, options.globalOptions));
+      process.stdout.write(
+        operationHelp(definition, options.globalOptions, {
+          ...options,
+          json: options.render !== undefined,
+        }),
+      );
       return 0;
     }
     const input = operationInput(
@@ -406,7 +658,14 @@ export async function runOperationCli(options: {
     const connection = await options.connect(globals);
     close = connection.close;
     const output = await connection.invoker.invoke(definition.name, input);
-    process.stdout.write(jsonOutput(output));
+    process.stdout.write(
+      options.render?.(output, {
+        input: definition.inputSchema.parse(input) as Record<string, unknown>,
+        json: values.json === true,
+        globals,
+        args: options.args,
+      }) ?? jsonOutput(output),
+    );
   } catch (error) {
     process.stderr.write(`${operationErrorMessage(error)}\n`);
     status = 1;
@@ -426,8 +685,8 @@ export async function runEmbeddedOperation(
   args: string[],
   open: () => Promise<FinancialStore & { close(): Promise<void> | void }>,
 ): Promise<number> {
-  const [command, ...rest] = args;
-  const definition = command ? operationForCommand(command) : undefined;
+  const [command = "", ...rest] = args;
+  const definition = operationForCommand(command);
   if (!definition) {
     process.stderr.write("Unknown command. Use --help for usage.\n");
     return 1;
@@ -435,6 +694,8 @@ export async function runEmbeddedOperation(
   return runOperationCli({
     definition,
     args: rest,
+    name: command,
+    invocation: "node server.js",
     async connect() {
       const store = await open();
       return {

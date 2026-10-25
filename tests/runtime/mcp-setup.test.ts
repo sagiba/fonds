@@ -6,7 +6,12 @@ import { pathToFileURL } from "node:url";
 
 import { expect, it } from "vitest";
 
-import { localMcpSetup } from "../../src/runtime/mcp-setup.js";
+import {
+  localMcpSetup,
+  MCP_CLIENTS,
+  MCP_SERVER_NAME,
+  mcpClientChooser,
+} from "../../src/runtime/mcp-setup.js";
 
 it("shell-parses both client commands without interpreting spaces, quotes or substitutions in paths", () => {
   const root = mkdtempSync(join(tmpdir(), "fonds-mcp-quoting-"));
@@ -58,4 +63,83 @@ it("shell-parses both client commands without interpreting spaces, quotes or sub
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+it("prints only the chosen client's setup under the chosen name", () => {
+  const url = pathToFileURL("/opt/fonds/cli.js").href;
+  const only = (client: (typeof MCP_CLIENTS)[number]) =>
+    localMcpSetup("/data/ledger.sqlite", "/data", url, {
+      client,
+      name: "fonds-demo",
+    });
+  expect(only("claude-code")).toMatch(/^ {2}claude mcp add fonds-demo /m);
+  expect(only("claude-code")).not.toMatch(/codex mcp add|mcpServers/);
+  expect(only("codex")).toMatch(/^ {2}codex mcp add fonds-demo /m);
+  expect(only("codex")).not.toContain("claude mcp add");
+  const desktop = JSON.parse(
+    /^ {2}(\{"mcpServers".*)$/m.exec(only("claude-desktop"))![1]!,
+  );
+  expect(Object.keys(desktop.mcpServers)).toEqual(["fonds-demo"]);
+  const chatgpt = JSON.parse(
+    /^ {2}(\{.*)$/m.exec(only("chatgpt-desktop"))![1]!,
+  );
+  expect(chatgpt).toEqual({
+    command: process.execPath,
+    args: [
+      "/opt/fonds/server.js",
+      "--transport",
+      "stdio",
+      "--db",
+      "/data/ledger.sqlite",
+    ],
+    env: { FONDS_STATE_DIR: "/data" },
+  });
+  const all = localMcpSetup("/data/ledger.sqlite", "/data", url);
+  expect(all).toContain("claude mcp add fonds ");
+  expect(all).toContain("codex mcp add fonds ");
+  expect(all).toContain('{"mcpServers":{"fonds":');
+});
+
+it("accepts only server names that are one safe shell word", () => {
+  for (const name of ["fonds", "fonds-demo", "Fonds_2"]) {
+    expect(MCP_SERVER_NAME.test(name), name).toBe(true);
+  }
+  for (const name of [
+    "",
+    "-fonds",
+    "a b",
+    "x;y",
+    "$(id)",
+    "a'b",
+    "x".repeat(65),
+  ]) {
+    expect(MCP_SERVER_NAME.test(name), name).toBe(false);
+  }
+});
+
+it("refuses setup that would print control characters from any path", () => {
+  const refused =
+    /cannot print paths that contain control or invisible characters/;
+  // The launcher's own path, not only the database's, reaches the chooser.
+  expect(() =>
+    mcpClientChooser("/data/ledger.sqlite", (args) =>
+      ["/opt/\u001b[2Jbin/fonds", "mcp-config", ...args].join(" "),
+    ),
+  ).toThrow(refused);
+  expect(() =>
+    localMcpSetup(
+      "/data/ledger.sqlite",
+      "/data/\u202estate",
+      pathToFileURL("/opt/fonds/cli.js").href,
+    ),
+  ).toThrow(refused);
+  // An invisible mark would be copied into the client's configuration.
+  expect(() =>
+    localMcpSetup(
+      "/data/ledger\u200f.sqlite",
+      "/data/state",
+      pathToFileURL("/opt/fonds/cli.js").href,
+      { client: "codex" },
+    ),
+  ).toThrow(refused);
 });

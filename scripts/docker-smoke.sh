@@ -35,10 +35,11 @@ if [ "${FONDS_SMOKE_SKIP_BUILD:-}" != 1 ]; then
 fi
 
 echo "== sqlite"
-docker run --rm fonds --help | grep -q "local SQLite CLI" || fail "sqlite --help"
+docker run --rm fonds --help | grep -q "Getting started" || fail "sqlite --help"
+docker run --rm fonds help --all | grep -q "local SQLite CLI" || fail "sqlite help --all"
 version="$(node -p 'require("./package.json").version')"
 [ "$(docker run --rm fonds --version)" = "$version" ] || fail "--version"
-docker run --rm fonds demo | grep -q "Demo ledger ready" || fail "demo"
+docker run --rm fonds demo | grep -q "Demo ready" || fail "demo"
 docker volume create "$project-sqlite" >/dev/null
 # No --db: FONDS_HOME=/data puts the default ledger in the volume, so a second
 # container finds it.
