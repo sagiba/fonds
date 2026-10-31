@@ -98,6 +98,18 @@ describe("structured sync diagnostics", () => {
     expect(log).toHaveBeenCalledTimes(1);
   });
 
+  it("carries the database bytes a reconciliation read as a count", () => {
+    const report = createSyncDiagnosticReport();
+    const entry: SyncDiagnostic = {
+      ...diagnostic,
+      stage: "reconciliation",
+      counts: { ledgerRows: 2, dbBytesRead: 4096 },
+    };
+    report.log(entry);
+    report.log({ ...entry, counts: { dbBytesRead: -1 } });
+    expect(report.report().entries).toEqual([entry]);
+  });
+
   it("distinguishes extracted inputs, accepted observations and deferred evidence counts", () => {
     const report = createSyncDiagnosticReport();
     report.log({

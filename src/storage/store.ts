@@ -397,6 +397,11 @@ export interface StoreDatabase<Db> {
    * row it guarded; without `commit`, a missing row also fails the commit.
    */
   fence?(tx: Db): PromiseLike<readonly unknown[]>;
+  /**
+   * Bytes a network-metered database has sent `tx` since its work began, for
+   * diagnostics only; undefined where the driver cannot measure them.
+   */
+  bytesRead?(tx: Db): number | undefined;
 }
 
 async function commitInOrder<
@@ -1260,6 +1265,7 @@ function buildStore<Db>(
             runHistory,
           });
         }
+        const dbBytesRead = db.bytesRead?.(tx);
         emit({
           event: "fonds_sync",
           ...ids,
@@ -1274,6 +1280,7 @@ function buildStore<Db>(
             absent: result.unlisted,
             deferred: plan.deferredCandidates.length,
             ...loaded,
+            ...(dbBytesRead !== undefined && { dbBytesRead }),
           },
         });
         const deferred = await Promise.all(

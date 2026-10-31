@@ -400,6 +400,7 @@ export function createHostedService(
       ...(refreshes && { refreshes: ownerRefreshes(refreshes) }),
       afterWrite: writes.afterWrite,
       onOperation: (entry) => logEvent("fonds_operation", entry),
+      meterDbBytes: store.meterDbBytes,
     }),
     {
       publicOrigin: config.publicOrigin,
