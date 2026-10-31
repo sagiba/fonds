@@ -446,7 +446,8 @@ for (const backend of backends) {
     it("orders tied categories by their text bytewise", async () => {
       // Equal counts: the text decides, bytewise. A JSON encoding would order
       // these differently (an escaped quote or newline is a backslash).
-      const categories = ['"Quoted', "A", "a\nb", "a b", "legacy"];
+      // The last category holds NUL: its document is never parsed in SQL.
+      const categories = ['"Quoted', "A", "a\nb", "a b", "x\u0000y"];
       await insertTransactionFixture(
         db,
         categories.map((_category, index) =>
@@ -454,25 +455,22 @@ for (const backend of backends) {
         ),
       );
       for (const [index, category] of categories.entries()) {
-        await db.editAnnotation({
+        await invoke("update_annotation", {
           transactionId: `tie-${index}`,
           expectedVersion: 0,
           category,
         });
       }
-      // A document written before annotation text refused NUL, which no
-      // edit can write now; it is read without being parsed.
-      const legacy = (await db.getTransaction("tie-4"))!.annotation!.data;
-      await db.raw(
-        "UPDATE annotations SET data_json = ? WHERE transaction_id = ?",
-        [JSON.stringify({ ...legacy, category: "x\u0000y" }), "tie-4"],
-      );
+      // Annotation documents stay exact, NUL included.
+      expect(
+        (await db.getTransaction("tie-4"))!.annotation!.data.category,
+      ).toBe("x\u0000y");
       const filters = { merchantName: "Tied" };
       const result = (await invoke("get_transaction_totals", {
         ...filters,
         groupBy: "category",
       })) as { groups: { key: string | null; includedCount: number }[] };
-      // The legacy document groups under the null key, which sorts last.
+      // The NUL-bearing document groups under the null key, which sorts last.
       expect(
         result.groups.map(({ key, includedCount }) => [key, includedCount]),
       ).toEqual([
@@ -486,7 +484,7 @@ for (const backend of backends) {
       const cut = await db.getGroupedTotals(filters, "category", 2);
       expect(cut.groups.map((group) => group.key)).toEqual(['"Quoted', "A"]);
       expect(cut.truncated).toBe(true);
-      // Summary items read the legacy category as null too.
+      // Summary items read that category as null too.
       const items = (await invoke("list_transactions", {
         ...filters,
         view: "summary",

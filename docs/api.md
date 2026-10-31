@@ -528,12 +528,12 @@ where `excluded` is
 
 With `groupBy` (`merchant`, `month`, `year`, `category`, `status`, `kind` or
 `card`), the result is `{groupBy, groups, truncated}` instead. Each group
-`{key, includedCount, totals}` holds the included rows of one key: `month`
-and `year` use the `dateRole` date, `category` the annotation's, `card` the card
-ID, and `null` collects rows without one. Its `totals` add `count`, `min` and `max`
-to the money groups above. Groups run from most included rows,
-then by key; at most 500, `truncated` when more existed. Exclusion counts and
-FX fees appear only ungrouped.
+`{key, includedCount, totals}` holds the included rows of one key: `month` and
+`year` use the `dateRole` date, `category` the annotation's (`null` when its
+document contains NUL), `card` the card ID, and `null` collects rows without
+one. Its `totals` add `count`, `min` and `max` to the money groups above. Groups
+run from most included rows, then by key; at most 500, `truncated` when more
+existed. Exclusion counts and FX fees appear only ungrouped.
 
 ## Pending-to-posted matching
 
@@ -594,7 +594,7 @@ detailed read returns the full annotation:
 | `review`    | object or null | The owner's decision: `{status}`, `approved` or `needs_review`. The server stamps the reviewed basis (money, currency, basis and kind) internally.                                   |
 | `updatedAt` | string         | Last committed edit.                                                                                                                                                                 |
 
-The whole serialized document must fit 64 KiB; notes, category and tags refuse NUL.
+The whole serialized document must fit 64 KiB.
 
 ### Update
 

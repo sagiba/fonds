@@ -264,10 +264,11 @@ export const transactionListPage = async (
   }));
 
 /**
- * The annotation category as text. A document holding an escaped NUL (from
- * before annotation text refused NUL) is never parsed, because PostgreSQL
- * cannot parse it; its category reads as null on both dialects. The check
- * also matches an escaped backslash before "u0000", which errs to null too.
+ * The annotation category as text. Annotation documents stay exact, NUL
+ * included, but PostgreSQL cannot parse a document holding an escaped NUL, so
+ * such a document is never parsed and its category reads as null on both
+ * dialects. The check also matches an escaped backslash before "u0000",
+ * which errs to null too.
  */
 const annotationCategory = sql<
   string | null
