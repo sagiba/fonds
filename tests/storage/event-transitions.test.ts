@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { emptyCounts } from "../../src/application/refreshes.js";
 import { EVENT_TYPES } from "../../src/domain/records.js";
 import type { SourceAdapter } from "../../src/domain/source-adapter.js";
 import {
@@ -137,6 +138,50 @@ describe("ledger event transitions", () => {
     expect(
       await typesOf(() => harness.capture(9, [corrected, posted])),
     ).toEqual(["sync.recovered"]);
+
+    // Refresh health: an attention block starts with a failure, then lifts.
+    async function finishRefresh(
+      id: string,
+      status: "completed" | "failed",
+      requiresAttention: boolean,
+    ) {
+      await db.admitRefresh(
+        {
+          id,
+          connectionId: harness.connectionId,
+          trigger: "manual",
+          status: "running",
+          skipReason: null,
+          range: null,
+          occurrence: null,
+          scheduledAt: null,
+          createdAt: new Date().toISOString(),
+          startedAt: new Date().toISOString(),
+          finishedAt: null,
+          requiresAttention: false,
+          counts: emptyCounts(),
+          failureCodes: [],
+          failureReason: null,
+          missed: null,
+          windows: [],
+        },
+        { operator: true, now: Date.now() },
+      );
+      await db.withCollectionLock(harness.connectionId, (locked) =>
+        locked.updateRefresh(id, {
+          status,
+          requiresAttention,
+          finishedAt: new Date().toISOString(),
+        }),
+      );
+    }
+
+    expect(
+      await typesOf(() => finishRefresh("blocked", "failed", true)),
+    ).toEqual(["refresh.failed", "refresh.attention_required"]);
+    expect(
+      await typesOf(() => finishRefresh("retried", "completed", false)),
+    ).toEqual(["refresh.recovered"]);
 
     expect([...emitted].sort()).toEqual([...EVENT_TYPES].sort());
   });
