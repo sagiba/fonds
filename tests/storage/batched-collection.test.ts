@@ -462,6 +462,160 @@ for (const backend of backends) {
       await expectConfinedLedger(pending.id);
     });
 
+    it.each([
+      {
+        split: "a repeated account",
+        events: [
+          capture("first", [["first-kept", -100]], baselineAt),
+          capture("first", [["first-later", -200]], unitAt),
+        ],
+      },
+      {
+        split: "the size bound",
+        events: [
+          capture("first", [["first-kept", -100]], baselineAt, 9 * 1024 * 1024),
+          capture(
+            "second",
+            [["second-kept", -300]],
+            baselineAt,
+            9 * 1024 * 1024,
+          ),
+        ],
+      },
+    ])(
+      "keeps the capture that starts a new run at $split staged when the previous run fails to apply",
+      async ({ events }) => {
+        let requestedAfterFailure = false;
+        const streaming: ProviderCollector = {
+          provider: "cal",
+          collectorVersion: "synthetic-v1",
+          async *collect() {
+            yield* events;
+            requestedAfterFailure = true;
+            yield capture("third", [["third-kept", -400]], unitAt);
+          },
+        };
+        await failWrites(
+          db,
+          "interrupt_split",
+          "transactions",
+          "INSERT",
+          "synthetic interruption",
+        );
+        await expect(
+          collectFromStore(db, { connectionId }, streaming, accounts),
+        ).rejects.toThrow();
+        expect(requestedAfterFailure).toBe(false);
+        await dropFailure(db, "interrupt_split", "transactions");
+        const pending = await readRuns(db);
+        expect(pending.map((run) => run.status)).toEqual([
+          "started",
+          "started",
+        ]);
+        expect(
+          pending.map((run) =>
+            run.snapshot.responses.map((response) => response.capturedAt),
+          ),
+        ).toEqual(
+          events.map((event) =>
+            event.type === "capture" ? [event.capture.capturedAt] : [],
+          ),
+        );
+        expect(
+          await db.withCollectionLock(connectionId, (store) =>
+            store.recoverPendingRuns(accounts),
+          ),
+        ).toEqual({
+          acquired: true,
+          result: [
+            expect.objectContaining({
+              runId: pending[0]!.id,
+              status: "completed",
+              created: 1,
+            }),
+            expect.objectContaining({
+              runId: pending[1]!.id,
+              status: "completed",
+              created: 1,
+            }),
+          ],
+        });
+        expect(
+          (await db.listTransactions({ connectionId, presence: "all" }))
+            .map((row) => row.sourceKey)
+            .sort(),
+        ).toEqual(
+          events
+            .flatMap((event) =>
+              event.type === "capture"
+                ? (JSON.parse(event.capture.responseText) as {
+                    sourceKey: string;
+                  }[])
+                : [],
+            )
+            .map((row) => row.sourceKey)
+            .sort(),
+        );
+      },
+    );
+
+    it("dates a partition's repeated failures by the latest, so a success between them recovers nothing", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(new Date("2040-08-01T12:00:00.000Z"));
+        await collectFromStore(
+          db,
+          { connectionId },
+          collector(baseline),
+          accounts,
+        );
+        const streaming: ProviderCollector = {
+          provider: "cal",
+          collectorVersion: "synthetic-v1",
+          async *collect() {
+            vi.setSystemTime(new Date("2040-08-02T00:01:00.000Z"));
+            yield failure("first");
+            vi.setSystemTime(new Date("2040-08-02T00:03:00.000Z"));
+            yield failure("first");
+            // Captured between the failures, but yielded after the second.
+            vi.setSystemTime(new Date("2040-08-02T00:04:00.000Z"));
+            yield capture(
+              "first",
+              [
+                ["first-kept", -100],
+                ["first-changed", -200],
+              ],
+              "2040-08-02T00:02:00.000Z",
+            );
+          },
+        };
+        const summary = await collectFromStore(
+          db,
+          { connectionId },
+          streaming,
+          accounts,
+        );
+        expect(summary.runIds).toHaveLength(2);
+        const [failedRun] = summary.runIds;
+        expect(
+          (await readRuns(db, failedRun))[0]!.snapshot.failures?.map(
+            (failed) => failed.failedAt,
+          ),
+        ).toEqual(["2040-08-02T00:01:00.000Z", "2040-08-02T00:03:00.000Z"]);
+        const events = await db.listEvents({ connectionId, limit: 1000 });
+        expect(
+          events
+            .filter((event) => event.type.startsWith("sync."))
+            .map((event) => [event.type, event.runId]),
+        ).toEqual([
+          ["sync.baseline", expect.any(String)],
+          ["sync.failed", failedRun],
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("dates a unit's failure by collection, so a later success of its account recovers it", async () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       try {

@@ -191,6 +191,12 @@ export async function collectFromStore(
   let acceptedRuns = 0;
 
   let batch: Batch | undefined;
+  let lastRunStart = -Infinity;
+  /** Recovery applies pending runs in start order, so a collection's runs never share one. */
+  const runStart = (collectedAt: string) => {
+    lastRunStart = Math.max(Date.parse(collectedAt), lastRunStart + 1);
+    return new Date(lastRunStart).toISOString();
+  };
   /** Ingests and applies one run of the unit's captures and failures. */
   const ingest = async (
     runId: string,
@@ -304,16 +310,18 @@ export async function collectFromStore(
       });
     }
   };
-  /** Ingests the buffered events as one run, so the ledger is loaded once for them. */
-  const flush = async () => {
-    const pending = batch;
-    batch = undefined;
-    if (!pending) {
-      return;
-    }
+  /** Ingests buffered events as one run, so the ledger is loaded once for them. */
+  const ingestBatch = async (pending: Batch) => {
     const { runId, startedAt, responses, failures } = pending;
     const result = await ingest(runId, startedAt, responses, failures);
     account(runId, result, responses.length, failures.length);
+  };
+  const flush = async () => {
+    const pending = batch;
+    batch = undefined;
+    if (pending) {
+      await ingestBatch(pending);
+    }
   };
   /** Whether the event cannot join the current run under the run's invariants or size bound. */
   const startsNewRun = (current: Batch, event: Unbatched, bytes: number) => {
@@ -358,14 +366,18 @@ export async function collectFromStore(
       event.type === "capture"
         ? new TextEncoder().encode(event.capture.responseText).length
         : 0;
-    if (batch && startsNewRun(batch, event, bytes)) {
-      await flush();
+    // The event joins its own run before the previous one is ingested, so a
+    // failed ingestion still leaves the event buffered for the exit path.
+    const previous =
+      batch && startsNewRun(batch, event, bytes) ? batch : undefined;
+    if (previous) {
+      batch = undefined;
     }
     const collectedAt = new Date().toISOString();
     // A run is named by its first capture, so a one-event run keeps that ID.
     batch ??= {
       runId: captureId,
-      startedAt: collectedAt,
+      startedAt: runStart(collectedAt),
       responses: [],
       failures: [],
       sourceBytes: 0,
@@ -390,6 +402,9 @@ export async function collectFromStore(
         failureCategory: event.failure.code,
       }),
     });
+    if (previous) {
+      await ingestBatch(previous);
+    }
   };
   const interruptionEvent = () => collectionFailure("network_error", range);
   let iterator: AsyncIterator<CollectionEvent> | undefined;
@@ -491,6 +506,13 @@ export async function collectFromStore(
       failureCategory: "persistence",
       durationMs: elapsedMs(started),
     });
+    // Collection stops, but fetched events still become a staged run that
+    // pending-run recovery applies after the earlier one; the first error wins.
+    try {
+      await flush();
+    } catch {
+      // The original persistence failure is the one reported.
+    }
     throw error;
   } finally {
     try {

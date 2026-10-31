@@ -552,9 +552,23 @@ function trackCollectionHealth(adapter: SourceAdapter) {
     const started = Date.parse(run.startedAt);
     const attemptTime = Number.isFinite(started) ? started : Infinity;
     // A run can hold failures met before or after its responses.
-    const failureTime = (failure: CollectionFailure | undefined) => {
-      const failed = failure?.failedAt ? Date.parse(failure.failedAt) : NaN;
+    const failureTime = (failure: CollectionFailure) => {
+      const failed = failure.failedAt ? Date.parse(failure.failedAt) : NaN;
       return Number.isFinite(failed) ? failed : attemptTime;
+    };
+    /** A partition's failures can repeat within a run; the latest one stands. */
+    const latestFailureTime = (part: (typeof run.coverage)[number]) => {
+      const times = (run.snapshot.failures ?? [])
+        .filter(
+          (failure) =>
+            failure.affectsCoverage !== false &&
+            failure.accountKey === part.accountKey &&
+            resourceKey(adapter, failure.endpoint) ===
+              resourceKey(adapter, part.resource) &&
+            scopeKey(adapter, failure.scope) === scopeKey(adapter, part.scope),
+        )
+        .map(failureTime);
+      return times.length > 0 ? Math.max(...times) : attemptTime;
     };
     for (const part of run.coverage) {
       // An unscoped legacy archive cannot establish recovery of a live collection.
@@ -570,16 +584,7 @@ function trackCollectionHealth(adapter: SourceAdapter) {
       );
       const evidenceTime = response
         ? Date.parse(response.capturedAt)
-        : failureTime(
-            run.snapshot.failures?.find(
-              (failure) =>
-                failure.accountKey === part.accountKey &&
-                resourceKey(adapter, failure.endpoint) ===
-                  resourceKey(adapter, part.resource) &&
-                scopeKey(adapter, failure.scope) ===
-                  scopeKey(adapter, part.scope),
-            ),
-          );
+        : latestFailureTime(part);
       if (part.success && response) {
         recover(`collection:${scopeKey(adapter, part.scope)}`, evidenceTime);
       }
