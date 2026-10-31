@@ -139,6 +139,14 @@ export const syncRuns = sqliteTable("sync_runs", {
   ),
 });
 
+/** One derived summary of a connection's applied runs; see run-history.ts. */
+export const syncRunHistory = sqliteTable("sync_run_history", {
+  connectionId: text("connection_id")
+    .primaryKey()
+    .references(() => connections.id),
+  document: text("document_json", { mode: "json" }).$type<unknown>().notNull(),
+});
+
 export const syncRunBodies = sqliteTable("sync_run_bodies", {
   runId: text("run_id")
     .primaryKey()

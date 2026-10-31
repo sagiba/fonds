@@ -53,6 +53,7 @@ it("creates the ledger, evidence and operational tables and enables foreign keys
       { name: "scheduled_collections" },
       { name: "settings" },
       { name: "sync_run_bodies" },
+      { name: "sync_run_history" },
       { name: "sync_runs" },
       { name: "transaction_observations" },
       { name: "transaction_posting_links" },

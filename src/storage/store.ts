@@ -44,7 +44,8 @@ import {
   syncDiagnostics,
   type SyncDiagnosticSink,
 } from "../application/sync-diagnostics.js";
-import { cardDiscoverySchema } from "../domain/cards.js";
+import type { Account } from "../domain/accounts.js";
+import { type Card, cardDiscoverySchema } from "../domain/cards.js";
 import {
   ConflictError,
   InvalidInputError,
@@ -63,7 +64,23 @@ import {
   postingSchema,
   removalSchema,
 } from "../domain/plans/lifecycle.js";
-import { FinancialPlan } from "../domain/plans/state.js";
+import {
+  copyRunHistory,
+  decodeRunHistory,
+  emptyRunHistory,
+  encodeRunHistory,
+  foldRunHistory,
+  type PriorRun,
+  referencedRunIds,
+  type RunHistoryDocument,
+  type RunHistorySummary,
+  summarizeRunHistory,
+} from "../domain/plans/run-history.js";
+import {
+  type DeferredCandidate,
+  FinancialPlan,
+  type FinancialSnapshot,
+} from "../domain/plans/state.js";
 import {
   extractRun,
   finishTransactionContent,
@@ -73,7 +90,14 @@ import {
   type SyncResult,
 } from "../domain/plans/sync.js";
 import { calculateTotals, presentTransaction } from "../domain/read-model.js";
-import type { Connection, ConnectionConfig } from "../domain/records.js";
+import type {
+  Annotation,
+  Connection,
+  ConnectionConfig,
+  LedgerEventWrite,
+  Run,
+  Transaction,
+} from "../domain/records.js";
 import { PROVIDER_STOP_REASONS } from "../domain/refreshes.js";
 import type { SourceAdapter } from "../domain/source-adapter.js";
 import {
@@ -84,11 +108,175 @@ import {
   retainedRun,
   runEvidenceDigest,
 } from "./run-evidence.js";
-import type { PlanScope } from "./sql.js";
-import type { RefreshRow, RefreshWindowRow, Statements } from "./statements.js";
+import { chunks, type PlanScope } from "./sql.js";
+import type {
+  LatestAppliedRun,
+  OrderedRun,
+  RefreshRow,
+  RefreshWindowRow,
+  Statements,
+} from "./statements.js";
 
 // Keep public error identity (for example version conflicts) while classifying recovery.
 const interpretationErrors = new WeakSet<Error>();
+
+// D1 binds at most 100 parameters per statement; one is the connection ID.
+const RUN_ID_BATCH = 99;
+
+const utf8 = new TextEncoder();
+
+/** PostgreSQL's "C" collation and SQLite's BINARY both compare UTF-8 bytes. */
+function storedTextOrder(left: string, right: string): number {
+  const a = utf8.encode(left);
+  const b = utf8.encode(right);
+  for (let index = 0; index < Math.min(a.length, b.length); index++) {
+    if (a[index] !== b[index]) {
+      return a[index]! - b[index]!;
+    }
+  }
+  return a.length - b.length;
+}
+
+/** `ORDER BY applied_at, ingestion_order`, as the run history is folded. */
+function applicationOrder(
+  left: { appliedAt: string; ingestionOrder: number },
+  right: { appliedAt: string; ingestionOrder: number },
+): number {
+  return (
+    storedTextOrder(left.appliedAt, right.appliedAt) ||
+    left.ingestionOrder - right.ingestionOrder
+  );
+}
+
+function priorRun({
+  id,
+  status,
+  startedAt,
+  coverage,
+  snapshot,
+}: PriorRun): PriorRun {
+  return { id, status, startedAt, coverage, snapshot };
+}
+
+interface RunHistoryLoad extends Pick<FinancialSnapshot, "priorRuns"> {
+  runHistory: RunHistorySummary;
+  /** The run being applied, as its columns read before application. */
+  applying: OrderedRun;
+  latest: LatestAppliedRun | undefined;
+  /** Whether only dependent runs loaded, rather than every applied run. */
+  scoped: boolean;
+}
+
+/**
+ * The run being applied as the complete history will read it once committed:
+ * its stored receipt metadata, with the plan's run update as JSON columns
+ * return it.
+ */
+function appliedRun(applying: OrderedRun, update: Partial<Run>): PriorRun {
+  return {
+    id: applying.id,
+    status: update.status ?? applying.status,
+    startedAt: update.startedAt ?? applying.startedAt,
+    coverage: JSON.parse(
+      JSON.stringify(update.coverage ?? applying.coverage),
+    ) as Run["coverage"],
+    snapshot: applying.snapshot,
+  };
+}
+
+/**
+ * The summary after this application, or none when appending would not fold
+ * in application order: a run applied in the same millisecond as, but staged
+ * before, the latest run, or after a clock step back, sorts earlier. Such a
+ * summary would name a run that is not the latest, so it could not be used
+ * anyway; the stored one no longer matches the applied-run count, and the
+ * next application folds the complete history again.
+ */
+function nextRunHistory(
+  load: RunHistoryLoad,
+  update: Partial<Run> | undefined,
+  adapter: SourceAdapter,
+): RunHistoryDocument | undefined {
+  if (
+    !update?.appliedAt ||
+    update.snapshot !== undefined ||
+    (load.latest &&
+      applicationOrder(
+        {
+          appliedAt: update.appliedAt,
+          ingestionOrder: load.applying.ingestionOrder,
+        },
+        load.latest,
+      ) < 0)
+  ) {
+    return undefined;
+  }
+  const summary = copyRunHistory(load.runHistory);
+  foldRunHistory(summary, appliedRun(load.applying, update), adapter);
+  return encodeRunHistory({
+    provider: adapter.provider,
+    parserVersion: adapter.parserVersion,
+    appliedRuns: (load.latest?.appliedRuns ?? 0) + 1,
+    latestRunId: load.applying.id,
+    summary,
+  });
+}
+
+/** One application's plan output, for comparing two ways of loading it. */
+export interface PlannedApplication {
+  result: SyncResult;
+  transactionWrites: [string, Transaction][];
+  observationWrites: [string, Transaction][];
+  annotationWrites: [string, Annotation][];
+  accountWrites: [string, Account][];
+  cardWrites: [string, Card][];
+  deferredCandidates: DeferredCandidate[];
+  events: LedgerEventWrite[];
+  runUpdate: Partial<Run> | undefined;
+  runHistory: RunHistoryDocument | undefined;
+}
+
+export interface RunHistoryComparison {
+  /** Whether the dependency-driven plan loaded only dependent runs. */
+  scoped: boolean;
+  loadedRuns: number;
+  appliedRuns: number;
+  dependent: PlannedApplication;
+  complete: PlannedApplication;
+}
+
+let runHistoryVerifier:
+  ((comparison: RunHistoryComparison) => void) | undefined;
+
+/**
+ * Test seam: every sync application in this module instance also plans from
+ * every applied run, with the same clock and IDs, and reports both outcomes
+ * before committing the dependency-driven one. Production sets none.
+ */
+export function verifyRunHistoryLoading(
+  verifier: ((comparison: RunHistoryComparison) => void) | undefined,
+): void {
+  runHistoryVerifier = verifier;
+}
+
+function plannedApplication(
+  plan: FinancialPlan,
+  result: SyncResult,
+  runHistory: RunHistoryDocument | undefined,
+): PlannedApplication {
+  return {
+    result,
+    transactionWrites: [...plan.transactionWrites],
+    observationWrites: [...plan.observationWrites],
+    annotationWrites: [...plan.annotationWrites],
+    accountWrites: [...plan.accountWrites],
+    cardWrites: [...plan.cardWrites],
+    deferredCandidates: plan.deferredCandidates,
+    events: plan.events,
+    runUpdate: plan.runUpdate,
+    runHistory,
+  };
+}
 
 function interpretationError(cause: unknown): Error {
   const error =
@@ -601,12 +789,19 @@ function buildStore<Db>(
     }
   }
 
+  /**
+   * Without `runs`, an unscoped plan loads every applied run; sync application
+   * supplies the runs its rows and capture depend on instead.
+   */
   async function loadPlan(
     tx: Db,
     connection: Connection,
     scope?: PlanScope,
     relatedIds: string[] = [],
     catalog = false,
+    runs?: (
+      rows: Transaction[],
+    ) => Promise<Pick<FinancialSnapshot, "priorRuns" | "runHistory">>,
   ) {
     // Lock acquisition is a preceding statement: READ COMMITTED must see post-lock versions.
     const joined = await statements.planRows(tx, connection.id, scope);
@@ -619,15 +814,160 @@ function buildStore<Db>(
         joined.push({ row, annotation: null });
       }
     }
+    const rows = joined.map(({ row }) => row);
     return new FinancialPlan({
       connection,
-      rows: joined.map(({ row }) => row),
+      rows,
       annotations: joined.flatMap(({ annotation }) =>
         annotation ? [annotation] : [],
       ),
-      priorRuns: scope ? [] : await statements.priorRuns(tx, connection.id),
+      ...(scope
+        ? { priorRuns: [] }
+        : runs
+          ? await runs(rows)
+          : { priorRuns: await statements.priorRuns(tx, connection.id) }),
       removals: scope ? [] : await statements.removals(tx, connection.id),
       ...(catalog && { catalog: await loadCatalog(tx, connection.id) }),
+    });
+  }
+
+  /**
+   * The prior runs one application depends on, and the summary of every
+   * applied run. Planner reads of run history are of three kinds:
+   *
+   * - folds over every applied run (collection health, latest partition
+   *   captures, known accounts), which come from the stored summary;
+   * - lookups of a run a stored row names (`historical`, `response`, source
+   *   reference collapsing, absence and overlap witnesses), which load the
+   *   runs `referencedRunIds` collects;
+   * - the previous run's status, which is the latest applied run.
+   *
+   * Retained coverage also binds a response captured at or before it
+   * (`prior` in source-absence.ts). When the summary cannot exclude that, or
+   * is missing, stale or from another parser, every applied run loads and the
+   * summary is folded again from all of them.
+   */
+  async function loadRunHistory(
+    tx: Db,
+    connectionId: string,
+    run: Run,
+    adapter: SourceAdapter,
+    rows: Transaction[],
+  ): Promise<RunHistoryLoad> {
+    const latest = (await statements.runHistory(tx, connectionId))[0];
+    const stored = latest && decodeRunHistory(latest.document);
+    // Applied runs are never unapplied or deleted, so an equal count and last
+    // run mean the summary folded exactly the runs applied now.
+    const current = !latest
+      ? emptyRunHistory()
+      : stored?.provider === adapter.provider &&
+          stored.parserVersion === adapter.parserVersion &&
+          stored.appliedRuns === latest.appliedRuns &&
+          stored.latestRunId === latest.id
+        ? stored.summary
+        : undefined;
+    const latestCapture = current?.latestCapture;
+    const scoped =
+      current !== undefined &&
+      (latestCapture === undefined ||
+        run.snapshot.responses.every(
+          (response) => response.capturedAt > latestCapture,
+        ));
+    const ids = scoped ? referencedRunIds(rows) : new Set<string>();
+    ids.add(run.id);
+    if (latest) {
+      ids.delete(latest.id);
+    }
+    const fetched: OrderedRun[] = [];
+    for (const batch of chunks([...ids], RUN_ID_BATCH)) {
+      fetched.push(...(await statements.runsById(tx, connectionId, batch)));
+    }
+    const applying = fetched.find((candidate) => candidate.id === run.id);
+    if (!applying) {
+      throw new NotFoundError("Run not found");
+    }
+    if (!scoped) {
+      const priorRuns = await statements.priorRuns(tx, connectionId);
+      return {
+        priorRuns,
+        runHistory: summarizeRunHistory(priorRuns, adapter),
+        applying,
+        latest,
+        scoped,
+      };
+    }
+    const priorRuns = fetched
+      .filter(
+        (candidate): candidate is OrderedRun & { appliedAt: string } =>
+          candidate.appliedAt !== null,
+      )
+      .sort(applicationOrder);
+    return {
+      // Of the order, the planner reads only the last run's status; the
+      // database's own ordering supplies that run.
+      priorRuns: [...priorRuns, ...(latest ? [latest] : [])].map(priorRun),
+      runHistory: current,
+      applying,
+      latest,
+      scoped,
+    };
+  }
+
+  /** Plans the same application from every applied run and reports both. */
+  async function compareRunHistory(
+    verifier: (comparison: RunHistoryComparison) => void,
+    tx: Db,
+    connection: Connection,
+    dependent: {
+      run: Run;
+      extraction: ReturnType<typeof extractRun>;
+      adapter: SourceAdapter;
+      now: string;
+      issued: string[];
+      plan: FinancialPlan;
+      result: SyncResult;
+      history: RunHistoryLoad;
+      runHistory: RunHistoryDocument | undefined;
+    },
+  ) {
+    const { adapter, history, runHistory } = dependent;
+    const plan = await loadPlan(tx, connection, undefined, [], true);
+    let replayed = 0;
+    const result = planRun(
+      plan,
+      dependent.run,
+      adapter,
+      dependent.extraction,
+      dependent.now,
+      () => dependent.issued[replayed++] ?? crypto.randomUUID(),
+    );
+    const update = plan.runUpdate;
+    const priorRuns = plan.snapshot.priorRuns;
+    verifier({
+      scoped: history.scoped,
+      loadedRuns: dependent.plan.snapshot.priorRuns.length,
+      appliedRuns: priorRuns.length,
+      dependent: plannedApplication(
+        dependent.plan,
+        dependent.result,
+        runHistory,
+      ),
+      complete: plannedApplication(
+        plan,
+        result,
+        runHistory &&
+          update &&
+          encodeRunHistory({
+            provider: adapter.provider,
+            parserVersion: adapter.parserVersion,
+            appliedRuns: priorRuns.length + 1,
+            latestRunId: dependent.run.id,
+            summary: summarizeRunHistory(
+              [...priorRuns, appliedRun(history.applying, update)],
+              adapter,
+            ),
+          }),
+      ),
     });
   }
 
@@ -857,7 +1197,27 @@ function buildStore<Db>(
         if (run.appliedAt) {
           return replayResult(run);
         }
-        const plan = await loadPlan(tx, locked, undefined, [], true);
+        let history: RunHistoryLoad | undefined;
+        const plan = await loadPlan(
+          tx,
+          locked,
+          undefined,
+          [],
+          true,
+          async (rows) => {
+            history = await loadRunHistory(
+              tx,
+              connection.id,
+              run,
+              adapter,
+              rows,
+            );
+            return {
+              priorRuns: history.priorRuns,
+              runHistory: history.runHistory,
+            };
+          },
+        );
         phase = "reconciliation";
         const reconciliationStarted = performance.now();
         const loaded = {
@@ -873,17 +1233,32 @@ function buildStore<Db>(
           counts: loaded,
         });
         let result: SyncResult;
+        const now = new Date().toISOString();
+        const issued: string[] = [];
+        // Planning may adjust its inputs; the comparison plans pristine copies.
+        const pristine =
+          runHistoryVerifier && structuredClone({ run, extraction });
         try {
-          result = planRun(
-            plan,
-            run,
-            adapter,
-            extraction,
-            new Date().toISOString(),
-            () => crypto.randomUUID(),
-          );
+          result = planRun(plan, run, adapter, extraction, now, () => {
+            const id = crypto.randomUUID();
+            issued.push(id);
+            return id;
+          });
         } catch (error) {
           throw interpretationError(error);
+        }
+        const runHistory = nextRunHistory(history!, plan.runUpdate, adapter);
+        if (runHistoryVerifier && pristine) {
+          await compareRunHistory(runHistoryVerifier, tx, locked, {
+            ...pristine,
+            adapter,
+            now,
+            issued,
+            plan,
+            result,
+            history: history!,
+            runHistory,
+          });
         }
         emit({
           event: "fonds_sync",
@@ -1020,6 +1395,9 @@ function buildStore<Db>(
             (row) => statements.upsertDeferredEvidence(tx, row),
           ),
           ...statements.finishRunEvidence(tx, id, archived.bodyExpiresAt),
+          ...(runHistory
+            ? [statements.saveRunHistory(tx, connection.id, runHistory)]
+            : []),
         ]);
         return result;
       })

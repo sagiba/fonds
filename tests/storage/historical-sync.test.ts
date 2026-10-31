@@ -1,3 +1,5 @@
+import "../helpers/run-history-differential.js";
+
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 
@@ -856,13 +858,14 @@ for (const backend of backends) {
           spy.mockRestore();
         }
       }
+      // The latest applied run, read with the stored run-history summary.
       const metadataQuery = statements.find(
         (query) =>
-          query.includes('from "sync_runs"') && query.includes("is not null"),
+          query.includes('from "sync_runs"') && query.includes("over ()"),
       );
       expect(metadataQuery).toBeDefined();
       const priorMetadata = JSON.stringify(
-        await db.raw(metadataQuery!.replace(/\$\d+/g, "?"), [connectionId]),
+        await db.raw(metadataQuery!.replace(/\$\d+/g, "?"), [connectionId, 1]),
       );
       expect(priorMetadata).not.toContain("SYNTHETIC_LARGE_RAW_BODY");
       expect(priorMetadata.length).toBeLessThan(5000);

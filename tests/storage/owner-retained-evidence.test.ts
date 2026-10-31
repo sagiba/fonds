@@ -1,3 +1,5 @@
+import "../helpers/run-history-differential.js";
+
 import { describe, expect, it } from "vitest";
 
 import type { SourceAdapter } from "../../src/domain/source-adapter.js";

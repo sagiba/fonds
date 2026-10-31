@@ -9,7 +9,7 @@ import type {
   Run,
   Transaction,
 } from "../records.js";
-import type { PriorRun } from "./sync.js";
+import type { PriorRun, RunHistorySummary } from "./run-history.js";
 
 export type {
   Annotation,
@@ -24,8 +24,15 @@ export interface FinancialSnapshot {
   /** Insertion order, before source-key sorting; adapters must preserve tie identity. */
   rows: Transaction[];
   annotations: Annotation[];
-  /** Applied timestamp ascending, insertion order for ties. */
+  /**
+   * Applied timestamp ascending, insertion order for ties. Without
+   * `runHistory` this is every applied run; with it, at least the latest
+   * applied run and every run the snapshot's rows name or whose coverage can
+   * bind the capture being applied.
+   */
   priorRuns: PriorRun[];
+  /** Folds over every applied run, in the order `priorRuns` documents. */
+  runHistory?: RunHistorySummary;
   /** Latest audit ID first, so each transaction's first match is authoritative. */
   removals: Pick<LedgerEvent, "transactionId" | "createdAt">[];
   /**

@@ -92,6 +92,7 @@ for (const backend of backends) {
         row("pending", { status: "pending", amountBasis: "authorization" }),
         row("posted"),
       ],
+      capturedAt = "2040-08-01T00:00:00Z",
     ) =>
       db.ingestRun(
         {
@@ -101,7 +102,7 @@ for (const backend of backends) {
             {
               accountKey: "account",
               endpoint: "synthetic:budget",
-              capturedAt: "2040-08-01T00:00:00Z",
+              capturedAt,
               responseText: JSON.stringify(rows),
             },
           ],
@@ -195,10 +196,17 @@ for (const backend of backends) {
       expect(counts.reads).toBeLessThanOrEqual(2 + feedLock);
     });
     it("reads the full capture once per new application", async () => {
-      const counts = await measure(() => capture());
-      // Includes catalog resolution and checking the staged body's retention policy.
-      expect(counts.reads).toBeLessThanOrEqual(10 + feedLock);
+      const counts = await measure(() =>
+        capture(undefined, "2040-08-02T00:00:00Z"),
+      );
+      // Includes catalog resolution, checking the staged body's retention
+      // policy, the latest run with its stored summary and dependent runs.
+      expect(counts.reads).toBeLessThanOrEqual(11 + feedLock);
       expect(counts.fullSnapshots).toBe(1);
+      // Coverage retained at or after a capture also reads every applied run.
+      const earlier = await measure(() => capture());
+      expect(earlier.reads).toBeLessThanOrEqual(12 + feedLock);
+      expect(earlier.fullSnapshots).toBe(1);
     });
     it("reads nonempty filtered views without an existence round trip", async () => {
       for (const work of [
@@ -306,7 +314,7 @@ for (const backend of backends) {
           Math.ceil(transactionCount / reconciliationRows) +
           Math.ceil(transactionCount / postingLinkRows) +
           Math.ceil(changes / changeRows) +
-          5 + // Receipt/body staging, run application, staged-body release and expired-body pruning.
+          6 + // Receipt/body staging, run application, staged-body release, expired-body pruning and the run-history summary.
           2 * guard,
       );
     });

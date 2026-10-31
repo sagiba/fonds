@@ -17,8 +17,11 @@ import type {
 import type { Account } from "../domain/accounts.js";
 import type { Card } from "../domain/cards.js";
 import type { RefreshFailureCode } from "../domain/model.js";
+import type {
+  PriorRun,
+  RunHistoryDocument,
+} from "../domain/plans/run-history.js";
 import type { FinancialPlan } from "../domain/plans/state.js";
-import type { PriorRun } from "../domain/plans/sync.js";
 import type {
   calculateTotals,
   TransactionListFacts,
@@ -34,6 +37,18 @@ import type {
 import type { FailureReason, ProviderStopReason } from "../domain/refreshes.js";
 import type { RetainedRun } from "./run-evidence.js";
 import type { PlanScope } from "./sql.js";
+
+/** A run with the columns that place it in application order. */
+export type OrderedRun = PriorRun & {
+  appliedAt: string | null;
+  ingestionOrder: number;
+};
+
+export type LatestAppliedRun = OrderedRun & {
+  appliedAt: string;
+  appliedRuns: number;
+  document: unknown;
+};
 
 export interface PlanRow {
   row: Transaction;
@@ -144,7 +159,20 @@ export interface Statements<Db> {
     limit: number,
   ): PromiseLike<Pick<Run, "id" | "parserVersion">[]>;
   planRows(db: Db, id: string, scope?: PlanScope): PromiseLike<PlanRow[]>;
+  /** Every applied run, in application order. */
   priorRuns(db: Db, id: string): PromiseLike<PriorRun[]>;
+  /**
+   * The last applied run in application order, with the applied-run count and
+   * the stored run-history summary; empty before any run is applied.
+   */
+  runHistory(db: Db, id: string): PromiseLike<LatestAppliedRun[]>;
+  /** The connection's runs among `ids`, applied or not, in no particular order. */
+  runsById(db: Db, id: string, ids: string[]): PromiseLike<OrderedRun[]>;
+  saveRunHistory(
+    db: Db,
+    id: string,
+    document: RunHistoryDocument,
+  ): PromiseLike<unknown>;
   removals(
     db: Db,
     id: string,
