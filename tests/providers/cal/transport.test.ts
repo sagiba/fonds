@@ -12,7 +12,7 @@ describe("safe CAL transport diagnostics", () => {
       new Response("<html>private-password private-account</html>", {
         headers: { "Content-Type": "text/html; private-secret=value" },
       }),
-      "invalid_response",
+      "rate_limited",
       "json_parse",
       "html",
     ],
@@ -20,8 +20,78 @@ describe("safe CAL transport diagnostics", () => {
       new Response("{private-malformed", {
         headers: { "Content-Type": "application/json" },
       }),
-      "invalid_response",
+      "rate_limited",
       "json_parse",
+      "json",
+    ],
+    // The observed refusal: an HTML 400 to a login with valid credentials.
+    [
+      new Response("<html>private-password</html>", {
+        status: 400,
+        headers: { "Content-Type": "text/html" },
+      }),
+      "rate_limited",
+      "http_status",
+      "html",
+    ],
+    [
+      Response.json({ private: "private-secret" }, { status: 400 }),
+      "rate_limited",
+      "http_status",
+      "json",
+    ],
+    [
+      new Response(null, { status: 400 }),
+      "rate_limited",
+      "http_status",
+      "other",
+    ],
+    [
+      new Response("private-unavailable", { status: 503 }),
+      "rate_limited",
+      "http_status",
+      "other",
+    ],
+    [
+      new Response("<html>private-secret</html>", {
+        status: 429,
+        headers: { "Content-Type": "text/html" },
+      }),
+      "rate_limited",
+      "http_status",
+      "html",
+    ],
+    // An explicit credential rejection stays a hard failure at any status.
+    [
+      Response.json({
+        statusCode: 2,
+        statusDescription: "שם המשתמש או הסיסמה שהוזנו שגויים",
+        private: "private-secret",
+      }),
+      "authentication_failed",
+      "authentication",
+      "json",
+    ],
+    [
+      Response.json(
+        {
+          statusCode: 2,
+          statusDescription: "שם המשתמש או הסיסמה שהוזנו שגויים",
+          private: "private-secret",
+        },
+        { status: 400 },
+      ),
+      "authentication_failed",
+      "authentication",
+      "json",
+    ],
+    [
+      Response.json(
+        { result: { requiresOtp: true }, private: "private-secret" },
+        { status: 400 },
+      ),
+      "authentication_challenge",
+      "authentication",
       "json",
     ],
     [

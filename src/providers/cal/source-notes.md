@@ -267,6 +267,25 @@ money unknown.
 - **Checks:** [extraction] "retains every native collision…", "does not expose
   installment component time…".
 
+## cal.login: refused logins
+
+- **Observed:** during a history backfill, a hosted service logged in four times
+  in 13 minutes, after five scheduled logins that day. CAL then answered the
+  login twice with HTTP 400 and an HTML body, not JSON. The same credentials
+  logged in normally about 13 hours later. Wrong-credential and challenge
+  answers recognized by [transport](transport.ts) are JSON with explicit text or
+  flags.
+- **Policy:** only an explicit challenge or credential rejection, or the
+  HTTP 401/403 already mapped, is an authentication failure. Any other error
+  status or non-JSON body stops the refresh as `rate_limited`, and so does a
+  spent login allowance when a login gave no session. The refresh layer then
+  cools down and retries once before asking for attention.
+- **Uncertainty:** CAL's throttling response, threshold and window are unknown;
+  the HTML 400 is assumed to be throttling or bot protection. A wrong password
+  answered the same way would be tried once more before the attention block.
+- **Checks:** [transport tests] "classifies rejected responses…"; [refresh
+  service] "stops a backfill softly…", "never reports logins that failed…".
+
 ## cal.pending-posted: continuation evidence
 
 - **Observed:** a read-only comparison of continuation pairs (a pending row
@@ -294,9 +313,11 @@ money unknown.
 [enrichment]: ../../../tests/providers/cal/enrichment.test.ts
 [extraction]: ../../../tests/providers/cal/extraction.test.ts
 [posting evidence tests]: ../../../tests/providers/cal/posting-evidence.test.ts
+[refresh service]: ../../../tests/runtime/refresh-service.test.ts
 [source information]: ../../../tests/providers/source-information.test.ts
 [source patterns]: ../../../tests/providers/cal/source-patterns.test.ts
 [stated text]: ../../../tests/providers/cal/stated-text.test.ts
+[transport tests]: ../../../tests/providers/cal/transport.test.ts
 [six-current]: https://www.six-group.com/dam/download/financial-information/data-center/iso-currrency/lists/list-one.xml
 [six-historic]: https://www.six-group.com/dam/download/financial-information/data-center/iso-currrency/lists/list-three.xml
 [six-174]: https://www.six-group.com/dam/download/financial-information/data-center/iso-currrency/amendments/dl-currency-iso-amendment-174.pdf

@@ -42,6 +42,92 @@ export type NotStartedReason = Exclude<SkipReason, "missed">;
 /** A finished refresh blocks the next ordinary start for this long. */
 export const REFRESH_COOLDOWN_MS = 60_000;
 
+/**
+ * After a soft provider stop, scheduled refreshes skip as `cooldown` for this
+ * long; the first one after it is the single automatic retry.
+ */
+export const SOFT_STOP_COOLDOWN_MS = 6 * 60 * 60_000;
+
+/** While attention is required, an owner's manual retry runs at most this often. */
+export const ATTENTION_RETRY_INTERVAL_MS = 60 * 60_000;
+
+/**
+ * A provider stop without a verdict on the credentials: the provider limited
+ * or refused requests. It needs no operator unless the next executed refresh
+ * of the connection stops the same way.
+ */
+export const isSoftStop = (refresh: Pick<Refresh, "providerStopReason">) =>
+  refresh.providerStopReason === "rate_limited";
+
+/** Refreshes that ran, as opposed to active or skipped ones. */
+export const isExecuted = (refresh: Pick<Refresh, "status">) =>
+  refresh.status === "completed" ||
+  refresh.status === "partial" ||
+  refresh.status === "failed";
+
+type Executed = Pick<
+  Refresh,
+  "trigger" | "finishedAt" | "requiresAttention" | "providerStopReason"
+>;
+
+/**
+ * Why the connection's last executed refresh holds back an ordinary start, if
+ * it does. An owner's manual start retries past an attention block, unless a
+ * manual refresh already met it within ATTENTION_RETRY_INTERVAL_MS; a
+ * scheduled start waits out SOFT_STOP_COOLDOWN_MS after a soft stop.
+ */
+export function admissionHold(
+  last: Executed | undefined,
+  candidate: Pick<Refresh, "trigger">,
+  now: number,
+): NotStartedReason | null {
+  if (!last) {
+    return null;
+  }
+  const since = last.finishedAt
+    ? now - Date.parse(last.finishedAt)
+    : Number.POSITIVE_INFINITY;
+  if (last.requiresAttention) {
+    const ownerRetry =
+      candidate.trigger === "manual" &&
+      !(last.trigger === "manual" && since < ATTENTION_RETRY_INTERVAL_MS);
+    return ownerRetry ? null : "requires_attention";
+  }
+  if (since < REFRESH_COOLDOWN_MS) {
+    return "cooldown";
+  }
+  return candidate.trigger === "scheduled" &&
+    isSoftStop(last) &&
+    since < SOFT_STOP_COOLDOWN_MS
+    ? "cooldown"
+    : null;
+}
+
+/**
+ * Whether a refresh finishing with `status` requires attention, given the
+ * connection's previous executed refresh: its own authentication stop, a soft
+ * stop right after another, or anything short of completion after a refresh
+ * that required attention, so only a completed retry clears a block.
+ */
+export function finalAttention(
+  finishing: Pick<
+    Refresh,
+    "status" | "requiresAttention" | "providerStopReason"
+  >,
+  previous: Executed | undefined,
+): boolean {
+  if (finishing.requiresAttention) {
+    return true;
+  }
+  if (finishing.status === "completed" || !previous) {
+    return false;
+  }
+  return (
+    previous.requiresAttention ||
+    (isSoftStop(finishing) && isSoftStop(previous))
+  );
+}
+
 /** A refresh still active this long after it was created fails as expired. */
 export const REFRESH_MAX_AGE_MS = 24 * 60 * 60_000;
 

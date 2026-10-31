@@ -172,6 +172,11 @@ export interface ProviderCollector {
   collect(options: {
     range?: CollectionRange;
     signal?: AbortSignal;
+    /**
+     * Awaited before each provider login attempt, including a renewal, so the
+     * caller can pace later logins; a rejection abandons the attempt.
+     */
+    beforeLogin?: () => Promise<void>;
   }): AsyncIterable<CollectionEvent>;
 }
 

@@ -51,6 +51,18 @@ export type RefreshDatabase = InternalStore & CollectionLock;
 /** A month window, or a recent refresh, runs at most this long. */
 export const UNIT_DEADLINE_MS = 600_000;
 
+/**
+ * Each execution logs in to the provider again; provider sessions are never
+ * stored. A budgeted execution resuming a refresh waits this long after its
+ * connection's last login attempt, so continuation slices do not log in back
+ * to back. No longer than a unit: a yielding invocation, which started its last
+ * unit with a unit's time left, can always wait it out before continuing.
+ */
+export const LOGIN_INTERVAL_MS = 600_000;
+
+/** Connection config key: when the connection last attempted a provider login. */
+const LOGIN_ATTEMPT_KEY = "providerLoginAttemptAt";
+
 /** Waits before retrying a held lease or a failed execution: past a lease's minute. */
 const RETRY_DELAYS_MS = [2_000, 4_000, 8_000, 16_000, 32_000];
 
@@ -89,11 +101,15 @@ export interface RefreshServiceOptions {
   continueLater?: () => Promise<void>;
   /** Waits before each retry of a held lease or a failed execution. */
   retryDelaysMs?: readonly number[];
+  /** The pause between a connection's logins in budgeted continuations. */
+  loginIntervalMs?: number;
+  /** Waits before a paced continuation; tests drive it with their own clock. */
+  sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   log?: (entry: object) => void;
   debugArchiveDays?: number;
 }
 
-type Outcome = "done" | "yielded" | "busy" | "interrupted";
+type Outcome = "done" | "yielded" | "paced" | "busy" | "interrupted";
 
 /** Completed when every window completed; failed when none yielded evidence. */
 function rangeStatus(statuses: readonly WindowStatus[]) {
@@ -107,15 +123,22 @@ function rangeStatus(statuses: readonly WindowStatus[]) {
     : ("failed" as const);
 }
 
-/** Reports each failure the collector emits, passing every event through. */
+/**
+ * Reports each failure the collector emits, passing every event through, and
+ * runs `beforeLogin` before each provider login it attempts.
+ */
 function watched(
   collector: ProviderCollector,
   onFailure: (code: CollectionFailure["code"]) => void,
+  beforeLogin: () => Promise<void>,
 ): ProviderCollector {
   return {
     ...collector,
     async *collect(options) {
-      for await (const event of collector.collect(options)) {
+      for await (const event of collector.collect({
+        ...options,
+        beforeLogin,
+      })) {
         if (event.type === "failure") {
           onFailure(event.failure.code);
         }
@@ -139,6 +162,10 @@ export function createRefreshService(options: RefreshServiceOptions) {
   );
   const emit = syncDiagnostics(log);
   const shutdown = options.signal ?? new AbortController().signal;
+  const loginIntervalMs = options.loginIntervalMs ?? LOGIN_INTERVAL_MS;
+  const sleep =
+    options.sleep ??
+    ((ms: number, signal: AbortSignal) => delay(ms, undefined, { signal }));
   /** Executions in this process, by refresh, until each settles. */
   const running = new Map<string, Promise<void>>();
   /** When a read last tried to continue each refresh. */
@@ -217,6 +244,47 @@ export function createRefreshService(options: RefreshServiceOptions) {
     };
   }
 
+  /** When a resumed refresh may log in again: the login interval after its connection's last login attempt. */
+  async function loginAllowedAt(refresh: Refresh) {
+    if (refresh.startedAt === null) {
+      return 0;
+    }
+    const attempted = (await store.getStoredConnection(refresh.connectionId))
+      ?.config[LOGIN_ATTEMPT_KEY];
+    return typeof attempted === "string"
+      ? Date.parse(attempted) + loginIntervalMs
+      : 0;
+  }
+
+  /** A budgeted continuation that arrived too soon after the last login. */
+  async function awaitsLoginInterval(
+    refresh: Refresh,
+    deadline: number | undefined,
+  ) {
+    return (
+      deadline !== undefined && Date.now() < (await loginAllowedAt(refresh))
+    );
+  }
+
+  /** Delays a continuation until its login is due, within this invocation's budget. */
+  async function paceContinuation(id: string, deadline: number) {
+    try {
+      const refresh = await store.getRefresh(id);
+      if (!refresh || !isActive(refresh)) {
+        return;
+      }
+      const waitMs = Math.min(
+        (await loginAllowedAt(refresh)) - Date.now(),
+        deadline - performance.now(),
+      );
+      if (waitMs > 0) {
+        await sleep(waitMs, shutdown).catch(() => {});
+      }
+    } catch {
+      // The continuation's own check paces it instead.
+    }
+  }
+
   async function run(
     locked: LockedCollectionStore,
     signal: AbortSignal,
@@ -292,6 +360,9 @@ export function createRefreshService(options: RefreshServiceOptions) {
       });
       return "done";
     }
+    if (await awaitsLoginInterval(current, deadline)) {
+      return "paced";
+    }
     let counts = current.counts;
     let requiresAttention: boolean = current.requiresAttention;
     let providerStopped = Boolean(current.providerStopReason);
@@ -356,6 +427,17 @@ export function createRefreshService(options: RefreshServiceOptions) {
         });
         return "done";
       }
+      // Recorded before provider access, so a continuation after an execution
+      // that died mid-login still waits for the login interval: once here,
+      // for a collector that reports no logins, then before each login the
+      // collector attempts, renewals included.
+      const recordLoginAttempt = async () => {
+        await locked.updateConfig(current.connectionId, (config) => ({
+          ...config,
+          [LOGIN_ATTEMPT_KEY]: new Date().toISOString(),
+        }));
+      };
+      await recordLoginAttempt();
       // Credentials are read only once this execution holds the lease.
       const collector = await target.collector();
       if (collector.provider !== target.adapter.provider) {
@@ -397,9 +479,13 @@ export function createRefreshService(options: RefreshServiceOptions) {
             ]),
             ...(window && { range: { from: window.from, to: window.to } }),
           },
-          watched(collector, (code) => {
-            stop ||= STOPPING_CODES.has(code);
-          }),
+          watched(
+            collector,
+            (code) => {
+              stop ||= STOPPING_CODES.has(code);
+            },
+            recordLoginAttempt,
+          ),
           target.adapter,
         );
         await reloadProgress();
@@ -535,7 +621,9 @@ export function createRefreshService(options: RefreshServiceOptions) {
             : final?.status === "failed"
               ? "failed"
               : "completed"
-          : outcome,
+          : outcome === "paced"
+            ? "yielded"
+            : outcome,
       durationMs: elapsedMs(started),
       ...(outcome === "busy" && { reason: "lease_busy" }),
       ...(outcome === "yielded" && { reason: "budget" }),
@@ -633,7 +721,11 @@ export function createRefreshService(options: RefreshServiceOptions) {
       for (const id of fresh) {
         if (!yielded && !shutdown.aborted) {
           const outcome = await executeWithRetries(id, deadline, retries);
-          yielded = outcome === "yielded";
+          yielded = outcome === "yielded" || outcome === "paced";
+          if (yielded && deadline !== undefined && options.continueLater) {
+            // Still marked running here, so polls start no second waiter.
+            await paceContinuation(id, deadline);
+          }
         }
         running.delete(id);
         settled.get(id)!.resolve();

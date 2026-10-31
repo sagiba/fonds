@@ -121,7 +121,7 @@ export function publicError(error: unknown) {
       : {
           code: "requires_attention",
           message:
-            "The provider needs the owner's attention. Refreshes resume after an operator retry.",
+            "The provider needs the owner's attention. A manual refresh may retry once an hour; scheduled refreshes resume after one completes.",
           status: 409 as const,
         };
   }

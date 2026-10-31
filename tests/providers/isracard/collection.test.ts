@@ -1211,12 +1211,16 @@ describe("Isracard conservative bounded collection", () => {
         }
         return original(endpoint, body, query);
       });
+      const beforeLogin = vi.fn(async () => {});
       const result = await events({
         ...options,
         session,
         callBudget,
         maxDetails: 20,
+        beforeLogin,
       });
+      // The renewal is reported to the caller before its login request.
+      expect(beforeLogin).toHaveBeenCalledOnce();
       expect(result.every((event) => event.type === "capture")).toBe(true);
       expect(result).toHaveLength(2);
       expect(request.mock.calls).toHaveLength(callBudget);

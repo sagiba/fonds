@@ -6,6 +6,7 @@ import { deliverFromStore } from "../../src/application/change-delivery.js";
 import {
   createApplication,
   inProcessInvoker,
+  publicError,
 } from "../../src/application/operations.js";
 import { createSyncDiagnosticReport } from "../../src/application/sync-diagnostics.js";
 import { NotFoundError } from "../../src/domain/errors.js";
@@ -533,6 +534,8 @@ describe("refresh service", () => {
       budgetMs: UNIT_DEADLINE_MS + 30,
       background: (work) => background.push(work),
       continueLater,
+      // Login pacing between continuations has its own test.
+      loginIntervalMs: 0,
     });
     const started = await bounded.start(connectionId, {
       trigger: "manual",
@@ -1968,6 +1971,182 @@ describe("provider sessions across a backfill", () => {
     });
   });
 
+  /** A synthetic CAL login endpoint answering every login with `login`. */
+  function refusingCal(login: () => Response | Promise<Response>) {
+    const calls = { logins: 0, other: 0 };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof globalThis.fetch>(async (input) => {
+        if (String(input) === CAL_ENDPOINTS.login) {
+          calls.logins++;
+          return login();
+        }
+        calls.other++;
+        return new Response(null, { status: 500 });
+      }),
+    );
+    return calls;
+  }
+
+  const calCollector = () =>
+    calProvider.createCollector({
+      username: "SYNTHETIC-USER",
+      password: "SYNTHETIC-PASSWORD",
+    });
+
+  it("stops a backfill softly when CAL refuses the login with HTML", async () => {
+    const cal = refusingCal(
+      () =>
+        new Response("<html>synthetic refusal</html>", {
+          status: 400,
+          headers: { "content-type": "text/html" },
+        }),
+    );
+    const refresh = await backfill(calCollector());
+    expect(cal).toEqual({ logins: 1, other: 0 });
+    expect(refresh).toMatchObject({
+      status: "failed",
+      providerStopReason: "rate_limited",
+      failureCodes: ["rate_limited"],
+      requiresAttention: false,
+      windows: [
+        { status: "failed" },
+        { status: "pending" },
+        { status: "pending" },
+      ],
+    });
+  });
+
+  it("stops a backfill softly when CAL refuses the login without a body", async () => {
+    const cal = refusingCal(() => new Response(null, { status: 400 }));
+    const refresh = await backfill(calCollector());
+    expect(cal).toEqual({ logins: 1, other: 0 });
+    expect(refresh).toMatchObject({
+      status: "failed",
+      providerStopReason: "rate_limited",
+      requiresAttention: false,
+    });
+  });
+
+  it("hard stops a backfill when CAL rejects the credentials in JSON", async () => {
+    const cal = refusingCal(() =>
+      Response.json(
+        {
+          statusCode: 2,
+          statusDescription: "שם המשתמש או הסיסמה שהוזנו שגויים",
+        },
+        { status: 400 },
+      ),
+    );
+    const refresh = await backfill(calCollector());
+    expect(cal).toEqual({ logins: 1, other: 0 });
+    expect(refresh).toMatchObject({
+      status: "failed",
+      providerStopReason: "authentication_failed",
+      requiresAttention: true,
+    });
+  });
+
+  it("never reports logins that failed without a verdict as an authentication failure", async () => {
+    const cal = refusingCal(() => {
+      throw new Error("synthetic network failure");
+    });
+    const refresh = await backfill(calCollector());
+    // Two months each try once; the third meets the spent login allowance.
+    expect(cal).toEqual({ logins: 2, other: 0 });
+    expect(refresh).toMatchObject({
+      status: "failed",
+      providerStopReason: "rate_limited",
+      failureCodes: ["network_error", "rate_limited"],
+      requiresAttention: false,
+    });
+  });
+
+  it("paces a continuation from a session renewal inside the slice, not its first login", async () => {
+    const start = Date.parse("2040-06-01T08:00:00.000Z");
+    vi.useFakeTimers({ toFake: ["Date", "performance"], now: start });
+    try {
+      const cal = syntheticCal();
+      let months = 0;
+      // Each execution builds its own collector, so it starts a new session.
+      const collector = (): ProviderCollector => {
+        const inner = calProvider.createCollector({
+          username: "SYNTHETIC-USER",
+          password: "SYNTHETIC-PASSWORD",
+        });
+        return {
+          ...inner,
+          async *collect(options) {
+            if (++months === 2) {
+              // Three minutes on, CAL rejects the session: a second login.
+              vi.advanceTimersByTime(3 * 60_000);
+              cal.expire();
+            }
+            yield* inner.collect(options);
+            if (months === 2) {
+              // Too little budget remains for the third month.
+              vi.advanceTimersByTime(3 * 60_000);
+            }
+          },
+        };
+      };
+      const targets = async () => ({
+        targets: [
+          {
+            connectionId: calConnection,
+            adapter: calProvider.adapter,
+            collector: async () => collector(),
+          },
+        ],
+        failures: 0,
+      });
+      const slice = (budgetMs: number) =>
+        createRefreshService({
+          store: db,
+          targets,
+          log: () => {},
+          retryDelaysMs: [],
+          budgetMs,
+        });
+      const first = slice(UNIT_DEADLINE_MS + 5 * 60_000);
+      const started = await first.start(calConnection, {
+        trigger: "manual",
+        range: { from: "2040-01-01", to: "2040-03-31" },
+      });
+      await first.settled();
+      expect(cal.calls.logins).toBe(2);
+      expect(
+        (await db.getStoredConnection(calConnection))!.config
+          .providerLoginAttemptAt,
+      ).toBe("2040-06-01T08:03:00.000Z");
+      expect(await db.getRefresh(started.refresh!.id)).toMatchObject({
+        status: "running",
+        windows: [
+          { status: "completed" },
+          { status: "completed" },
+          { status: "pending" },
+        ],
+      });
+      // Twelve minutes after the first login, nine after the renewal.
+      vi.setSystemTime(start + 12 * 60_000);
+      const early = slice(2 * UNIT_DEADLINE_MS);
+      await early.resumeStalled();
+      await early.settled();
+      expect(cal.calls.logins).toBe(2);
+      // Ten minutes after the renewal.
+      vi.setSystemTime(start + 13 * 60_000);
+      const due = slice(2 * UNIT_DEADLINE_MS);
+      await due.resumeStalled();
+      await due.settled();
+      expect(cal.calls.logins).toBe(3);
+      expect(await db.getRefresh(started.refresh!.id)).toMatchObject({
+        status: "completed",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("refuses a later month's response that echoes the reused token", async () => {
     syntheticCal((search) => (search === 2 ? "SYNTHETIC-TOKEN-1" : undefined));
     const refresh = await backfill(
@@ -2012,5 +2191,447 @@ describe("provider sessions across a backfill", () => {
       "SELECT metadata_json AS evidence FROM sync_runs UNION ALL SELECT snapshot_json AS evidence FROM sync_run_bodies",
     );
     expect(JSON.stringify(archived.rows)).not.toContain("SYNTHETIC-TOKEN");
+  });
+});
+
+describe("soft provider stops, attention retries and login pacing", () => {
+  let db: Database;
+  beforeEach(async () => {
+    db = await openDatabase(":memory:");
+    await db.ensureConnection({ id: connectionId, provider: "cal" });
+  });
+  afterEach(async () => {
+    await db.close();
+  });
+
+  const stop = (
+    code: "rate_limited" | "authentication_failed" | "network_error",
+  ) =>
+    ({
+      type: "failure",
+      failure: { accountKey: null, endpoint: "login", code },
+      fatal: true,
+    }) satisfies CollectionEvent;
+
+  /** A service whose collector yields what `next` names, counting executions. */
+  function scripted(
+    next: () => CollectionEvent,
+    options: Partial<RefreshServiceOptions> = {},
+  ) {
+    const executions = { count: 0 };
+    const refreshes = createRefreshService({
+      store: db,
+      targets: async () => ({
+        targets: [
+          {
+            connectionId,
+            adapter: synthetic,
+            collector: async () =>
+              source(async function* () {
+                executions.count++;
+                yield next();
+              }),
+          },
+        ],
+        failures: 0,
+      }),
+      log: () => {},
+      retryDelaysMs: [],
+      ...options,
+    });
+    return { refreshes, executions };
+  }
+
+  async function scheduled(
+    refreshes: ReturnType<typeof scripted>["refreshes"],
+  ) {
+    const [result] = await refreshes.wait([
+      await refreshes.start(connectionId, {
+        trigger: "scheduled",
+        occurrence: { key: crypto.randomUUID(), at: Date.now() },
+      }),
+    ]);
+    await refreshes.settled();
+    return result!;
+  }
+
+  /** Moves every recorded refresh, sync run and login attempt back by `minutes`. */
+  async function age(minutes: number) {
+    const earlier = (value: string) =>
+      `strftime('%Y-%m-%dT%H:%M:%fZ', ${value}, '-${minutes} minutes')`;
+    const shift = (column: string) => `${column} = ${earlier(column)}`;
+    await db.client.execute(
+      `UPDATE refreshes SET ${["created_at", "started_at", "finished_at"].map(shift).join(", ")}`,
+    );
+    await db.client.execute(`UPDATE sync_runs SET ${shift("started_at")}`);
+    const attempt = "'$.providerLoginAttemptAt'";
+    await db.client.execute(
+      `UPDATE connections SET config_json = json_set(config_json, ${attempt}, ${earlier(`json_extract(config_json, ${attempt})`)}) WHERE json_extract(config_json, ${attempt}) IS NOT NULL`,
+    );
+  }
+
+  const loginAttemptAt = async () =>
+    Date.parse(
+      String(
+        (await db.getStoredConnection(connectionId))!.config
+          .providerLoginAttemptAt,
+      ),
+    );
+
+  it("cools down after a soft stop, retries once after six hours, then needs attention", async () => {
+    const { refreshes, executions } = scripted(() => stop("rate_limited"));
+    expect((await scheduled(refreshes)).refresh).toMatchObject({
+      status: "failed",
+      providerStopReason: "rate_limited",
+      failureCodes: ["rate_limited"],
+      requiresAttention: false,
+    });
+    await age(5 * 60);
+    expect(await scheduled(refreshes)).toMatchObject({
+      reason: "cooldown",
+      refresh: {
+        status: "skipped",
+        skipReason: "cooldown",
+        requiresAttention: false,
+      },
+    });
+    expect(executions.count).toBe(1);
+    await age(61);
+    expect(await scheduled(refreshes)).toMatchObject({
+      reason: null,
+      refresh: {
+        status: "failed",
+        providerStopReason: "rate_limited",
+        requiresAttention: true,
+      },
+    });
+    expect(executions.count).toBe(2);
+    await age(7 * 60);
+    expect(await scheduled(refreshes)).toMatchObject({
+      reason: "requires_attention",
+      refresh: { status: "skipped", skipReason: "requires_attention" },
+    });
+    expect(executions.count).toBe(2);
+  });
+
+  it("resets the soft-stop count after a completed refresh", async () => {
+    const outcomes = [
+      stop("rate_limited"),
+      capture("between-soft-stops"),
+      stop("rate_limited"),
+    ];
+    const { refreshes } = scripted(() => outcomes.shift()!);
+    expect((await scheduled(refreshes)).refresh?.requiresAttention).toBe(false);
+    await age(7 * 60);
+    expect((await scheduled(refreshes)).refresh?.status).toBe("completed");
+    await age(7 * 60);
+    expect((await scheduled(refreshes)).refresh).toMatchObject({
+      status: "failed",
+      providerStopReason: "rate_limited",
+      requiresAttention: false,
+    });
+  });
+
+  it("lets one manual refresh an hour past an attention block, which only completion clears", async () => {
+    const outcomes = [
+      stop("authentication_failed"),
+      stop("network_error"),
+      capture("after-block"),
+    ];
+    const { refreshes, executions } = scripted(() => outcomes.shift()!);
+    const invoker = inProcessInvoker(
+      createApplication(db, { refreshes: ownerRefreshes(refreshes) }),
+    );
+    const manual = async () => {
+      const result = (await invoker.invoke("refresh_connection", {
+        connectionId,
+      })) as { refresh: { id: string } };
+      await refreshes.settled();
+      return db.getRefresh(result.refresh.id);
+    };
+    expect((await scheduled(refreshes)).refresh?.requiresAttention).toBe(true);
+    await age(120);
+    // A scheduled refresh stays blocked.
+    expect(await scheduled(refreshes)).toMatchObject({
+      reason: "requires_attention",
+      refresh: { status: "skipped", skipReason: "requires_attention" },
+    });
+    expect(executions.count).toBe(1);
+    // A manual refresh runs; failing without completing, it keeps the block.
+    expect(await manual()).toMatchObject({
+      trigger: "manual",
+      status: "failed",
+      failureCodes: ["network_error"],
+      requiresAttention: true,
+    });
+    expect(executions.count).toBe(2);
+    // A second manual attempt within the hour is refused.
+    await age(30);
+    const refused = await invoker
+      .invoke("refresh_connection", { connectionId })
+      .catch((error: unknown) => error);
+    expect(publicError(refused)).toMatchObject({
+      status: 409,
+      code: "requires_attention",
+    });
+    expect(executions.count).toBe(2);
+    await age(31);
+    expect(await manual()).toMatchObject({
+      status: "completed",
+      requiresAttention: false,
+    });
+    await age(2);
+    expect((await scheduled(refreshes)).reason).toBeNull();
+    expect(executions.count).toBe(4);
+  });
+
+  it("does not log in again for a continuation sooner than the login interval", async () => {
+    const start = Date.parse("2040-06-01T08:00:00.000Z");
+    vi.useFakeTimers({ toFake: ["Date", "performance"], now: start });
+    try {
+      const requested: string[] = [];
+      const sessions = { count: 0 };
+      const collector = async () => {
+        sessions.count++;
+        return source(async function* (options) {
+          requested.push(options.range!.from);
+          // Each month takes a minute.
+          vi.advanceTimersByTime(60_000);
+          yield capture(options.range!.from);
+        });
+      };
+      const targets = async () => ({
+        targets: [{ connectionId, adapter: synthetic, collector }],
+        failures: 0,
+      });
+      const waits: number[] = [];
+      let continuedAt = 0;
+      // Room for the first month only; the continuation waits out the interval.
+      const first = createRefreshService({
+        store: db,
+        targets,
+        log: () => {},
+        retryDelaysMs: [],
+        budgetMs: UNIT_DEADLINE_MS + 30_000,
+        continueLater: async () => {
+          continuedAt = Date.now();
+        },
+        sleep: async (ms) => {
+          waits.push(ms);
+          vi.advanceTimersByTime(ms);
+        },
+      });
+      const started = await first.start(connectionId, {
+        trigger: "manual",
+        range,
+      });
+      await first.settled();
+      expect(await loginAttemptAt()).toBe(start);
+      // Login at 08:00, yield at 08:01: wait nine minutes, continue at 08:10.
+      expect(waits).toEqual([9 * 60_000]);
+      expect(continuedAt).toBe(start + 10 * 60_000);
+      expect(sessions.count).toBe(1);
+      // A continuation arriving at 08:05, as a poll's can, does not log in.
+      vi.setSystemTime(start + 5 * 60_000);
+      const early = createRefreshService({
+        store: db,
+        targets,
+        log: () => {},
+        retryDelaysMs: [],
+        budgetMs: 2 * UNIT_DEADLINE_MS,
+      });
+      await early.resumeStalled();
+      await early.settled();
+      expect(sessions.count).toBe(1);
+      expect(requested).toEqual(["2040-03-01"]);
+      expect(await db.getRefresh(started.refresh!.id)).toMatchObject({
+        status: "running",
+        windows: [
+          { status: "completed" },
+          { status: "pending" },
+          { status: "pending" },
+        ],
+      });
+      vi.setSystemTime(start + 10 * 60_000);
+      await early.resumeStalled();
+      await early.settled();
+      expect(sessions.count).toBe(2);
+      expect(await db.getRefresh(started.refresh!.id)).toMatchObject({
+        status: "completed",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("admits one manual retry past an attention block across services, whatever their interleaving", async () => {
+    const { refreshes: blocker } = scripted(() =>
+      stop("authentication_failed"),
+    );
+    expect((await scheduled(blocker)).refresh?.requiresAttention).toBe(true);
+    await age(120);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let admitLate!: () => void;
+    const late = new Promise<void>((resolve) => {
+      admitLate = resolve;
+    });
+    const sessions = { count: 0 };
+    const gated = (store: RefreshServiceOptions["store"]) =>
+      createRefreshService({
+        store,
+        targets: async () => ({
+          targets: [
+            {
+              connectionId,
+              adapter: synthetic,
+              collector: async () =>
+                source(async function* () {
+                  sessions.count++;
+                  await gate;
+                  yield stop("network_error");
+                }),
+            },
+          ],
+          failures: 0,
+        }),
+        log: () => {},
+        retryDelaysMs: [],
+      });
+    // The second service's admission reaches storage only after the first
+    // refresh finished, however early its request arrived.
+    const delayedStore = new Proxy(db, {
+      get(target, property) {
+        if (property === "admitRefresh") {
+          return async (...input: Parameters<Database["admitRefresh"]>) => {
+            await late;
+            return target.admitRefresh(...input);
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const [first, second] = [gated(db), gated(delayedStore)];
+    const delayed = second.start(connectionId, { trigger: "manual" });
+    const admitted = await first.start(connectionId, { trigger: "manual" });
+    expect(admitted.reason).toBeNull();
+    expect(
+      (await gated(db).start(connectionId, { trigger: "manual" })).reason,
+    ).toBe("busy");
+    release();
+    await first.settled();
+    admitLate();
+    expect((await delayed).reason).toBe("requires_attention");
+    await second.settled();
+    expect(sessions.count).toBe(1);
+    expect(await db.getRefresh(admitted.refresh!.id)).toMatchObject({
+      status: "failed",
+      requiresAttention: true,
+    });
+  });
+
+  it("commits a finished refresh's status and attention in one write", async () => {
+    const outcomes = [stop("authentication_failed"), stop("network_error")];
+    const { refreshes } = scripted(() => outcomes.shift()!);
+    await scheduled(refreshes);
+    await age(120);
+    // Any write adding attention after the finish fails, as a crash there would.
+    await db.client.execute(
+      "CREATE TRIGGER refuse_late_attention BEFORE UPDATE ON refreshes WHEN OLD.status IN ('completed', 'partial', 'failed') AND NEW.requires_attention = 1 AND OLD.requires_attention = 0 BEGIN SELECT RAISE(ABORT, 'synthetic-late-attention'); END",
+    );
+    const retry = await refreshes.start(connectionId, { trigger: "manual" });
+    await refreshes.settled();
+    expect(await db.getRefresh(retry.refresh!.id)).toMatchObject({
+      status: "failed",
+      finishedAt: expect.any(String),
+      requiresAttention: true,
+    });
+  });
+
+  it("finds the previous executed refresh past more than fifty skips", async () => {
+    const outcomes = [
+      stop("authentication_failed"),
+      capture("after-skips"),
+      stop("rate_limited"),
+      stop("rate_limited"),
+    ];
+    const { refreshes, executions } = scripted(() => outcomes.shift()!);
+    await scheduled(refreshes);
+    await age(120);
+    for (let skip = 0; skip < 55; skip++) {
+      expect((await scheduled(refreshes)).reason).toBe("requires_attention");
+    }
+    const [manual] = await refreshes.wait([
+      await refreshes.start(connectionId, { trigger: "manual" }),
+    ]);
+    await refreshes.settled();
+    expect(manual).toMatchObject({
+      reason: null,
+      refresh: { status: "completed", requiresAttention: false },
+    });
+    await age(7 * 60);
+    expect((await scheduled(refreshes)).refresh?.requiresAttention).toBe(false);
+    await age(5);
+    for (let skip = 0; skip < 55; skip++) {
+      expect((await scheduled(refreshes)).reason).toBe("cooldown");
+    }
+    await age(7 * 60);
+    expect((await scheduled(refreshes)).refresh).toMatchObject({
+      providerStopReason: "rate_limited",
+      requiresAttention: true,
+    });
+    expect(executions.count).toBe(4);
+  });
+
+  it("paces a continuation after an execution that died before its first capture", async () => {
+    const shutdown = new AbortController();
+    const sessions = { count: 0 };
+    const collector = async () =>
+      source(async function* (options) {
+        sessions.count++;
+        // Logged in; the invocation ends before any event.
+        await new Promise((resolve) =>
+          options.signal?.addEventListener("abort", resolve, { once: true }),
+        );
+        yield capture("never-recorded");
+      });
+    const targets = async () => ({
+      targets: [{ connectionId, adapter: synthetic, collector }],
+      failures: 0,
+    });
+    const dying = createRefreshService({
+      store: db,
+      targets,
+      log: () => {},
+      retryDelaysMs: [],
+      signal: shutdown.signal,
+    });
+    const started = await dying.start(connectionId, {
+      trigger: "manual",
+      range,
+    });
+    await vi.waitFor(() => expect(sessions.count).toBe(1));
+    shutdown.abort();
+    await dying.settled();
+    // As if no event were recorded: whatever the run trail shows is old.
+    await db.client.execute(
+      "UPDATE sync_runs SET started_at = '2000-01-01T00:00:00.000Z'",
+    );
+    expect(await db.getRefresh(started.refresh!.id)).toMatchObject({
+      status: "running",
+    });
+    const continuation = createRefreshService({
+      store: db,
+      targets,
+      log: () => {},
+      retryDelaysMs: [],
+      budgetMs: 2 * UNIT_DEADLINE_MS,
+    });
+    await continuation.resumeStalled();
+    await continuation.settled();
+    expect(sessions.count).toBe(1);
   });
 });
