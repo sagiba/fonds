@@ -14,7 +14,6 @@ import {
   COVERAGE_MAX_MONTHS,
   type InternalStore,
   type TotalsGroup,
-  type TransactionSummary,
 } from "../application/financial-store.js";
 import {
   catalogPageSchema,
@@ -126,15 +125,7 @@ import type {
   RefreshRow,
   RefreshWindowRow,
   Statements,
-  SummaryRow,
 } from "./statements.js";
-
-/** The category travels as JSON text so no driver decodes the annotation. */
-function decodeSummary(row: SummaryRow): TransactionSummary {
-  const category: unknown =
-    row.category === null ? null : JSON.parse(row.category);
-  return { ...row, category: typeof category === "string" ? category : null };
-}
 
 // Keep public error identity (for example version conflicts) while classifying recovery.
 const interpretationErrors = new WeakSet<Error>();
@@ -1622,7 +1613,7 @@ function buildStore<Db>(
       );
       await checkEmpty(rows, filters.connectionId);
       return {
-        transactions: rows.slice(0, limit).map(decodeSummary),
+        transactions: rows.slice(0, limit),
         hasMore: rows.length > limit,
       };
     },
@@ -1635,9 +1626,7 @@ function buildStore<Db>(
         presentTransaction(row.row, row.annotation),
       ),
     getTransactionSummaries: async (ids) =>
-      (await byIds(ids, statements.transactionSummariesById)).map(
-        decodeSummary,
-      ),
+      byIds(ids, statements.transactionSummariesById),
     getTransaction: async (id) => {
       const row = (
         await db.execute(statements.transactionWithAnnotation(db.root, id))
@@ -1730,12 +1719,8 @@ function buildStore<Db>(
         const rank = exactInteger(row.groupRank);
         let group = groups.get(rank);
         if (!group) {
-          const key: unknown =
-            groupBy === "category" && row.groupKey !== null
-              ? JSON.parse(row.groupKey)
-              : row.groupKey;
           group = {
-            key: typeof key === "string" ? key : null,
+            key: row.groupKey,
             includedCount: 0,
             totals: [],
           };

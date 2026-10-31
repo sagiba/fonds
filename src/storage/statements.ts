@@ -129,10 +129,6 @@ export type TotalsPartRow = Omit<TotalsPart, "amountMinor" | "fxFeeMinor"> & {
   fxFeeMinor: unknown;
 };
 
-export type SummaryRow = Omit<TransactionSummary, "category"> & {
-  category: string | null;
-};
-
 /** Unexecuted Drizzle statements. The driver owns execution and transactions. */
 export interface Statements<Db> {
   cards(db: Db, connectionId: string): PromiseLike<Card[]>;
@@ -158,22 +154,23 @@ export interface Statements<Db> {
     { row: TransactionListFacts; annotation: Annotation | null }[]
   >;
   /** Summary projections of these IDs, in no particular order; at most 50 IDs. */
-  transactionSummariesById(db: Db, ids: string[]): PromiseLike<SummaryRow[]>;
+  transactionSummariesById(
+    db: Db,
+    ids: string[],
+  ): PromiseLike<TransactionSummary[]>;
   transactionListPage(
     db: Db,
     input: TransactionQuery,
   ): PromiseLike<
     { row: TransactionListFacts; annotation: Annotation | null }[]
   >;
-  /** `category` is the annotation's category as JSON text, or null. */
   transactionSummaryPage(
     db: Db,
     input: TransactionQuery,
-  ): PromiseLike<SummaryRow[]>;
+  ): PromiseLike<TransactionSummary[]>;
   /**
    * Included rows' money per group, currency and (in `spending`) basis, for
-   * the first `limit` groups by included rows then key (null last). A
-   * category key is the category's JSON text.
+   * the first `limit` groups by included rows, then key bytewise (null last).
    */
   groupedTotals(
     db: Db,

@@ -110,20 +110,6 @@ describe("grouped totals statement", () => {
   });
 });
 
-describe("category ordering statement", () => {
-  it("builds PostgreSQL backslashes with chr(92), never string literals", () => {
-    const statement = postgresGrouped(
-      postgresDrizzle.mock({ schema: postgresSchema }),
-      { ...filtersSchema.parse({}), perspective: "spending" },
-      "category",
-      501,
-    ).toSQL().sql;
-    // Literal backslashes would depend on the server's escaping settings.
-    expect(statement).not.toContain("\\");
-    expect(statement).toContain("chr(92) || 'u0000'");
-  });
-});
-
 for (const backend of backends) {
   describe(`totals aggregation: ${backend}`, () => {
     let db: Harness;
@@ -457,10 +443,10 @@ for (const backend of backends) {
       ]);
     });
 
-    it("orders tied categories by their text bytewise, not by its JSON form", async () => {
-      // Equal counts: the decoded text decides. Its JSON encoding would
-      // order these differently (an escaped quote or newline is a backslash).
-      const categories = ['"Quoted', "A", "a\nb", "a b", "x\u0000y"];
+    it("orders tied categories by their text bytewise", async () => {
+      // Equal counts: the text decides, bytewise. A JSON encoding would order
+      // these differently (an escaped quote or newline is a backslash).
+      const categories = ['"Quoted', "A", "a\nb", "a b", "legacy"];
       await insertTransactionFixture(
         db,
         categories.map((_category, index) =>
@@ -474,25 +460,46 @@ for (const backend of backends) {
           category,
         });
       }
+      // A document written before annotation text refused NUL, which no
+      // edit can write now; it is read without being parsed.
+      const legacy = (await db.getTransaction("tie-4"))!.annotation!.data;
+      await db.raw(
+        "UPDATE annotations SET data_json = ? WHERE transaction_id = ?",
+        [JSON.stringify({ ...legacy, category: "x\u0000y" }), "tie-4"],
+      );
       const filters = { merchantName: "Tied" };
       const result = (await invoke("get_transaction_totals", {
         ...filters,
         groupBy: "category",
-      })) as { groups: { key: string; includedCount: number }[] };
-      expect(result.groups.map((group) => group.key)).toEqual([
-        '"Quoted',
-        "A",
-        "a\nb",
-        "a b",
-        "x\u0000y",
+      })) as { groups: { key: string | null; includedCount: number }[] };
+      // The legacy document groups under the null key, which sorts last.
+      expect(
+        result.groups.map(({ key, includedCount }) => [key, includedCount]),
+      ).toEqual([
+        ['"Quoted', 1],
+        ["A", 1],
+        ["a\nb", 1],
+        ["a b", 1],
+        [null, 1],
       ]);
-      expect(result.groups.every((group) => group.includedCount === 1)).toBe(
-        true,
-      );
       // The cutoff keeps the first tied groups in that order.
       const cut = await db.getGroupedTotals(filters, "category", 2);
       expect(cut.groups.map((group) => group.key)).toEqual(['"Quoted', "A"]);
       expect(cut.truncated).toBe(true);
+      // Summary items read the legacy category as null too.
+      const items = (await invoke("list_transactions", {
+        ...filters,
+        view: "summary",
+      })) as { data: { id: string; category: string | null }[] };
+      expect(
+        Object.fromEntries(items.data.map((item) => [item.id, item.category])),
+      ).toEqual({
+        "tie-0": '"Quoted',
+        "tie-1": "A",
+        "tie-2": "a\nb",
+        "tie-3": "a b",
+        "tie-4": null,
+      });
     });
 
     it("sums exactly when an intermediate total passes 64 bits before rows cancel", async () => {

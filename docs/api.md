@@ -159,8 +159,7 @@ windows, or `null` before any.
 
 ## Coverage
 
-`get_connection_coverage` shows how far one connection's history reaches without
-paging it:
+`get_connection_coverage` shows one connection's history reach without paging:
 `{coverage: {connectionId, transactionCount, undatedCount, earliestDate, latestDate, months, monthsTruncated, recentRefreshCompletedAt, requiresAttention, failureCodes}}`.
 Counts and dates cover current, non-superseded rows of every perspective by
 `transactionDate`. `months` runs newest first, at most 240, from the newest to the
@@ -529,11 +528,11 @@ where `excluded` is
 
 With `groupBy` (`merchant`, `month`, `year`, `category`, `status`, `kind` or
 `card`), the result is `{groupBy, groups, truncated}` instead. Each group
-`{key, includedCount, totals}` holds the included rows of one exact key: `month`
+`{key, includedCount, totals}` holds the included rows of one key: `month`
 and `year` use the `dateRole` date, `category` the annotation's, `card` the card
-ID, and `null` collects rows without one. Its `totals` are the money groups
-above, each adding `count`, `min` and `max`. Groups run from most included rows,
-then by key; at most 500, with `truncated` when more existed. Exclusion counts and
+ID, and `null` collects rows without one. Its `totals` add `count`, `min` and `max`
+to the money groups above. Groups run from most included rows,
+then by key; at most 500, `truncated` when more existed. Exclusion counts and
 FX fees appear only ungrouped.
 
 ## Pending-to-posted matching
@@ -595,7 +594,7 @@ detailed read returns the full annotation:
 | `review`    | object or null | The owner's decision: `{status}`, `approved` or `needs_review`. The server stamps the reviewed basis (money, currency, basis and kind) internally.                                   |
 | `updatedAt` | string         | Last committed edit.                                                                                                                                                                 |
 
-The whole serialized document must fit 64 KiB.
+The whole serialized document must fit 64 KiB; notes, category and tags refuse NUL.
 
 ### Update
 

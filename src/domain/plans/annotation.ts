@@ -3,10 +3,10 @@ import { z } from "zod";
 import { ConflictError, NotFoundError } from "../errors.js";
 import {
   ANNOTATION_TAGS_MAX,
-  annotationCategorySchema,
   type AnnotationData,
+  annotationLabelInputSchema,
   annotationSchema,
-  annotationTagSchema,
+  annotationTextWithoutNul,
   jsonValueSchema,
 } from "../model.js";
 import { canonicalJson } from "../observations.js";
@@ -113,9 +113,13 @@ const editFields = {
     .positive()
     .max(Number.MAX_SAFE_INTEGER)
     .optional(),
-  notes: z.string().nullable().optional(),
-  category: annotationCategorySchema.nullable().optional(),
-  tags: z.array(annotationTagSchema).max(ANNOTATION_TAGS_MAX).optional(),
+  notes: z
+    .string()
+    .refine(annotationTextWithoutNul, "Annotation text must not contain NUL")
+    .nullable()
+    .optional(),
+  category: annotationLabelInputSchema.nullable().optional(),
+  tags: z.array(annotationLabelInputSchema).max(ANNOTATION_TAGS_MAX).optional(),
   metadata: z
     .record(z.string(), jsonValueSchema.nullable())
     .nullable()

@@ -264,25 +264,14 @@ export const transactionListPage = async (
   }));
 
 /**
- * The annotation category as JSON text, never decoding the document: a
- * category with an escaped NUL stays readable on PostgreSQL.
+ * The annotation category as text. A document holding an escaped NUL (from
+ * before annotation text refused NUL) is never parsed, because PostgreSQL
+ * cannot parse it; its category reads as null on both dialects. The check
+ * also matches an escaped backslash before "u0000", which errs to null too.
  */
 const annotationCategory = sql<
   string | null
->`nullif((${schema.annotations.data}::json -> 'category')::text, 'null')`;
-
-/**
- * The decoded category that orders category groups bytewise, with any NUL
- * removed: PostgreSQL text cannot hold NUL and decoding its escape fails. The
- * escape is dropped from the JSON text first, with escaped backslashes parked
- * on U+0001 (which JSON text always escapes) so a literal backslash-u0000 is
- * kept. Backslashes are built with chr(92), so no string-literal escaping
- * setting changes what is matched. `annotationCategory` stays the group's key
- * and transport.
- */
-const categoryOrder = sql<
-  string | null
->`(replace(replace(replace((${schema.annotations.data}::json -> 'category')::text, chr(92) || chr(92), chr(1)), chr(92) || 'u0000', ''), chr(1), chr(92) || chr(92))::json #>> '{}')`;
+>`case when position(chr(92) || 'u0000' in ${schema.annotations.data}) > 0 then null else ${schema.annotations.data}::json ->> 'category' end`;
 
 /** Summary items read only their own columns and the annotation category. */
 function summaryQuery(db: Executor) {
@@ -328,31 +317,24 @@ const dateColumns = {
   billing: schema.transactions.billingDate,
 } as const;
 
-/** A key whose own text orders groups with equal counts. */
-const ordered = (key: SQL) => ({ key, order: key });
-
-/** A group's key, and the text that orders groups with equal counts. */
-function groupKey(
-  input: TransactionQuery,
-  groupBy: TotalsGrouping,
-): { key: SQL; order: SQL } {
+function groupKey(input: TransactionQuery, groupBy: TotalsGrouping): SQL {
   const table = schema.transactions;
   const date = dateColumns[input.dateRole ?? "transaction"];
   switch (groupBy) {
     case "merchant":
-      return ordered(sql`${table.merchantName}`);
+      return sql`${table.merchantName}`;
     case "month":
-      return ordered(sql`to_char(${date}, 'YYYY-MM')`);
+      return sql`to_char(${date}, 'YYYY-MM')`;
     case "year":
-      return ordered(sql`to_char(${date}, 'YYYY')`);
+      return sql`to_char(${date}, 'YYYY')`;
     case "category":
-      return { key: annotationCategory, order: categoryOrder };
+      return annotationCategory;
     case "status":
-      return ordered(sql`${table.status}`);
+      return sql`${table.status}`;
     case "kind":
-      return ordered(sql`${table.kind}`);
+      return sql`${table.kind}`;
     case "card":
-      return ordered(sql`${table.cardId}`);
+      return sql`${table.cardId}`;
   }
 }
 
@@ -366,12 +348,10 @@ export function groupedTotals(
   groupBy: TotalsGrouping,
   limit: number,
 ) {
-  const { key, order } = groupKey(input, groupBy);
   const money = groupedMoneyColumns(
     schema.transactions,
     input.perspective,
-    key,
-    order,
+    groupKey(input, groupBy),
   );
   const rows = db
     .select(money.columns)
@@ -391,7 +371,6 @@ export function groupedTotals(
   const counted = db
     .select({
       groupKey: rows.groupKey,
-      groupOrder: rows.groupOrder,
       currency: rows.currency,
       amountBasis: rows.amountBasis,
       count: rows.count,
@@ -415,7 +394,7 @@ export function groupedTotals(
       minMinor: counted.minMinor,
       maxMinor: counted.maxMinor,
       groupRank:
-        sql<unknown>`dense_rank() over (order by ${counted.groupRows} desc, ${counted.groupOrder} collate "C" asc nulls last, ${counted.groupKey} collate "C" asc nulls last)`.as(
+        sql<unknown>`dense_rank() over (order by ${counted.groupRows} desc, ${counted.groupKey} collate "C" asc nulls last)`.as(
           "group_rank",
         ),
     })

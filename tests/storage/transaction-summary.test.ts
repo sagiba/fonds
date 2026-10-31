@@ -65,7 +65,9 @@ describe("transaction summary statement", () => {
       expect(statement).not.toContain(column);
     }
     // The annotation document is addressed, never selected whole.
-    expect(statement).not.toMatch(/"data_json"\s*(,|from)/i);
+    expect(statement).not.toMatch(
+      /(select|,)\s*("annotations"\.)?"data_json"\s*(,|from)/i,
+    );
   });
 });
 

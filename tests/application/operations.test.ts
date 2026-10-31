@@ -333,6 +333,28 @@ describe("asynchronous application storage contract", () => {
     expect(accepted.status).toBe(200);
   });
 
+  it("rejects NUL in annotation text before writing", async () => {
+    const row = (await db.listTransactions())[0]!;
+    const before = await db.getTransaction(row.id);
+    const changes = await db.listEvents();
+    for (const fields of [
+      { category: "a\u0000b" },
+      { tags: ["synthetic", "t\u0000"] },
+      { notes: "Synthetic\u0000note" },
+    ]) {
+      const response = await request(`/v1/transactions/${row.id}/annotation`, {
+        expectedVersion: 0,
+        ...fields,
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        error: { code: "invalid_input" },
+      });
+      expect(await db.getTransaction(row.id)).toEqual(before);
+      expect(await db.listEvents()).toEqual(changes);
+    }
+  });
+
   it("returns small committed annotation receipts even if later reads fail", async () => {
     const row = (await db.listTransactions())[0]!;
     const write = await request(`/v1/transactions/${row.id}/annotation`, {

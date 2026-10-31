@@ -611,6 +611,17 @@ export const annotationCategorySchema = z
   .min(1)
   .max(ANNOTATION_TEXT_MAX_LENGTH);
 export const annotationTagSchema = annotationCategorySchema;
+/**
+ * What an owner edit may write: annotation text without NUL, which PostgreSQL
+ * text cannot hold and SQL cannot project from a stored document. Stored
+ * documents written before keep their text.
+ */
+export const annotationTextWithoutNul = (value: string) =>
+  !value.includes("\u0000");
+export const annotationLabelInputSchema = annotationCategorySchema.refine(
+  annotationTextWithoutNul,
+  "Annotation text must not contain NUL",
+);
 const annotationTagsSchema = z
   .array(annotationTagSchema)
   .max(ANNOTATION_TAGS_MAX);
