@@ -249,7 +249,7 @@ for (const backend of backends) {
       ]);
     });
 
-    it("keeps whole-run empty rejection free of deferred evidence from other responses", async () => {
+    it("confines an empty rejection to its response, keeping another response's deferred evidence", async () => {
       await ingest(row("known"), 1);
       const before = await db.listTransactions();
       const cursor = await db.latestEventId();
@@ -276,13 +276,17 @@ for (const backend of backends) {
         },
         { ...adapter, rejectEmptyRecentPosted: true },
       );
+      // The other response's invalid posted row fails its partition, not the run.
       expect(result).toMatchObject({
-        status: "failed",
+        status: "partial",
         failureCode: "implausible_empty",
+        created: 0,
       });
-      expect(await db.raw("SELECT * FROM deferred_evidence")).toEqual([]);
+      expect(await db.raw("SELECT * FROM deferred_evidence")).toHaveLength(1);
       expect(await db.listTransactions()).toEqual(before);
-      expect(await db.listEvents({ after: cursor })).toEqual([]);
+      expect(
+        (await db.listEvents({ after: cursor })).map((event) => event.type),
+      ).toEqual(["sync.partial"]);
     });
 
     it("retains declared rejected evidence once without keeping raw bodies", async () => {

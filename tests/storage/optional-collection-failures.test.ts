@@ -318,35 +318,28 @@ describe.each(backends)("%s optional collection failures", (backend) => {
       coverage: decode(run.coverage),
       warnings: decode(run.warnings),
     }));
-    expect(optional).toContainEqual(
+    // One run holds the unit's failures; the broader interruption stays required work.
+    expect(optional).toEqual([
       expect.objectContaining({
         coverage: [],
-        warnings: ["authentication_challenge"],
-        snapshot: expect.objectContaining({
-          failures: [expect.objectContaining({ affectsCoverage: false })],
-        }),
-      }),
-    );
-    expect(optional).toContainEqual(
-      expect.objectContaining({
-        warnings: ["authentication_challenge"],
+        warnings: ["authentication_challenge", "authentication_challenge"],
         snapshot: expect.objectContaining({
           failures: [
-            expect.objectContaining({
+            {
+              ...optionalFailure(),
+              code: "authentication_challenge",
+              failedAt: expect.any(String),
+            },
+            {
               accountKey: null,
               endpoint: "collection",
+              code: "authentication_challenge",
               scope: { kind: "history", from: "2040-07-01", to: "2040-07-31" },
-            }),
+              failedAt: expect.any(String),
+            },
           ],
         }),
       }),
-    );
-    expect(
-      optional.some(
-        (run) =>
-          JSON.stringify(run.snapshot).includes('"endpoint":"collection"') &&
-          JSON.stringify(run.snapshot).includes('"affectsCoverage"'),
-      ),
-    ).toBe(false);
+    ]);
   });
 });

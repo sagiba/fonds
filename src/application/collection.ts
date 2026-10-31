@@ -1,5 +1,8 @@
 import type { ReconciliationFailureCode } from "../domain/model.js";
-import type { CollectionFailure } from "../domain/records.js";
+import type {
+  CollectionFailure,
+  FinancialResponse,
+} from "../domain/records.js";
 import type {
   CollectionEvent,
   CollectionRange,
@@ -27,7 +30,10 @@ export type CollectionStore = Pick<
 export interface CollectionSummary {
   status: "completed" | "partial" | "failed";
   captures: number;
-  /** Explicit collection failures plus captures with extraction failures. */
+  /**
+   * Explicit collection failures plus captures with extraction failures. A
+   * partial run of several captures counts at least one failure.
+   */
   failures: number;
   failureCodes?: ReconciliationFailureCode[];
   /** Transaction identities observed once per capture. */
@@ -36,7 +42,7 @@ export interface CollectionSummary {
   created: number;
   updated: number;
   unlisted: number;
-  /** Successful captures that caused no retained transaction content changes. */
+  /** Successful captures of runs that caused no retained transaction content changes. */
   unchanged: number;
   runIds: string[];
   requestedRange?: CollectionRange;
@@ -105,7 +111,31 @@ function coversWholeRange(
   );
 }
 
-/** Persist each response before requesting the next window; never hold years in RAM. */
+/**
+ * Bounds a run's source text at the monthly aggregate providers already stop
+ * at; a single larger response still forms its own run.
+ */
+const RUN_SOURCE_BYTES = 16 * 1024 * 1024;
+
+type Unbatched = Exclude<CollectionEvent, { type: "card_discovery" }>;
+
+/** The unit's events not yet ingested, in collector order. */
+interface Batch {
+  runId: string;
+  /** When collection met the run's first event. */
+  startedAt: string;
+  responses: FinancialResponse[];
+  failures: CollectionFailure[];
+  sourceBytes: number;
+}
+
+/**
+ * Applies a collection unit's captures and failures as one run, loading the
+ * ledger once, and starts another run only where a run cannot hold an event or
+ * would exceed its size bound. However the unit ends, what it fetched is
+ * ingested before returning; a crash before then loses only that unit's
+ * responses, which its resume requests again.
+ */
 export async function collectFromStore(
   store: CollectionStore,
   input: {
@@ -159,54 +189,49 @@ export async function collectFromStore(
   };
   diagnose({ stage: "collection", outcome: "started" });
   let acceptedRuns = 0;
-  const recordEvent = async (event: CollectionEvent) => {
-    const captureId = crypto.randomUUID();
-    const captureStarted = performance.now();
-    if (event.type === "card_discovery") {
-      await store.recordCardDiscovery(input.connectionId, event.discovery);
-      diagnose({
-        captureId,
-        stage: "capture",
-        outcome: "completed",
-        reason: "card_discovery",
-        durationMs: elapsedMs(captureStarted),
-      });
-      return;
-    }
-    const capture = event.type === "capture" ? event.capture : undefined;
+
+  let batch: Batch | undefined;
+  let lastRunStart = -Infinity;
+  /** Recovery applies pending runs in start order, so a collection's runs never share one. */
+  const runStart = (collectedAt: string) => {
+    lastRunStart = Math.max(Date.parse(collectedAt), lastRunStart + 1);
+    return new Date(lastRunStart).toISOString();
+  };
+  /** Ingests and applies one run of the unit's captures and failures. */
+  const ingest = async (
+    runId: string,
+    startedAt: string,
+    responses: FinancialResponse[],
+    failures: CollectionFailure[],
+  ) => {
+    const started = performance.now();
     diagnose({
-      captureId,
-      stage: "capture",
-      outcome: "started",
-      ...(event.type === "failure" && {
-        reason: "collection_failure",
-        failureCategory: event.failure.code,
-      }),
-    });
-    const runId = captureId;
-    diagnose({
-      captureId,
+      captureId: runId,
+      runId,
       stage: "ingest",
       outcome: "started",
       reason: "reconciliation_required",
+      counts: { captures: responses.length, failures: failures.length },
     });
     const result = await store.ingestRun(
       {
         runId,
+        startedAt,
         connectionId: input.connectionId,
         collectorVersion: collector.collectorVersion,
         ...(input.refreshId && { refreshId: input.refreshId }),
         ...(input.debugArchiveDays !== undefined && {
           debugArchiveDays: input.debugArchiveDays,
         }),
-        responses: capture ? [capture] : [],
-        failures: event.type === "failure" ? [event.failure] : [],
+        responses,
+        failures,
       },
       adapter,
       input.onDiagnostic,
     );
     diagnose({
-      captureId,
+      captureId: runId,
+      runId,
       stage: "ingest",
       outcome: result.status,
       reason: result.replayed
@@ -216,10 +241,9 @@ export async function collectFromStore(
           : "content_applied",
       ...(result.status !== "completed" && {
         failureCategory:
-          result.failureCode ??
-          (event.type === "failure" ? event.failure.code : "invalid_response"),
+          result.failureCode ?? failures[0]?.code ?? "invalid_response",
       }),
-      durationMs: elapsedMs(captureStarted),
+      durationMs: elapsedMs(started),
       counts: {
         observed: result.observed,
         unchangedTransactions: result.unchanged,
@@ -229,11 +253,22 @@ export async function collectFromStore(
       },
     });
     summary.runIds.push(runId);
-    if (capture) {
-      summary.captures++;
-    }
-    if (result.status !== "completed") {
-      summary.failures++;
+    return result;
+  };
+  /** Counts a run's result as the captures and failures it holds. */
+  const account = (
+    runId: string,
+    result: Awaited<ReturnType<typeof ingest>>,
+    responses: number,
+    failures: number,
+  ) => {
+    summary.captures += responses;
+    // A run reports one outcome: every capture of a failed run failed, and a
+    // partial run without explicit failures had at least one failed capture.
+    if (result.status === "failed") {
+      summary.failures += failures + responses;
+    } else if (result.status === "partial") {
+      summary.failures += Math.max(failures, 1);
     }
     if (result.failureCode) {
       summary.failureCodes = [
@@ -251,7 +286,7 @@ export async function collectFromStore(
     // Every observation is reconciled and receives a durable receipt, even when
     // content is unchanged; freshness and owner decisions still need processing.
     if (
-      capture &&
+      responses > 0 &&
       result.status === "completed" &&
       result.created === 0 &&
       result.updated === 0 &&
@@ -259,19 +294,116 @@ export async function collectFromStore(
       result.observed !== undefined &&
       result.unchanged === result.observed
     ) {
-      summary.unchanged++;
+      summary.unchanged += responses;
       diagnose({
-        captureId,
+        captureId: runId,
+        runId,
         stage: "observation",
         outcome: "completed",
         reason: "content_unchanged",
         counts: {
           observed: result.observed,
           unchangedTransactions: result.unchanged,
-          captures: 1,
-          unchanged: 1,
+          captures: responses,
+          unchanged: responses,
         },
       });
+    }
+  };
+  /** Ingests buffered events as one run, so the ledger is loaded once for them. */
+  const ingestBatch = async (pending: Batch) => {
+    const { runId, startedAt, responses, failures } = pending;
+    const result = await ingest(runId, startedAt, responses, failures);
+    account(runId, result, responses.length, failures.length);
+  };
+  const flush = async () => {
+    const pending = batch;
+    batch = undefined;
+    if (pending) {
+      await ingestBatch(pending);
+    }
+  };
+  /** Whether the event cannot join the current run under the run's invariants or size bound. */
+  const startsNewRun = (current: Batch, event: Unbatched, bytes: number) => {
+    if (event.type === "failure") {
+      const failure = event.failure;
+      return (
+        failure.affectsCoverage !== false &&
+        failure.accountKey !== null &&
+        current.responses.some(
+          (response) => response.accountKey === failure.accountKey,
+        )
+      );
+    }
+    const key = event.capture.accountKey;
+    return (
+      current.responses.some((response) => response.accountKey === key) ||
+      current.failures.some(
+        (failure) =>
+          failure.affectsCoverage !== false && failure.accountKey === key,
+      ) ||
+      (current.responses.length > 0 &&
+        current.sourceBytes + bytes > RUN_SOURCE_BYTES)
+    );
+  };
+  const recordEvent = async (event: CollectionEvent) => {
+    const captureId = crypto.randomUUID();
+    const captureStarted = performance.now();
+    if (event.type === "card_discovery") {
+      // Buffered captures are applied against the catalog that preceded this discovery.
+      await flush();
+      await store.recordCardDiscovery(input.connectionId, event.discovery);
+      diagnose({
+        captureId,
+        stage: "capture",
+        outcome: "completed",
+        reason: "card_discovery",
+        durationMs: elapsedMs(captureStarted),
+      });
+      return;
+    }
+    const bytes =
+      event.type === "capture"
+        ? new TextEncoder().encode(event.capture.responseText).length
+        : 0;
+    // The event joins its own run before the previous one is ingested, so a
+    // failed ingestion still leaves the event buffered for the exit path.
+    const previous =
+      batch && startsNewRun(batch, event, bytes) ? batch : undefined;
+    if (previous) {
+      batch = undefined;
+    }
+    const collectedAt = new Date().toISOString();
+    // A run is named by its first capture, so a one-event run keeps that ID.
+    batch ??= {
+      runId: captureId,
+      startedAt: runStart(collectedAt),
+      responses: [],
+      failures: [],
+      sourceBytes: 0,
+    };
+    if (event.type === "capture") {
+      batch.responses.push(event.capture);
+      batch.sourceBytes += bytes;
+    } else {
+      // Health orders a run's failures against its responses by these times.
+      batch.failures.push({
+        ...event.failure,
+        failedAt: event.failure.failedAt ?? collectedAt,
+      });
+    }
+    diagnose({
+      captureId,
+      runId: batch.runId,
+      stage: "capture",
+      outcome: "started",
+      ...(event.type === "failure" && {
+        reason: "collection_failure",
+        failureCategory: event.failure.code,
+      }),
+    });
+    if (previous) {
+      await ingestBatch(previous);
     }
   };
   const interruptionEvent = () => collectionFailure("network_error", range);
@@ -340,9 +472,10 @@ export async function collectFromStore(
   };
   try {
     await recordCollectedEvents();
-    if (summary.runIds.length === 0) {
+    if (!batch && summary.runIds.length === 0) {
       await recordEvent(collectionFailure("invalid_response", range));
     }
+    await flush();
     summary.status =
       acceptedRuns === 0
         ? "failed"
@@ -373,6 +506,13 @@ export async function collectFromStore(
       failureCategory: "persistence",
       durationMs: elapsedMs(started),
     });
+    // Collection stops, but fetched events still become a staged run that
+    // pending-run recovery applies after the earlier one; the first error wins.
+    try {
+      await flush();
+    } catch {
+      // The original persistence failure is the one reported.
+    }
     throw error;
   } finally {
     try {

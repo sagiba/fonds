@@ -369,7 +369,9 @@ describe("Isracard collection through shared storage", () => {
     ).toMatchObject({
       status: "partial",
       captures: 2,
-      failures: 3,
+      // The unit's one partial run reports its two explicit failures; its
+      // capture without the required legacy response is not counted apart.
+      failures: 2,
       created: 2,
       unlisted: 0,
     });

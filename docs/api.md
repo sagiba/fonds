@@ -169,8 +169,8 @@ A refresh records one connection's manual or scheduled provider update.
 | `missed`                               | A `missed` skip's gap `{through, count}`, from `scheduledAt` through `through`; otherwise `null`.                                                                           |
 | `windows`                              | `get_refresh` and starts only: a backfill's months, newest first, each `{from, to, status}`.                                                                                |
 
-`counts` distinguishes applied financial `captures` (including recovery), successful `unchanged` captures
-without content changes, and accepted `observed` transaction identities counted once
+`counts` distinguishes applied financial `captures` (including recovery), `unchanged` captures of
+successful, content-unchanged runs, and accepted `observed` transaction identities counted once
 per capture (overlaps repeat). `unchangedTransactions` counts unchanged observations;
 `created`, `updated`, `unlisted` count creations, content updates and absence marks.
 Counts need not partition observations. `failures` is positive when failed.

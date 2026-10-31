@@ -1093,6 +1093,7 @@ describe("CAL synthetic direct collection", () => {
         endpoint: "collection",
         code: "invalid_response",
         scope: { kind: "history", ...range },
+        failedAt: expect.any(String),
       });
       expect(
         failures.slice(0, 3).map((failure) => failure.scope?.windowFrom),

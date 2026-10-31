@@ -74,14 +74,13 @@ for (const backend of backends) {
     });
     afterEach(() => db?.close());
 
-    it("persists and applies a response before asking the adapter for its next window", async () => {
+    it("applies a unit's events as one run, starting another for a repeated account", async () => {
       const streaming: ProviderCollector = {
         provider: "cal",
         collectorVersion: "synthetic-v1",
         async *collect() {
           yield capture;
-          expect(await readRuns(db)).toHaveLength(1);
-          expect(await db.listTransactions()).toHaveLength(21);
+          expect(await readRuns(db)).toHaveLength(0);
           yield failure;
           yield capture;
         },
@@ -98,11 +97,17 @@ for (const backend of backends) {
         failures: 1,
         created: 21,
       });
-      expect(summary.runIds).toHaveLength(3);
-      expect((await readRuns(db))[0]?.snapshot.responses[0]).not.toHaveProperty(
-        "responseText",
-      );
-      expect((await readRuns(db))[0]?.collectorVersion).toBe("synthetic-v1");
+      expect(summary.runIds).toHaveLength(2);
+      const runs = await readRuns(db);
+      expect(runs.map((run) => run.id)).toEqual(summary.runIds);
+      expect(runs[0]?.snapshot.responses).toHaveLength(1);
+      expect(runs[0]?.snapshot.failures).toEqual([
+        { ...failure.failure, failedAt: expect.any(String) },
+      ]);
+      expect(runs[1]?.snapshot.responses).toHaveLength(1);
+      expect(runs[1]?.snapshot.failures).toEqual([]);
+      expect(runs[0]?.snapshot.responses[0]).not.toHaveProperty("responseText");
+      expect(runs[0]?.collectorVersion).toBe("synthetic-v1");
     });
 
     it("retains completed windows and archives a safe failure when an adapter throws secret text", async () => {
@@ -121,8 +126,15 @@ for (const backend of backends) {
       expect(JSON.stringify(runs)).not.toContain(
         "SYNTHETIC_SECRET_TOKEN_AND_BODY",
       );
-      expect(runs[1]?.snapshot.failures).toEqual([
-        { accountKey: null, endpoint: "collection", code: "network_error" },
+      expect(runs).toHaveLength(1);
+      expect(runs[0]?.snapshot.responses).toHaveLength(1);
+      expect(runs[0]?.snapshot.failures).toEqual([
+        {
+          accountKey: null,
+          endpoint: "collection",
+          code: "network_error",
+          failedAt: expect.any(String),
+        },
       ]);
     });
 
@@ -170,6 +182,8 @@ for (const backend of backends) {
         provider: "cal",
         collectorVersion: "synthetic-v1",
         async *collect() {
+          yield capture;
+          // The repeated account starts a second run, persisting the first.
           yield capture;
           advanced = true;
           yield capture;
@@ -695,7 +709,8 @@ for (const backend of backends) {
         ),
       ).toMatchObject({ status: "failed", failures: 2 });
       const runs = await readRuns(db);
-      expect(runs[1]?.snapshot.failures?.[0]).toMatchObject({
+      expect(runs).toHaveLength(1);
+      expect(runs[0]?.snapshot.failures?.[1]).toMatchObject({
         accountKey: null,
         endpoint: "collection",
         scope: { kind: "history", ...range },
