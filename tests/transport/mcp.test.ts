@@ -196,13 +196,11 @@ describe("MCP SDK v2 over HTTP", () => {
           inputSchema: { type: "object", additionalProperties: false },
           outputSchema: { type: "object", additionalProperties: false },
           annotations: {
-            // Only a read that can continue an abandoned refresh changes
-            // state or reaches the provider.
-            readOnlyHint:
-              operation.name !== "get_refresh" && operation.access === "read",
+            // Every read, refresh reads included, is pure and stays inside Fonds.
+            readOnlyHint: operation.access === "read",
             destructiveHint: operation.access === "write",
             idempotentHint: operation.access === "read",
-            openWorldHint: operation.name === "get_refresh",
+            openWorldHint: false,
           },
         });
       }

@@ -19,6 +19,7 @@ import {
   syncDiagnosticSchema,
 } from "../application/sync-diagnostics.js";
 import { FONDS_VERSION } from "../application/version.js";
+import { presentRefreshResume } from "../application/wire-output.js";
 import { CredentialInputError } from "../domain/credentials.js";
 import { refreshFailureCodeSchema } from "../domain/model.js";
 import { ProviderConfigurationError } from "../domain/source-adapter.js";
@@ -73,7 +74,7 @@ import {
   runOperationCli,
 } from "./operation-cli.js";
 import { runtimeProvider, supportedProviders } from "./providers.js";
-import { runOperatorRefresh } from "./refresh-service.js";
+import { runOperatorRefresh, runOperatorResume } from "./refresh-service.js";
 import { StateError } from "./state.js";
 
 /** Every entry point's exit codes. */
@@ -602,6 +603,81 @@ export const operatorCommands: readonly OperatorCommand[] = [
     },
   },
   {
+    name: "resume",
+    summary: "Continue an unfinished refresh",
+    synopsis: ["--refresh <id> [--credentials-fd <number>]"],
+    example: ["--refresh", "REFRESH_ID"],
+    description:
+      "Continue one pending or running refresh whose process stopped, in the foreground, under the same lease as the server's: the same refresh and range, requesting only its unfinished months. It never starts a new refresh or reopens a finished one, and a recorded provider stop still ends it. Credentials come as for refresh, read only when it reaches the provider; a refresh that cannot get them fails. Prints the refresh with outcome terminal once it finished, held with retryAt when a recent provider login defers it, or accepted when another process holds it or it was interrupted.",
+    options: {
+      refresh: { type: "string" },
+      "credentials-fd": { type: "string" },
+    },
+    stdout: "result",
+    async run(context) {
+      const refreshId = required(context.values, "refresh");
+      let credentialFailure: unknown;
+      const { credentialFd } = collectionControls({
+        "credentials-fd": text(context.values, "credentials-fd"),
+      });
+      const result = await withSession(
+        context,
+        { create: false, credentials: true },
+        async (session) => {
+          const refresh = await session.store.getRefresh(refreshId);
+          if (!refresh) {
+            throw new CommandInputError(
+              "Refresh not found; list-refreshes shows a connection's refreshes.",
+            );
+          }
+          // Credentials are read only if execution reaches the provider:
+          // expiry, a recorded stop and login pacing need none.
+          const target = isActive(refresh)
+            ? await connectionTarget(context, session, refresh.connectionId, {
+                options: {},
+                credentialFd,
+                deferCredentials: true,
+              })
+            : undefined;
+          const resumed = await runOperatorResume({
+            store: session.store,
+            targets: async () => ({
+              targets: target
+                ? [
+                    {
+                      ...target,
+                      collector: () =>
+                        target.collector().catch((error: unknown) => {
+                          credentialFailure = error;
+                          throw error;
+                        }),
+                    },
+                  ]
+                : [],
+              failures: 0,
+            }),
+            refreshId,
+          });
+          session.verify?.();
+          return resumed;
+        },
+      );
+      // The resume_refresh result; it has no terminal view.
+      process.stdout.write(
+        present(context.p, presentRefreshResume(result), undefined),
+      );
+      if (credentialFailure !== undefined) {
+        // The refresh records a fixed failure; the operator learns why.
+        process.stderr.write(
+          `${errorMessage(credentialFailure, context.backend)}\n`,
+        );
+      }
+      return result.outcome === "terminal"
+        ? collectionExitCode(result.refresh.status)
+        : EXIT_CODES.failed;
+    },
+  },
+  {
     name: "consume",
     summary: "Deliver the change feed as JSON lines",
     synopsis: ["--connection <id> --consumer <id> [--limit <count>]"],
@@ -851,6 +927,8 @@ async function connectionTarget(
   input: {
     options: ReturnType<typeof collectionControls>["options"];
     credentialFd: number | undefined;
+    /** Reads or prompts for credentials only when execution needs the collector. */
+    deferCredentials?: boolean;
   },
 ): Promise<CollectionTarget> {
   const connection = await session.store.getConnection(connectionId);
@@ -861,29 +939,33 @@ async function connectionTarget(
   }
   const provider = runtimeProvider(connection.provider);
   provider.validateCollectionOptions(input.options);
-  let credentials;
-  if (
-    input.credentialFd === undefined &&
-    (await session.credentials.getCredentials(connection.id))
-  ) {
-    credentials = await createCredentialVault(
-      session.credentials,
-      session.credentialsKey,
-    ).load(connection);
-  }
-  credentials ??= await loadCredentials({
-    ...(input.credentialFd !== undefined && { fd: input.credentialFd }),
-    ...(context.backend.forbiddenDirectory && {
-      forbiddenDirectory: context.backend.forbiddenDirectory,
-    }),
-    input: provider.credentials,
-    connection,
-  });
-  const loaded = credentials;
+  const load = async () => {
+    const stored =
+      input.credentialFd === undefined &&
+      (await session.credentials.getCredentials(connection.id))
+        ? await createCredentialVault(
+            session.credentials,
+            session.credentialsKey,
+          ).load(connection)
+        : undefined;
+    return (
+      stored ??
+      loadCredentials({
+        ...(input.credentialFd !== undefined && { fd: input.credentialFd }),
+        ...(context.backend.forbiddenDirectory && {
+          forbiddenDirectory: context.backend.forbiddenDirectory,
+        }),
+        input: provider.credentials,
+        connection,
+      })
+    );
+  };
+  const loaded = input.deferCredentials ? undefined : await load();
   return {
     connectionId: connection.id,
     adapter: provider.adapter,
-    collector: async () => provider.createCollector(loaded, input.options),
+    collector: async () =>
+      provider.createCollector(loaded ?? (await load()), input.options),
   };
 }
 

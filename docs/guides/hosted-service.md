@@ -143,7 +143,10 @@ their grants. The SQLite server and the PostgreSQL loopback launcher offer the
 same refreshes and Events behind their bearer token. Starting any launcher never
 refreshes by itself, apart from resuming refreshes a stopped process left active.
 A lost or expired client request is not proof the provider work did not run;
-list the connection's refreshes before retrying.
+list the connection's refreshes before retrying. Reads and new starts never
+continue an active refresh; a scheduler tick, trigger call, `resume_refresh` or
+`fonds resume --refresh <id>` does. Without ticks, as on Neon without a
+schedule, only a resume continues it or records its expiry.
 
 A rate limit, or a login refused without a credential verdict, stops the
 refresh as `rate_limited`: scheduled refreshes skip as `cooldown` for six hours,
@@ -155,8 +158,9 @@ block and its end. Owners may retry manually once an hour, or POST `{}` to
 `Authorization: Bearer <FONDS_REFRESH_SECRET>`, or run
 `fonds refresh --connection …`. That route refreshes every target past the
 block and cooldown, calling each provider, wrapped by
-`neon:smoke --refresh`. A continuation slice logs in again only ten minutes
-after the previous slice's login attempt. An `implausible_empty` rejection
+`neon:smoke --refresh`. A resumed refresh logs in only ten minutes after the
+connection's previous login attempt, however it resumed; a sooner resume
+answers `held`. An `implausible_empty` rejection
 ([design](../design.md#identity-corrections-and-absence)) is logged in
 `fonds_refresh` but sets no attention block: the cooldown still applies, and
 a scheduled refresh can retry. The [provider guides](../README.md#providers)

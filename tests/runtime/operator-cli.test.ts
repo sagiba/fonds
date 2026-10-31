@@ -27,6 +27,7 @@ import {
   postgresBackend,
   runPostgresCommand,
 } from "../../src/runtime/postgres-cli.js";
+import { openDatabase } from "../../src/storage/sqlite/database.js";
 
 const collected = vi.hoisted(() => ({ connections: [] as unknown[] }));
 
@@ -527,6 +528,162 @@ describe("collect on SQLite", () => {
         stderr: "--archive-days must be an integer from 1 through 30.\n",
       });
     }
+  });
+
+  it("resumes an abandoned refresh in the foreground, which refresh leaves alone", async () => {
+    await seedConnection("first", "cal");
+    await connect("first", "INVENTED-RESUMED");
+    const createdAt = new Date().toISOString();
+    const store = await openDatabase(dbPath);
+    try {
+      await store.admitRefresh(
+        {
+          id: "abandoned",
+          connectionId: "first",
+          trigger: "manual",
+          status: "running",
+          skipReason: null,
+          range: null,
+          occurrence: null,
+          scheduledAt: null,
+          createdAt,
+          startedAt: createdAt,
+          finishedAt: null,
+          requiresAttention: false,
+          counts: {
+            captures: 0,
+            unchanged: 0,
+            observed: 0,
+            unchangedTransactions: 0,
+            unlisted: 0,
+            failures: 0,
+            created: 0,
+            updated: 0,
+          },
+          failureCodes: [],
+          failureReason: null,
+          missed: null,
+          windows: [],
+        },
+        { operator: true, now: Date.now() },
+      );
+    } finally {
+      await store.close();
+    }
+    const busy = await run("refresh", "--connection", "first");
+    expect(busy.status).toBe(EXIT_CODES.failed);
+    expect(collectionSummarySchema.parse(JSON.parse(busy.stdout)).status).toBe(
+      "busy",
+    );
+    expect(collected.connections).toEqual([]);
+    const resumed = await run("resume", "--refresh", "abandoned");
+    expect(resumed).toMatchObject({ status: EXIT_CODES.ok, stderr: "" });
+    expect(JSON.parse(resumed.stdout)).toMatchObject({
+      outcome: "terminal",
+      retryAt: null,
+      refresh: { id: "abandoned", status: "completed", createdAt },
+    });
+    expect(collected.connections).toHaveLength(1);
+    expect(resumed.stdout).not.toContain("INVENTED");
+    // A finished refresh is answered as it is, without credentials or collection.
+    expect(
+      JSON.parse((await run("resume", "--refresh", "abandoned")).stdout),
+    ).toMatchObject({ outcome: "terminal", refresh: { status: "completed" } });
+    expect(collected.connections).toHaveLength(1);
+    expect(await run("resume", "--refresh", "missing")).toEqual({
+      status: EXIT_CODES.failed,
+      stdout: "",
+      stderr:
+        "Refresh not found; list-refreshes shows a connection's refreshes.\n",
+    });
+  });
+
+  it("resumes overdue, stopped and paced refreshes without credentials, and fails a due one that has none", async () => {
+    // A connection whose credentials were never saved.
+    await seedConnection("first", "cal");
+    const hour = 60 * 60_000;
+    const at = (offset: number) => new Date(Date.now() + offset).toISOString();
+    const active = (id: string, createdAt: string, extra: object = {}) => ({
+      id,
+      connectionId: "first",
+      trigger: "manual" as const,
+      status: "running" as const,
+      skipReason: null,
+      range: null,
+      occurrence: null,
+      scheduledAt: null,
+      createdAt,
+      startedAt: createdAt,
+      finishedAt: null,
+      requiresAttention: false,
+      counts: {
+        captures: 0,
+        unchanged: 0,
+        observed: 0,
+        unchangedTransactions: 0,
+        unlisted: 0,
+        failures: 0,
+        created: 0,
+        updated: 0,
+      },
+      failureCodes: [],
+      failureReason: null,
+      missed: null,
+      windows: [],
+      ...extra,
+    });
+    const store = await openDatabase(dbPath);
+    const admit = (refresh: ReturnType<typeof active>) =>
+      store.admitRefresh(refresh, { operator: true, now: Date.now() });
+    try {
+      await admit(active("overdue", at(-25 * hour)));
+      expect(
+        JSON.parse((await run("resume", "--refresh", "overdue")).stdout),
+      ).toMatchObject({
+        outcome: "terminal",
+        refresh: { status: "failed", failureReason: "expired" },
+      });
+      await admit(
+        active("stopped", at(-hour), { providerStopReason: "rate_limited" }),
+      );
+      const stopped = await run("resume", "--refresh", "stopped");
+      expect(stopped).toMatchObject({ status: EXIT_CODES.failed, stderr: "" });
+      expect(JSON.parse(stopped.stdout)).toMatchObject({
+        outcome: "terminal",
+        refresh: { status: "failed" },
+      });
+      // The connection logged in a minute ago.
+      await store.updateConfig("first", (config) => ({
+        ...config,
+        providerLoginAttemptAt: at(-60_000),
+      }));
+      await admit(active("paced", at(-hour)));
+      const paced = await run("resume", "--refresh", "paced");
+      expect(paced).toMatchObject({ status: EXIT_CODES.failed, stderr: "" });
+      expect(JSON.parse(paced.stdout)).toMatchObject({
+        outcome: "held",
+        retryAt: expect.any(String),
+        refresh: { id: "paced", status: "running" },
+      });
+      // Once due, it needs credentials: without them it fails, saying why.
+      await store.updateConfig("first", (config) => ({
+        ...config,
+        providerLoginAttemptAt: at(-hour),
+      }));
+      const due = await run("resume", "--refresh", "paced");
+      expect(due).toMatchObject({
+        status: EXIT_CODES.failed,
+        stderr:
+          "Credentials require an interactive terminal or --credentials-fd.\n",
+      });
+      expect(JSON.parse(due.stdout)).toMatchObject({
+        outcome: "terminal",
+        refresh: { id: "paced", status: "failed" },
+      });
+    } finally {
+      await store.close();
+    }
+    expect(collected.connections).toEqual([]);
   });
 
   it("summarizes every refresh's failure codes as one sorted list", async () => {

@@ -60,7 +60,7 @@ const remoteErrors: Readonly<Record<string, string>> = {
   unauthorized: "Authentication required.",
   forbidden: "Permission denied.",
   refresh_in_progress:
-    "A refresh of this connection is already running. Read it with list_refreshes.",
+    "A refresh of this connection is already running. Read it with list_refreshes; resume_refresh continues it.",
   requires_attention:
     "The provider needs the owner's attention. A manual refresh may retry once an hour; scheduled refreshes resume after one completes.",
   internal_error: "Operation failed.",

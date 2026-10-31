@@ -346,6 +346,11 @@ describe("operation commands", () => {
       refreshes: {
         start: async () => refreshed,
         startAll: async () => [refreshed],
+        resume: async () => ({
+          refresh: refreshed.refresh!,
+          outcome: "terminal" as const,
+          retryAt: null,
+        }),
       },
     };
     const service = createHttpService(
@@ -537,6 +542,23 @@ describe("operation commands", () => {
           cliPath,
           "--connection-id",
           "synthetic-cli",
+        ),
+      ).toMatchObject({
+        status: 1,
+        stderr: "This operation is not available on this backend.\n",
+      });
+      exercised.add("resume_refresh");
+      const resumed = { refreshId: "synthetic-refresh" };
+      expect(await rest.invoke("resume_refresh", resumed)).toEqual(
+        await direct.invoke("resume_refresh", resumed),
+      );
+      expect(
+        await cli(
+          "resume-refresh",
+          "--db",
+          cliPath,
+          "--refresh-id",
+          "synthetic-refresh",
         ),
       ).toMatchObject({
         status: 1,

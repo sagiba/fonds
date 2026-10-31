@@ -570,6 +570,91 @@ describe.each(backends)("operations parity on %s", (backend) => {
       });
     });
 
+    it("resumes an abandoned refresh in one worker when two services and a scheduler tick race, and after a crashed holder's lease expires", async () => {
+      const id = randomUUID();
+      const now = new Date().toISOString();
+      await db.admitRefresh(
+        {
+          id,
+          connectionId,
+          trigger: "manual",
+          status: "running",
+          skipReason: null,
+          range: { from: "2040-01-01", to: "2040-01-31" },
+          occurrence: null,
+          scheduledAt: null,
+          createdAt: now,
+          startedAt: now,
+          finishedAt: null,
+          requiresAttention: false,
+          counts: {
+            captures: 0,
+            observed: 0,
+            unchangedTransactions: 0,
+            unlisted: 0,
+            unchanged: 0,
+            failures: 0,
+            created: 0,
+            updated: 0,
+          },
+          failureCodes: [],
+          failureReason: null,
+          missed: null,
+          windows: [
+            { from: "2040-01-01", to: "2040-01-31", status: "running" },
+          ],
+        },
+        { operator: true, now: Date.now() },
+      );
+      // A holder that crashed mid-run: its lease lapses on its own.
+      const clock =
+        backend === "postgres"
+          ? "(extract(epoch from clock_timestamp())*1000)::bigint"
+          : "cast((julianday('now')-2440587.5)*86400000 as integer)";
+      await db.raw(
+        `INSERT INTO collection_leases(connection_id,holder,expires_at) VALUES(?,'synthetic-crashed',${clock}+400)`,
+        [connectionId],
+      );
+      const { source, ready, release } = paused();
+      const first = service({ [connectionId]: source });
+      expect(await first.resume(id, 2_000)).toMatchObject({
+        outcome: "accepted",
+        refresh: { id, status: "running" },
+      });
+      await first.settled();
+      expect(source.calls).toBe(0);
+      await sleep(600);
+      expect(await first.resume(id, 0)).toMatchObject({ outcome: "accepted" });
+      await ready;
+      const second = service(
+        { [connectionId]: source },
+        { store: await peer() },
+      );
+      const tick = service({ [connectionId]: source });
+      expect(await second.resume(id, 2_000)).toMatchObject({
+        outcome: "accepted",
+      });
+      await tick.resumeStalled();
+      await Promise.all([second.settled(), tick.settled()]);
+      expect(source.calls).toBe(1);
+      release();
+      await first.settled();
+      expect(await second.resume(id)).toMatchObject({
+        outcome: "terminal",
+        refresh: {
+          id,
+          status: "completed",
+          windows: [{ status: "completed" }],
+        },
+      });
+      expect(source.calls).toBe(1);
+      expect(
+        (await db.listRefreshes(connectionId, { limit: 10 })).map(
+          (refresh) => refresh.id,
+        ),
+      ).toEqual([id]);
+    });
+
     it("publishes one sorted list of the failure codes every window committed, across a resume", async () => {
       const detailFailure: CollectionEvent = {
         type: "failure",
@@ -647,6 +732,7 @@ describe.each(backends)("operations parity on %s", (backend) => {
         targets,
         log: () => {},
         retryDelaysMs: [],
+        loginIntervalMs: 0,
       });
       await continued.resumeStalled();
       await continued.settled();

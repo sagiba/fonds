@@ -229,6 +229,19 @@ export interface RefreshStartResult {
   reason: SkipReason | null;
 }
 
+/** What resuming an existing refresh did, once its bounded wait ended. */
+export interface RefreshResumeResult {
+  refresh: Refresh;
+  /**
+   * `accepted`: execution was requested or is already underway, which does
+   * not certify it will finish; `held`: the login interval defers it;
+   * `terminal`: it is finished, and was not reopened.
+   */
+  outcome: "accepted" | "held" | "terminal";
+  /** For `held`, the earliest known time it may log in; advisory, never a reservation. */
+  retryAt: string | null;
+}
+
 /** What admitting a refresh did. */
 export type Admission =
   | { reason: null; created: Refresh }

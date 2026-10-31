@@ -10,9 +10,11 @@ import {
 } from "../../src/application/operations.js";
 import type {
   Refresh,
+  RefreshResumeResult,
   RefreshStartResult,
 } from "../../src/application/refreshes.js";
 import { presentRefresh } from "../../src/application/wire-output.js";
+import { NotFoundError } from "../../src/domain/errors.js";
 import {
   type Database,
   openDatabase,
@@ -389,17 +391,19 @@ describe("optional owner refresh interfaces and request diagnostics", () => {
     expect(
       tools.find((tool) => tool.name === "refresh_connection")?.annotations,
     ).toMatchObject({ readOnlyHint: false, openWorldHint: true });
-    // Reading an abandoned refresh continues it; listing never does.
-    expect(
-      tools.find((tool) => tool.name === "get_refresh")?.annotations,
-    ).toMatchObject({
-      readOnlyHint: false,
-      destructiveHint: false,
-      openWorldHint: true,
-    });
-    expect(
-      tools.find((tool) => tool.name === "list_refreshes")?.annotations,
-    ).toMatchObject({ readOnlyHint: true, openWorldHint: false });
+    // Refresh reads only read; continuing a refresh is resume_refresh.
+    for (const name of ["get_refresh", "list_refreshes"]) {
+      expect(
+        tools.find((tool) => tool.name === name)?.annotations,
+      ).toStrictEqual({
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      });
+    }
+    // Without a resume capability there is no resume tool.
+    expect(tools.some((tool) => tool.name === "resume_refresh")).toBe(false);
     // It still needs only financial:read: a missing refresh, not a forbidden call.
     expect(
       await read.callTool({
@@ -446,6 +450,131 @@ describe("optional owner refresh interfaces and request diagnostics", () => {
         arguments: { connectionId },
       }),
     ).toMatchObject({ structuredContent: { data: [], hasMore: false } });
+  });
+
+  it("resumes with write permission over REST and MCP: 202 when accepted, 200 when held or finished, 404 when unknown", async () => {
+    const held: RefreshResumeResult = {
+      refresh: refresh("running"),
+      outcome: "held",
+      retryAt: "2040-01-01T00:10:00.000Z",
+    };
+    const resume = vi.fn(async (refreshId: string) => {
+      if (refreshId === "missing") {
+        throw new NotFoundError("Refresh not found");
+      }
+      return held;
+    });
+    const start = vi.fn();
+    const startAll = vi.fn();
+    const { request, service } = setup({
+      refreshes: { start, startAll, resume },
+    });
+    const path = "/v1/refreshes/synthetic-refresh/resume";
+    expect((await request(path, "read", {})).status).toBe(403);
+    expect(resume).not.toHaveBeenCalled();
+    resume.mockResolvedValueOnce({
+      refresh: refresh("running"),
+      outcome: "accepted",
+      retryAt: null,
+    });
+    const accepted = await request(path, "write", {});
+    expect(accepted.status).toBe(202);
+    expect(await accepted.json()).toEqual({
+      refresh: { ...wire("running"), windows: [] },
+      outcome: "accepted",
+      retryAt: null,
+    });
+    expect(resume).toHaveBeenLastCalledWith("synthetic-refresh");
+    const deferred = await request(path, "write", {});
+    expect(deferred.status).toBe(200);
+    expect(await deferred.json()).toEqual({
+      refresh: { ...wire("running"), windows: [] },
+      outcome: "held",
+      retryAt: "2040-01-01T00:10:00.000Z",
+    });
+    resume.mockResolvedValueOnce({
+      refresh: refresh("completed"),
+      outcome: "terminal",
+      retryAt: null,
+    });
+    const finished = await request(path, "write", {});
+    expect(finished.status).toBe(200);
+    expect(await finished.json()).toMatchObject({
+      refresh: { status: "completed" },
+      outcome: "terminal",
+    });
+    const unknown = await request("/v1/refreshes/missing/resume", "write", {});
+    expect(unknown.status).toBe(404);
+    expect((await unknown.json()).error.code).toBe("not_found");
+    // Resume takes only the refresh: no range, force or override.
+    for (const body of [
+      { from: "2040-01-01", to: "2040-01-31" },
+      { refreshId: "other" },
+      { operator: true },
+    ]) {
+      expect((await request(path, "write", body)).status).toBe(400);
+    }
+    expect(start).not.toHaveBeenCalled();
+    expect(startAll).not.toHaveBeenCalled();
+
+    const connect = async (bearer: string) => {
+      const client = new Client({ name: "synthetic-resume", version: "1" });
+      clients.push(client);
+      await client.connect(
+        new StreamableHTTPClientTransport(new URL(`${origin}/mcp`), {
+          fetch: async (input, init) => {
+            const forwarded = new Request(input, init);
+            forwarded.headers.set("authorization", `Bearer ${bearer}`);
+            return service.app.fetch(forwarded);
+          },
+        }),
+      );
+      return client;
+    };
+    const read = await connect("read");
+    expect(
+      (await read.listTools()).tools.find(
+        (tool) => tool.name === "resume_refresh",
+      )?.annotations,
+    ).toStrictEqual({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    });
+    const calls = resume.mock.calls.length;
+    expect(
+      await read.callTool({
+        name: "resume_refresh",
+        arguments: { refreshId: "synthetic-refresh" },
+      }),
+    ).toMatchObject({
+      isError: true,
+      structuredContent: { error: { code: "forbidden" } },
+    });
+    expect(resume.mock.calls.length).toBe(calls);
+    const write = await connect("write");
+    expect(
+      await write.callTool({
+        name: "resume_refresh",
+        arguments: { refreshId: "synthetic-refresh" },
+      }),
+    ).toMatchObject({
+      structuredContent: {
+        refresh: { id: "synthetic-refresh", status: "running" },
+        outcome: "held",
+        retryAt: "2040-01-01T00:10:00.000Z",
+      },
+    });
+    expect(
+      await write.callTool({
+        name: "resume_refresh",
+        arguments: { refreshId: "missing" },
+      }),
+    ).toMatchObject({
+      isError: true,
+      structuredContent: { error: { code: "not_found" } },
+    });
   });
 
   it("logs only registered route patterns and fixed request metadata, including error status", async () => {

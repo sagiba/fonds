@@ -45,6 +45,7 @@ const expectedScopes = {
   list_sync_runs: "financial:read",
   update_annotation: "financial:write",
   refresh_connection: "financial:write",
+  resume_refresh: "financial:write",
   get_refresh: "financial:read",
   list_refreshes: "financial:read",
   undo_annotation: "financial:write",
@@ -70,6 +71,7 @@ const routes = [
   ["refresh_connection", "POST", "/v1/connections/synthetic/refreshes"],
   ["refresh_connection", "POST", "/v1/refreshes"],
   ["get_refresh", "GET", "/v1/refreshes/synthetic"],
+  ["resume_refresh", "POST", "/v1/refreshes/synthetic/resume"],
   ["list_refreshes", "GET", "/v1/connections/synthetic/refreshes"],
   ["undo_annotation", "POST", "/v1/annotations/undo"],
   [
@@ -442,6 +444,7 @@ describe("operation scopes", () => {
         refreshes: {
           start: vi.fn(),
           startAll: vi.fn(),
+          resume: vi.fn(),
         },
       });
       expect(

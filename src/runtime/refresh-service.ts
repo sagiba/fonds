@@ -20,6 +20,7 @@ import {
   type Refresh,
   REFRESH_MAX_AGE_MS,
   type RefreshEstimate,
+  type RefreshResumeResult,
   type RefreshStartResult,
   type RefreshTrigger,
   skippedRefresh,
@@ -54,10 +55,11 @@ export const UNIT_DEADLINE_MS = 600_000;
 
 /**
  * Each execution logs in to the provider again; provider sessions are never
- * stored. A budgeted execution resuming a refresh waits this long after its
- * connection's last login attempt, so continuation slices do not log in back
- * to back. No longer than a unit: a yielding invocation, which started its last
- * unit with a unit's time left, can always wait it out before continuing.
+ * stored. An execution resuming a refresh, whatever triggered it and whether
+ * or not its host bounds invocations, waits this long after its connection's
+ * last login attempt, so resumptions do not log in back to back. No longer
+ * than a unit: a yielding invocation, which started its last unit with a
+ * unit's time left, can always wait it out before continuing.
  */
 export const LOGIN_INTERVAL_MS = 600_000;
 
@@ -66,9 +68,6 @@ const LOGIN_ATTEMPT_KEY = "providerLoginAttemptAt";
 
 /** Waits before retrying a held lease or a failed execution: past a lease's minute. */
 const RETRY_DELAYS_MS = [2_000, 4_000, 8_000, 16_000, 32_000];
-
-/** A read continues a refresh at most this often per process. */
-const RECOVERY_INTERVAL_MS = 30_000;
 
 /** Failures after which no further window of the refresh is requested. */
 const STOPPING_CODES: ReadonlySet<CollectionFailure["code"]> = new Set(
@@ -102,7 +101,7 @@ export interface RefreshServiceOptions {
   continueLater?: () => Promise<void>;
   /** Waits before each retry of a held lease or a failed execution. */
   retryDelaysMs?: readonly number[];
-  /** The pause between a connection's logins in budgeted continuations. */
+  /** The pause between a connection's logins when a refresh resumes. */
   loginIntervalMs?: number;
   /** Waits before a paced continuation; tests drive it with their own clock. */
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
@@ -111,6 +110,32 @@ export interface RefreshServiceOptions {
 }
 
 type Outcome = "done" | "yielded" | "paced" | "busy" | "interrupted";
+
+/** One execution in this process: its outcome, then its settling. */
+interface Execution {
+  /** Undefined when the execution never ran, as after an earlier yield. */
+  outcome: Promise<Outcome | "error" | undefined>;
+  /** Resolves once a paced continuation has waited, too. */
+  settled: Promise<void>;
+}
+
+/** Resolves to `work`'s value, or to undefined after `ms`. */
+async function within<T>(work: Promise<T>, ms: number | undefined) {
+  if (ms === undefined) {
+    return work;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** Completed when every window completed; failed when none yielded evidence. */
 function rangeStatus(statuses: readonly WindowStatus[]) {
@@ -153,8 +178,8 @@ function watched(
  * Starts, executes and resumes refreshes on any backend. A start records the
  * refresh and returns at once; execution takes the connection's collection
  * lease, so it runs once across processes, and checkpoints each month of a
- * ranged refresh. A crashed, interrupted or yielded refresh stays active and
- * `resumeStalled` continues it, redoing only its unfinished months.
+ * ranged refresh. A crashed, interrupted or yielded refresh stays active until
+ * `resumeStalled` or `resume` continues it, redoing only its unfinished months.
  */
 export function createRefreshService(options: RefreshServiceOptions) {
   const { store } = options;
@@ -168,9 +193,7 @@ export function createRefreshService(options: RefreshServiceOptions) {
     options.sleep ??
     ((ms: number, signal: AbortSignal) => delay(ms, undefined, { signal }));
   /** Executions in this process, by refresh, until each settles. */
-  const running = new Map<string, Promise<void>>();
-  /** When a read last tried to continue each refresh. */
-  const recoveries = new Map<string, number>();
+  const running = new Map<string, Execution>();
   const chains = new Set<Promise<void>>();
 
   async function discover(): Promise<CollectionDiscovery> {
@@ -237,47 +260,42 @@ export function createRefreshService(options: RefreshServiceOptions) {
       };
     }
     const { reason, met } = admission;
+    // A start never continues the active refresh it met: that is `resume`.
     return {
       result: { connectionId, refresh: admission.skipped ?? met, reason },
-      // One nobody runs any more (its process died) resumes here, unless an
-      // operator asked for its own refresh.
-      launch: reason === "busy" && !input.operator ? [met.id] : [],
+      launch: [],
     };
   }
 
   /** When a resumed refresh may log in again: the login interval after its connection's last login attempt. */
-  async function loginAllowedAt(refresh: Refresh) {
+  async function loginAllowedAt(
+    reader: Pick<RefreshDatabase, "getStoredConnection">,
+    refresh: Refresh,
+  ) {
     if (refresh.startedAt === null) {
       return 0;
     }
-    const attempted = (await store.getStoredConnection(refresh.connectionId))
+    const attempted = (await reader.getStoredConnection(refresh.connectionId))
       ?.config[LOGIN_ATTEMPT_KEY];
     return typeof attempted === "string"
       ? Date.parse(attempted) + loginIntervalMs
       : 0;
   }
 
-  /** A budgeted continuation that arrived too soon after the last login. */
-  async function awaitsLoginInterval(
-    refresh: Refresh,
-    deadline: number | undefined,
-  ) {
-    return (
-      deadline !== undefined && Date.now() < (await loginAllowedAt(refresh))
-    );
-  }
-
-  /** Delays a continuation until its login is due, within this invocation's budget. */
-  async function paceContinuation(id: string, deadline: number) {
+  /**
+   * Delays a continuation until the first of these refreshes may log in,
+   * within this invocation's budget.
+   */
+  async function paceContinuation(ids: readonly string[], deadline: number) {
     try {
-      const refresh = await store.getRefresh(id);
-      if (!refresh || !isActive(refresh)) {
-        return;
+      let due = Number.POSITIVE_INFINITY;
+      for (const id of ids) {
+        const refresh = await store.getRefresh(id);
+        if (refresh && isActive(refresh)) {
+          due = Math.min(due, await loginAllowedAt(store, refresh));
+        }
       }
-      const waitMs = Math.min(
-        (await loginAllowedAt(refresh)) - Date.now(),
-        deadline - performance.now(),
-      );
+      const waitMs = Math.min(due - Date.now(), deadline - performance.now());
       if (waitMs > 0) {
         await sleep(waitMs, shutdown).catch(() => {});
       }
@@ -361,7 +379,9 @@ export function createRefreshService(options: RefreshServiceOptions) {
       });
       return "done";
     }
-    if (await awaitsLoginInterval(current, deadline)) {
+    // Checked under the lease against the persisted attempt, so no trigger,
+    // process or host budget resumes with a login sooner than the interval.
+    if (Date.now() < (await loginAllowedAt(locked, current))) {
       return "paced";
     }
     let counts = current.counts;
@@ -696,8 +716,8 @@ export function createRefreshService(options: RefreshServiceOptions) {
   /**
    * Executes refreshes one after another. A lease
    * still held (a crashed holder's lasts a minute) or a failed execution is
-   * retried with backoff; what stays unfinished resumes on a later tick, start
-   * or read, and expires a day after its creation.
+   * retried with backoff; what stays unfinished resumes on a later tick,
+   * continuation or explicit resume, and expires a day after its creation.
    */
   function launch(
     ids: readonly string[],
@@ -707,31 +727,54 @@ export function createRefreshService(options: RefreshServiceOptions) {
     if (!fresh.length) {
       return;
     }
-    const settled = new Map(
-      fresh.map((id) => [id, Promise.withResolvers<void>()]),
+    const executions = new Map(
+      fresh.map((id) => [
+        id,
+        {
+          outcome: Promise.withResolvers<Outcome | "error" | undefined>(),
+          settled: Promise.withResolvers<void>(),
+        },
+      ]),
     );
-    for (const [id, { promise }] of settled) {
-      running.set(id, promise);
+    for (const [id, { outcome, settled }] of executions) {
+      running.set(id, {
+        outcome: outcome.promise,
+        settled: settled.promise,
+      });
     }
     const deadline =
       options.budgetMs === undefined
         ? undefined
         : performance.now() + options.budgetMs;
+    const settle = (id: string) => {
+      const execution = executions.get(id)!;
+      execution.outcome.resolve(undefined);
+      running.delete(id);
+      execution.settled.resolve();
+    };
     const chain = (async () => {
+      // An exhausted budget stops the batch; one connection's login pacing
+      // only defers that refresh, so the others still execute.
       let yielded = false;
+      const deferred: string[] = [];
       for (const id of fresh) {
         if (!yielded && !shutdown.aborted) {
           const outcome = await executeWithRetries(id, deadline, retries);
-          yielded = outcome === "yielded" || outcome === "paced";
-          if (yielded && deadline !== undefined && options.continueLater) {
-            // Still marked running here, so polls start no second waiter.
-            await paceContinuation(id, deadline);
+          executions.get(id)!.outcome.resolve(outcome);
+          yielded = outcome === "yielded";
+          if (yielded || outcome === "paced") {
+            deferred.push(id);
+            continue;
           }
         }
-        running.delete(id);
-        settled.get(id)!.resolve();
+        settle(id);
       }
-      if (yielded) {
+      if (deferred.length && deadline !== undefined && options.continueLater) {
+        // Still marked running here, so a resume starts no second waiter.
+        await paceContinuation(deferred, deadline);
+      }
+      deferred.forEach(settle);
+      if (deferred.length) {
         await options
           .continueLater?.()
           .catch(() => log({ event: "fonds_refresh_continuation_failed" }));
@@ -832,7 +875,7 @@ export function createRefreshService(options: RefreshServiceOptions) {
         result.reason === null &&
         result.refresh &&
         running.has(result.refresh.id)
-          ? [running.get(result.refresh.id)!]
+          ? [running.get(result.refresh.id)!.settled]
           : [],
       );
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -863,17 +906,36 @@ export function createRefreshService(options: RefreshServiceOptions) {
     },
 
     /**
-     * A read of an active refresh: continues it here unless this process is
-     * running it, at most every half minute, so polling alone finishes a
-     * refresh whose process died.
+     * Continues one existing refresh, keeping its identity, range and
+     * checkpoints. Admission is not repeated, so a manual retry admitted past
+     * an attention block stays resumable; a finished refresh is never reopened,
+     * and execution still honors a recorded stop and the login interval.
+     * Answers once the execution's outcome is known, or after `ms`.
      */
-    recover(refresh: Refresh) {
-      const last = recoveries.get(refresh.id) ?? 0;
-      if (!isActive(refresh) || Date.now() - last < RECOVERY_INTERVAL_MS) {
-        return;
+    async resume(refreshId: string, ms?: number): Promise<RefreshResumeResult> {
+      const refresh = await store.getRefresh(refreshId);
+      if (!refresh) {
+        throw new NotFoundError("Refresh not found");
       }
-      recoveries.set(refresh.id, Date.now());
-      launch([refresh.id], []);
+      if (!isActive(refresh)) {
+        return { refresh, outcome: "terminal", retryAt: null };
+      }
+      launch([refreshId]);
+      const execution = running.get(refreshId);
+      const outcome = execution && (await within(execution.outcome, ms));
+      const current = (await store.getRefresh(refreshId)) ?? refresh;
+      if (!isActive(current)) {
+        return { refresh: current, outcome: "terminal", retryAt: null };
+      }
+      if (outcome === "paced") {
+        const retryAt = await loginAllowedAt(store, current);
+        return {
+          refresh: current,
+          outcome: "held",
+          retryAt: new Date(retryAt).toISOString(),
+        };
+      }
+      return { refresh: current, outcome: "accepted", retryAt: null };
     },
 
     /**
@@ -956,7 +1018,7 @@ export function ownerRefreshes(service: RefreshService, waitMs = 10_000) {
         await service.startAll({ trigger: "manual", range }),
         waitMs,
       ),
-    recover: (refresh: Refresh) => service.recover(refresh),
+    resume: (refreshId: string) => service.resume(refreshId, waitMs),
     estimate: (connectionId: string | undefined, range?: CollectionRange) =>
       service.estimate(connectionId, range),
   };
@@ -996,4 +1058,24 @@ export async function runOperatorRefresh(input: {
   );
   await service.settled();
   return results;
+}
+
+/**
+ * An operator's foreground resume of one active refresh, under the same lease
+ * and rules as the server's resume. Resolves once its execution settles.
+ */
+export async function runOperatorResume(input: {
+  store: RefreshDatabase;
+  targets(): Promise<CollectionDiscovery>;
+  refreshId: string;
+  log?: (entry: object) => void;
+}) {
+  const service = createRefreshService({
+    store: input.store,
+    targets: input.targets,
+    log: input.log ?? (() => {}),
+  });
+  const result = await service.resume(input.refreshId);
+  await service.settled();
+  return result;
 }
