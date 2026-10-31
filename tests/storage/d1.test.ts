@@ -371,8 +371,11 @@ describe.skipIf(!d1Enabled)("guarded D1 write batches", () => {
       );
     await ingest("run-1");
     await ingest("run-1");
-    const rows = (await store.listTransactionPage({ connectionId }))
-      .transactions;
+    const rows = await store.listTransactions({
+      connectionId,
+      perspective: "spending",
+      presence: "current",
+    });
     const bySource = (sourceKey: string) =>
       rows.find((candidate) => candidate.sourceKey === sourceKey)!;
     await store.editAnnotation({

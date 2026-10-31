@@ -8,7 +8,9 @@ import {
 import { canonicalJson } from "../domain/observations.js";
 import type { FinancialPlan } from "../domain/plans/state.js";
 import { sortedEvidence } from "../domain/provider-evidence.js";
+import type { TransactionListFacts } from "../domain/read-model.js";
 import type { Transaction } from "../domain/records.js";
+import type { ListColumn } from "./sql.js";
 
 export { decodeScalarText, encodeScalarText } from "./scalar-text.js";
 
@@ -152,6 +154,42 @@ export function encodeReconciliation(row: Transaction): Reconciliation {
   return result;
 }
 
+/** The details a list item presents; full and list decodes share them. */
+function listedDetails(
+  row: Pick<
+    StoredRow,
+    | "transactionDateTime"
+    | "merchantAddressLine"
+    | "merchantPhone"
+    | "merchantCity"
+    | "merchantCountryCode"
+    | "currencyExchange"
+    | "sourceIssues"
+  >,
+  {
+    pendingPostingCandidates,
+  }: Pick<Reconciliation, "pendingPostingCandidates">,
+) {
+  return {
+    ...(row.transactionDateTime === null
+      ? {}
+      : { transactionDateTime: row.transactionDateTime }),
+    merchant: {
+      address: row.merchantAddressLine,
+      phone: row.merchantPhone,
+      ...(row.merchantCity === null ? {} : { city: row.merchantCity }),
+      ...(row.merchantCountryCode === null
+        ? {}
+        : { countryCode: row.merchantCountryCode }),
+    },
+    ...(row.currencyExchange === null
+      ? {}
+      : { currencyExchange: row.currencyExchange }),
+    issues: row.sourceIssues,
+    ...(pendingPostingCandidates === null ? {} : { pendingPostingCandidates }),
+  };
+}
+
 export function decodeTransaction(input: {
   row: StoredRow;
   observation: Observation;
@@ -160,14 +198,14 @@ export function decodeTransaction(input: {
 }): Transaction {
   const {
     sourceAbsence,
-    transactionDateTime,
-    merchantAddressLine,
-    merchantPhone,
-    merchantCity,
-    merchantCountryCode,
+    transactionDateTime: _transactionDateTime,
+    merchantAddressLine: _merchantAddressLine,
+    merchantPhone: _merchantPhone,
+    merchantCity: _merchantCity,
+    merchantCountryCode: _merchantCountryCode,
     additionalInformation,
-    currencyExchange,
-    sourceIssues,
+    currencyExchange: _currencyExchange,
+    sourceIssues: _sourceIssues,
     provider,
     ...facts
   } = input.row;
@@ -195,31 +233,15 @@ export function decodeTransaction(input: {
     lastSeenRunId: input.observation.lastSeenRunId,
     details: detailsSchema.parse({
       schemaVersion: 1,
-      ...(transactionDateTime === null ? {} : { transactionDateTime }),
-      merchant: {
-        address: merchantAddressLine,
-        phone: merchantPhone,
-        ...(merchantCity === null ? {} : { city: merchantCity }),
-        ...(merchantCountryCode === null
-          ? {}
-          : { countryCode: merchantCountryCode }),
-      },
+      ...listedDetails(input.row, input.reconciliation),
       ...(additionalInformation?.length ? { additionalInformation } : {}),
-      ...(currencyExchange === null ? {} : { currencyExchange }),
       sourceRefs: input.observation.sourceRefs,
-      issues: sourceIssues,
       provider: evidence,
       ...(input.reconciliation.paymentContextConflicts === null
         ? {}
         : {
             paymentContextConflicts:
               input.reconciliation.paymentContextConflicts,
-          }),
-      ...(input.reconciliation.pendingPostingCandidates === null
-        ? {}
-        : {
-            pendingPostingCandidates:
-              input.reconciliation.pendingPostingCandidates,
           }),
       ...(input.reconciliation.rejectedPostingKeys === null
         ? {}
@@ -231,6 +253,43 @@ export function decodeTransaction(input: {
         ? {}
         : { postingLink: input.posting.postingLink }),
     }),
+  };
+}
+
+const listDetailsSchema = detailsSchema.pick({
+  transactionDateTime: true,
+  merchant: true,
+  currencyExchange: true,
+  issues: true,
+  pendingPostingCandidates: true,
+});
+
+type StoredListRow = Pick<StoredRow, ListColumn>;
+
+/** Decodes only what a list item presents; omitted evidence stays absent. */
+export function decodeTransactionListFacts(input: {
+  row: StoredListRow;
+  reconciliation: Pick<Reconciliation, "pendingPostingCandidates">;
+}): TransactionListFacts {
+  const {
+    sourceAbsence,
+    transactionDateTime: _transactionDateTime,
+    merchantAddressLine: _merchantAddressLine,
+    merchantPhone: _merchantPhone,
+    merchantCity: _merchantCity,
+    merchantCountryCode: _merchantCountryCode,
+    currencyExchange: _currencyExchange,
+    sourceIssues: _sourceIssues,
+    ...facts
+  } = input.row;
+  return {
+    ...facts,
+    ...(sourceAbsence === null
+      ? {}
+      : { sourceAbsence: sourceAbsenceSchema.parse(sourceAbsence) }),
+    details: listDetailsSchema.parse(
+      listedDetails(input.row, input.reconciliation),
+    ),
   };
 }
 

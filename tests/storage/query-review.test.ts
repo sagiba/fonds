@@ -628,7 +628,11 @@ for (const backend of backends) {
           id: page.transactions[0]!.id,
         },
       });
-      expect([...page.transactions, ...second.transactions]).toEqual(full);
+      // List items carry a subset of the full read, with equal values.
+      expect(full).toMatchObject([
+        ...page.transactions,
+        ...second.transactions,
+      ]);
       expect(full.filter((row) => row.reviewRequired)).toHaveLength(1);
       expect(
         full.filter((row) => row.reviewStatus === "needs_review"),

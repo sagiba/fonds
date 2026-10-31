@@ -8,8 +8,7 @@ import {
 } from "./plans/annotation.js";
 import type { Annotation, Transaction } from "./records.js";
 
-/** Enriched internal read view. Public operations project an explicit wire contract. */
-export interface TransactionView extends Transaction {
+interface ReviewView {
   reviewRequired: boolean;
   annotation: Annotation | null;
   reviewStale: boolean;
@@ -19,10 +18,70 @@ export interface TransactionView extends Transaction {
   pendingPostingCandidates: string[];
 }
 
-export function presentTransaction(
-  row: Transaction,
+/** Enriched internal read view. Public operations project an explicit wire contract. */
+export interface TransactionView extends Transaction, ReviewView {}
+
+/**
+ * The transaction facts a list item presents. Source identity, observation
+ * history, retained evidence and detail-only prose are not among them.
+ */
+export const LIST_FACT_FIELDS = [
+  "id",
+  "connectionId",
+  "cardId",
+  "status",
+  "presence",
+  "sourceAbsence",
+  "kind",
+  "amountBasis",
+  "amountMinor",
+  "currency",
+  "originalAmountMinor",
+  "originalCurrency",
+  "description",
+  "counterpartyName",
+  "merchantName",
+  "merchantProviderId",
+  "merchantCategoryCode",
+  "transactionDate",
+  "bookingDate",
+  "billingDate",
+  "cardPresent",
+  "authorizationMethod",
+  "wallet",
+  "threeDSecureUsed",
+  "recurring",
+  "fxFeeMinor",
+  "fxFeeCurrency",
+  "providerTransactionCode",
+  "installmentCount",
+  "installmentNumber",
+  "purchaseId",
+  "supersededById",
+  "version",
+] as const satisfies readonly (keyof Transaction)[];
+
+/** A list item's facts; a full transaction also satisfies this shape. */
+export type TransactionListFacts = Pick<
+  Transaction,
+  (typeof LIST_FACT_FIELDS)[number]
+> & {
+  details: Pick<
+    Transaction["details"],
+    | "transactionDateTime"
+    | "merchant"
+    | "currencyExchange"
+    | "issues"
+    | "pendingPostingCandidates"
+  >;
+};
+
+export type TransactionListView = TransactionListFacts & ReviewView;
+
+export function presentTransaction<Row extends TransactionListFacts>(
+  row: Row,
   annotation: Annotation | null,
-): TransactionView {
+): Row & ReviewView {
   const stale = annotationStaleness(row, annotation?.data);
   const review = reviewState(row, annotation?.data);
   return {

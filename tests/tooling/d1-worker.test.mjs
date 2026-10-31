@@ -38,10 +38,14 @@ export default {
       },
       calAdapter,
     );
-    const page = await store.listTransactionPage({ connectionId: "cal", limit: 200 });
+    const rows = await store.listTransactions({
+      connectionId: "cal",
+      perspective: "spending",
+      presence: "current",
+    });
     return Response.json({
       created: run.created,
-      sourceKeys: page.transactions.map((row) => row.sourceKey).sort(),
+      sourceKeys: rows.map((row) => row.sourceKey).sort(),
       totals: await store.getTotals({ connectionId: "cal" }),
     });
   },
@@ -114,14 +118,15 @@ describe.skipIf(!d1Enabled)("d1-web target", () => {
         },
         calAdapter,
       );
-      const page = await reference.listTransactionPage({
+      const rows = await reference.listTransactions({
         connectionId: "cal",
-        limit: 200,
+        perspective: "spending",
+        presence: "current",
       });
       expect(actual.created).toBeGreaterThan(0);
       expect(actual).toEqual({
         created: run.created,
-        sourceKeys: page.transactions.map((row) => row.sourceKey).sort(),
+        sourceKeys: rows.map((row) => row.sourceKey).sort(),
         totals: JSON.parse(
           JSON.stringify(await reference.getTotals({ connectionId: "cal" })),
         ),

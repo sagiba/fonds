@@ -1172,7 +1172,7 @@ function buildStore<Db>(
       await checkScope(filters);
       const { limit } = filters;
       const rows = await db.execute(
-        statements.transactionPage(db.root, {
+        statements.transactionListPage(db.root, {
           ...filters,
           limit: limit + 1,
         }),

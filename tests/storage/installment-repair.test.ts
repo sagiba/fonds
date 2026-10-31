@@ -14,6 +14,7 @@ import {
   insertTransactionFixture,
   open,
   row,
+  sourceKeysOf,
   synthetic,
 } from "../helpers/storage-harness.js";
 
@@ -98,9 +99,7 @@ describe.each(backends)("%s installment repair", (backend) => {
       perspective: "billing",
       limit: 200,
     });
-    expect(page.transactions.map((item) => item.sourceKey).sort()).toEqual(
-      keys,
-    );
+    expect((await sourceKeysOf(db, page.transactions)).sort()).toEqual(keys);
     expect(
       every
         .filter((item) =>
@@ -1049,7 +1048,7 @@ describe.each(backends)("%s installment repair", (backend) => {
       amountMinor: -12500,
     });
     const page = await db.listTransactionPage({ perspective: "billing" });
-    expect(page.transactions.map((item) => item.sourceKey).sort()).toEqual([
+    expect((await sourceKeysOf(db, page.transactions)).sort()).toEqual([
       "duplicate-line",
       "line-1",
     ]);

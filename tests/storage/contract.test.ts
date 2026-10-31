@@ -7,13 +7,13 @@ import {
   collectFromStore,
   type ProviderCollector,
 } from "../../src/application/collection.js";
+import type { TransactionPage } from "../../src/application/financial-store.js";
 import {
   createApplication,
   publicError,
 } from "../../src/application/operations.js";
 import { NotFoundError } from "../../src/domain/errors.js";
 import { emptyDetails, type TransactionInput } from "../../src/domain/model.js";
-import type { TransactionView } from "../../src/domain/read-model.js";
 import type { CollectionScope } from "../../src/domain/records.js";
 import type { SourceAdapter } from "../../src/domain/source-adapter.js";
 import {
@@ -61,14 +61,14 @@ for (const backend of backends) {
         },
         adapter,
       );
-    const all = async () =>
-      (
-        await db.listTransactionPage({
-          connectionId,
-          limit: 200,
-          includeSuperseded: true,
-        })
-      ).transactions;
+    // Retained provider evidence and observation facts need the full read.
+    const all = () =>
+      db.listTransactions({
+        connectionId,
+        includeSuperseded: true,
+        presence: "current",
+        perspective: "spending",
+      });
 
     it("persists optional enrichment, retains sparse values and gives current facts precedence over history", async () => {
       const known = emptyDetails();
@@ -648,7 +648,7 @@ for (const backend of backends) {
         );
       }
       // Keyset seeks compare IDs with the same UTF-8 byte order as ORDER BY.
-      const after = (page: { transactions: TransactionView[] }) => ({
+      const after = (page: TransactionPage) => ({
         transactionDate: page.transactions[0]!.transactionDate,
         id: page.transactions[0]!.id,
       });
