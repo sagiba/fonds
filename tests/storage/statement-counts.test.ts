@@ -3,6 +3,10 @@ import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  createApplication,
+  inProcessInvoker,
+} from "../../src/application/operations.js";
+import {
   backends,
   type Harness,
   open,
@@ -216,6 +220,18 @@ for (const backend of backends) {
         () => db.listSyncRuns(connectionId, { limit: 20 }),
       ]) {
         expect((await measure(work)).reads).toBeLessThanOrEqual(1);
+      }
+    });
+    it("adds only the feed checkpoint read to a transaction page", async () => {
+      const operations = inProcessInvoker(createApplication(db));
+      for (const input of [
+        { connectionId },
+        { connectionId, view: "summary" },
+      ]) {
+        expect(
+          (await measure(() => operations.invoke("list_transactions", input)))
+            .reads,
+        ).toBeLessThanOrEqual(2);
       }
     });
     it("updates configuration with two statements and reads an existing connection once", async () => {

@@ -118,6 +118,7 @@ function page(data: Transaction[], nextCursor: string | null = null) {
     hasMore: nextCursor !== null,
     nextCursor,
     filters: {},
+    latestEventId: 0,
   });
   return { ...parsed, data };
 }

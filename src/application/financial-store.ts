@@ -206,6 +206,11 @@ export interface FinancialStore {
     groupBy: TotalsGrouping,
     limit: number,
   ): Promise<GroupedTotals>;
+  /**
+   * Highest event ID in the ledger, or only in one connection's feed. Any
+   * ledger mutation advances the unscoped value.
+   */
+  latestEventId(connectionId?: string): Promise<number>;
   listEvents(input?: EventPageInput): Promise<LedgerEvent[]>;
   listSyncRuns(
     connectionId: string,
@@ -264,11 +269,6 @@ export interface InternalStore
     id: string,
     change: (config: ConnectionConfig) => ConnectionConfig,
   ): Promise<ConnectionConfig>;
-  /**
-   * Highest event ID in the ledger, or only in one connection's feed. Any
-   * ledger mutation advances the unscoped value.
-   */
-  latestEventId(connectionId?: string): Promise<number>;
   /**
    * Cheap ledger revision for a connection: the latest event ID plus its
    * transaction count, so recorded mutations and out-of-band row deletion

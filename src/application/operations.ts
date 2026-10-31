@@ -352,7 +352,7 @@ const transactionsDescription = [
   "merchantContains matches a case-insensitive substring of merchantName or counterpartyName. amountMin and amountMax bound the signed amount (outflows are negative) as decimal strings in the required currency. Each page echoes the filters it applied, defaults included, in filters: check them when a page looks wrong.",
   "perspective selects which rows represent a plan: spending (default) is every row without purchaseId, including fees and cancellations; billing is every row except plan purchases (an installmentCount of 2 or more without installmentNumber, or live billed lines even when the count is unknown), whose money appears through their billed lines, and a held or unknown line amount is never replaced by the purchase's; all is every row and counts a plan's money twice. A billed line has purchaseId (its purchase) and installmentNumber; filtering by purchaseId requires billing or all.",
   "Money is exact decimal strings; keep each amount with its currency and amount basis.",
-  "Pages may hold fewer rows to respect the response byte limit; follow nextCursor while hasMore is true. Reads are live: concurrent changes can shift later pages.",
+  "Pages may hold fewer rows to respect the response byte limit; follow nextCursor while hasMore is true. Reads are live: concurrent changes can shift later pages. latestEventId is the event feed's position (the connection's with connectionId, otherwise the whole ledger's) read before the page: when it moves past a stored value, catch up with list_events instead of rereading pages.",
   "cardId and billingAccountId must belong to connectionId when both are given; otherwise the input is invalid.",
 ].join(" ");
 
@@ -488,7 +488,7 @@ const definitions = named({
     "read",
   ),
   get_transactions: define(
-    "Read up to 100 transactions by ID in one call, such as the records an event page names, in request order. view is summary (lean analysis items), compact (default; list records), detail (get_transaction's default) or evidence (detail with the evidence preview). IDs that match no transaction are returned in missingIds rather than failing the call. A result over the response limit fails with output_too_large: request fewer IDs or a leaner view.",
+    "Read up to 100 transactions by ID in one call, such as the records an event page names, in request order. view is summary (lean analysis items), compact (default; list records), detail (get_transaction's default) or evidence (detail with the evidence preview). IDs that match no transaction are returned in missingIds rather than failing the call. latestEventId is the whole ledger's event position, read before the records. A result over the response limit fails with output_too_large: request fewer IDs or a leaner view.",
     z
       .object({
         ids: z
@@ -783,6 +783,8 @@ export function createApplication(
       return { account: presentAccount(account) };
     },
     list_transactions: async ({ cursor, limit, view, ...filters }) => {
+      // Read before the page: any change the page misses has a later event.
+      const latestEventId = await store.latestEventId(filters.connectionId);
       const query = { ...filters, limit, after: transactionAfter(cursor) };
       const cursorOf = (row: { transactionDate: string | null; id: string }) =>
         encodeKeyset("transactions", [row.transactionDate, row.id]);
@@ -793,7 +795,7 @@ export function createApplication(
           page.hasMore,
           presentTransactionSummary,
           cursorOf,
-          { filters },
+          { filters, latestEventId },
         );
       }
       const page = await store.listTransactionPage(query);
@@ -802,7 +804,7 @@ export function createApplication(
         page.hasMore,
         (row) => presentWireTransaction(row),
         cursorOf,
-        { filters },
+        { filters, latestEventId },
       );
     },
     get_transaction: async ({ transactionId, detail, includeEvidence }) => {
@@ -823,6 +825,8 @@ export function createApplication(
       };
     },
     get_transactions: async ({ ids, view }) => {
+      // IDs can span connections, so the checkpoint is the whole ledger's.
+      const latestEventId = await store.latestEventId();
       const records = new Map<string, unknown>(
         view === "summary"
           ? (await store.getTransactionSummaries(ids)).map((row) => [
@@ -844,6 +848,7 @@ export function createApplication(
           records.has(id) ? [records.get(id) as never] : [],
         ),
         missingIds: ids.filter((id) => !records.has(id)),
+        latestEventId,
       };
     },
     get_transaction_totals: async ({ groupBy, ...filters }) => {

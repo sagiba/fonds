@@ -7,10 +7,17 @@ import {
   inProcessInvoker,
   publicError,
 } from "../../src/application/operations.js";
+import { filtersSchema } from "../../src/application/query-inputs.js";
 import * as postgresSchema from "../../src/storage/postgres/schema.js";
-import { transactionListByIdQuery as postgresListById } from "../../src/storage/postgres/statements.js";
+import {
+  transactionListByIdQuery as postgresListById,
+  transactionListQuery as postgresListQuery,
+} from "../../src/storage/postgres/statements.js";
 import * as sqliteSchema from "../../src/storage/sqlite/schema.js";
-import { transactionListByIdQuery as sqliteListById } from "../../src/storage/sqlite/statements.js";
+import {
+  transactionListByIdQuery as sqliteListById,
+  transactionListQuery as sqliteListQuery,
+} from "../../src/storage/sqlite/statements.js";
 import { seedRun, storedRow } from "../helpers/ledger-rows.js";
 import {
   backends,
@@ -48,6 +55,24 @@ describe("compact read by ID statement", () => {
       "transaction_posting_links",
     ]) {
       expect(statement).not.toContain(column);
+    }
+  });
+});
+
+describe("drift checkpoint", () => {
+  it("leaves the page statement without the event feed", () => {
+    const input = { ...filtersSchema.parse({}), limit: 51 };
+    for (const statement of [
+      postgresListQuery(
+        postgresDrizzle.mock({ schema: postgresSchema }),
+        input,
+      ).toSQL().sql,
+      sqliteListQuery(
+        libsqlDrizzle.mock({ schema: sqliteSchema }),
+        input,
+      ).toSQL().sql,
+    ]) {
+      expect(statement).not.toContain("events");
     }
   });
 });
@@ -105,10 +130,12 @@ for (const backend of backends) {
           }),
         ],
         missingIds: ["missing"],
+        latestEventId: expect.any(Number),
       });
       expect(await invoke("get_transactions", { ids: ["missing"] })).toEqual({
         data: [],
         missingIds: ["missing"],
+        latestEventId: expect.any(Number),
       });
     });
 
@@ -192,6 +219,50 @@ for (const backend of backends) {
         ).rejects.toThrow("not_found");
       },
     );
+
+    it("carries the event feed position each read started from", async () => {
+      await db.ensureConnection({ id: "other", provider: "cal" });
+      await db.editAnnotation({
+        transactionId: "first",
+        expectedVersion: 0,
+        notes: "Synthetic edit",
+      });
+      const latest = async (connection?: string) =>
+        Math.max(
+          0,
+          ...(
+            await db.listEvents({
+              ...(connection && { connectionId: connection }),
+              limit: 1000,
+            })
+          ).map((event) => event.id),
+        );
+      const scoped = await latest(connectionId);
+      expect(scoped).toBeGreaterThan(0);
+      expect(
+        await invoke("list_transactions", { connectionId, view: "summary" }),
+      ).toMatchObject({ latestEventId: scoped });
+      expect(
+        await invoke("list_transactions", { connectionId: "other" }),
+      ).toMatchObject({ data: [], latestEventId: 0 });
+      expect(await invoke("list_transactions", {})).toMatchObject({
+        latestEventId: await latest(),
+      });
+      expect(
+        await invoke("get_transactions", { ids: ["first"] }),
+      ).toMatchObject({ latestEventId: await latest() });
+      // A later change moves the checkpoint past the stored value.
+      await db.editAnnotation({
+        transactionId: "first",
+        expectedVersion: 1,
+        notes: "Synthetic second edit",
+      });
+      const moved = (await invoke("list_transactions", { connectionId })) as {
+        latestEventId: number;
+      };
+      expect(moved.latestEventId).toBeGreaterThan(scoped);
+      expect(moved.latestEventId).toBe(await latest(connectionId));
+    });
 
     it("rejects duplicate, empty and oversized ID lists", async () => {
       for (const ids of [

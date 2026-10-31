@@ -742,6 +742,7 @@ export const transactionListOutputSchema = z
     hasMore: z.boolean(),
     nextCursor: listCursorSchema.nullable(),
     filters: filtersSchema,
+    latestEventId: versionSchema,
   })
   .strict()
   .refine((page) => page.hasMore === (page.nextCursor !== null));
@@ -766,6 +767,7 @@ export const transactionBatchOutputSchema = z
       )
       .max(100),
     missingIds: z.array(idSchema).max(100),
+    latestEventId: versionSchema,
   })
   .strict();
 const transactionReceiptSchema = z
