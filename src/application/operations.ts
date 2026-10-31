@@ -194,7 +194,8 @@ export interface ApplicationCapabilities {
   onOperation?(entry: OperationLog): void | Promise<void>;
   /**
    * Runs an operation call, telling `observe` the bytes a network-metered
-   * database sent each store transaction it ran.
+   * database sent each store transaction and statement it ran, and settles
+   * only after the last of them has been told.
    */
   meterDbBytes?<T>(
     work: () => Promise<T>,
@@ -213,7 +214,7 @@ export interface OperationLog {
   outputBytes?: number;
   /** Items in a returned page. */
   rowsReturned?: number;
-  /** Bytes a network-metered database sent the call's store transactions. */
+  /** Bytes a network-metered database sent the call's store reads and writes. */
   dbBytesRead?: number;
 }
 

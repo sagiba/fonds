@@ -389,7 +389,8 @@ export function createHostedService(
     config,
     options.scheduler,
     store,
-    financialPool,
+    // The store's pool, so operation byte metering covers these reads too.
+    store.pool,
     issuer,
     shutdown.signal,
     options.embeddedScheduler,
