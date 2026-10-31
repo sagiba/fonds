@@ -295,10 +295,9 @@ export function decodeTransactionListFacts(input: {
 
 /** State-only writes must not update the canonical transaction row. */
 export function transactionContentWrites(plan: FinancialPlan): StoredRow[] {
-  const previous = new Map(plan.snapshot.rows.map((row) => [row.id, row]));
   return plan.orderedTransactionWrites().flatMap((row) => {
     const encoded = encodeTransaction(row);
-    const before = previous.get(row.id);
+    const before = plan.original(row.id);
     return before &&
       canonicalJson(encodeTransaction(before)) === canonicalJson(encoded)
       ? []

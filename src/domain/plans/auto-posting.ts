@@ -3,8 +3,32 @@ import { canonicalJson, compareStrings } from "../observations.js";
 import type { Transaction } from "../records.js";
 import type { AutomaticPostingCapability } from "../source-adapter.js";
 
+/** The facts posting groups and eligibility read, complete or narrow. */
+export type PostingFacts = Pick<
+  TransactionFacts,
+  | "sourceScope"
+  | "cardId"
+  | "transactionDate"
+  | "status"
+  | "amountMinor"
+  | "currency"
+  | "originalAmountMinor"
+  | "originalCurrency"
+  | "identityStrength"
+  | "kind"
+  | "installmentCount"
+  | "purchaseId"
+  | "installmentNumber"
+  | "amountBasis"
+> & {
+  details: {
+    postingLink?: unknown;
+    rejectedPostingKeys?: string[] | undefined;
+  };
+};
+
 /** Purchase-currency money for linking; billing is only a same-currency fallback. */
-export function postingMoney(row: TransactionFacts) {
+export function postingMoney(row: PostingFacts) {
   return row.status === "posted" &&
     row.originalAmountMinor !== null &&
     row.originalCurrency !== null
@@ -13,7 +37,7 @@ export function postingMoney(row: TransactionFacts) {
 }
 
 /** Relaxed equality: unsupported interpretations must still block attribution. */
-function postingKey(row: TransactionFacts): string | undefined {
+function postingKey(row: PostingFacts): string | undefined {
   const { amountMinor, currency } = postingMoney(row);
   if (
     row.cardId === null ||
@@ -33,7 +57,7 @@ function postingKey(row: TransactionFacts): string | undefined {
 }
 
 function eligiblePosting(
-  row: TransactionFacts,
+  row: PostingFacts,
   capability: AutomaticPostingCapability,
 ): boolean {
   const { amountMinor } = postingMoney(row);
@@ -60,13 +84,13 @@ function eligiblePosting(
   );
 }
 
-interface PostingComponent<Row extends TransactionFacts> {
+interface PostingComponent<Row extends PostingFacts> {
   pending: Row[];
   posted: Row[];
 }
 
 /** Group all plausible rows before applying eligibility; each key is a complete component. */
-export function postingComponents<Row extends TransactionFacts>(
+export function postingComponents<Row extends PostingFacts>(
   pending: Row[],
   posted: Row[],
 ): PostingComponent<Row>[] {

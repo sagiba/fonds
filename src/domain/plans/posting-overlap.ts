@@ -5,13 +5,16 @@ import type { AutomaticPostingCapability } from "../source-adapter.js";
 import {
   automaticPostingPairs,
   postingComponents,
+  type PostingFacts,
   postingMoney,
 } from "./auto-posting.js";
 import { meaningfulAnnotation } from "./lifecycle.js";
-import type { FinancialPlan } from "./state.js";
+import type { FinancialPlan, LedgerRow } from "./state.js";
 
 /** Classification may strengthen later; attribution facts may not change beneath a witness. */
-function fingerprint(row: TransactionFacts): string {
+function fingerprint(
+  row: PostingFacts & Pick<TransactionFacts, "sourceKey" | "merchantName">,
+): string {
   return canonicalJson([
     row.sourceKey,
     row.sourceScope,
@@ -24,15 +27,15 @@ function fingerprint(row: TransactionFacts): string {
 
 interface OverlapOptions {
   plan: FinancialPlan;
-  before: Transaction[];
+  before: LedgerRow[];
   accountKey: string;
   capability: AutomaticPostingCapability;
   runId: string;
   capturedAt: string;
   fresh: boolean;
   validWitness: (runId: string, capturedAt: string) => boolean;
-  observed: (row: Transaction) => boolean;
-  absent: (row: Transaction) => boolean;
+  observed: (row: LedgerRow) => boolean;
+  absent: (row: LedgerRow) => boolean;
 }
 
 /**
@@ -133,7 +136,8 @@ export function postingOverlapPairs({
         witness.postedFingerprint !== fingerprint(posted!) ||
         (previous?.presence === "not_returned" && observed(pending)))
     ) {
-      const { postingOverlap: _discarded, ...details } = pending.details;
+      const { postingOverlap: _discarded, ...details } =
+        plan.full(pending).details;
       plan.updateTransaction(pending.id, { details });
       witness = undefined;
     }
@@ -150,8 +154,9 @@ export function postingOverlapPairs({
       pending.firstSeenAt < posted!.firstSeenAt &&
       observed(pending) &&
       observed(posted!) &&
+      // Observed rows are written, so they are complete.
       [pending, posted!].every((row) =>
-        row.details.sourceRefs.some((ref) => ref.runId === runId),
+        plan.full(row).details.sourceRefs.some((ref) => ref.runId === runId),
       )
     ) {
       witness = {
@@ -162,7 +167,7 @@ export function postingOverlapPairs({
         postedFingerprint: fingerprint(posted!),
       };
       plan.updateTransaction(pending.id, {
-        details: { ...pending.details, postingOverlap: witness },
+        details: { ...plan.full(pending).details, postingOverlap: witness },
       });
     }
     if (
@@ -175,14 +180,16 @@ export function postingOverlapPairs({
     ) {
       continue;
     }
+    const completePending = plan.full(pending);
+    const completePosted = plan.full(posted!);
     const decision = automaticPostingPairs(
-      [pending],
-      [posted!],
-      new Map([[pending, pending]]),
+      [completePending],
+      [completePosted],
+      new Map([[completePending, completePending]]),
       capability,
     );
-    if (decision.pairs.has(posted!)) {
-      pairs.set(posted!, pending);
+    if (decision.pairs.has(completePosted)) {
+      pairs.set(completePosted, completePending);
     }
   }
   return pairs;

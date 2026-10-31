@@ -152,7 +152,7 @@ export const editSchema = z
   .superRefine(requireTransactionVersionForReview);
 
 function annotationTarget(plan: FinancialPlan, transactionId: string) {
-  const row = plan.transaction(transactionId);
+  const row = plan.hydrated(transactionId);
   if (!row) {
     throw new NotFoundError("Transaction not found");
   }

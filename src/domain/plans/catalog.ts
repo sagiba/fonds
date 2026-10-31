@@ -12,8 +12,7 @@ import {
   unknownLedgerFacts,
 } from "../model.js";
 import { canonicalJson } from "../observations.js";
-import type { Transaction } from "../records.js";
-import type { FinancialPlan } from "./state.js";
+import type { FinancialPlan, LedgerRow } from "./state.js";
 
 /**
  * Replace an adapter's provider card key with the connection's service card ID.
@@ -46,9 +45,9 @@ export function resolveTransaction(
  * `supersededById`. The target must be a purchase commitment that is not
  * itself a billed line; anything else, or more than one survivor, is null.
  */
-export function purchaseResolver(plan: FinancialPlan, rows: Transaction[]) {
+export function purchaseResolver(plan: FinancialPlan, rows: LedgerRow[]) {
   const idsByKey = new Map<string, Set<string>>();
-  const add = (row: Transaction) => {
+  const add = (row: LedgerRow) => {
     for (const key of [row.sourceKey, ...row.sourceAliases]) {
       const ids = idsByKey.get(key) ?? new Set<string>();
       ids.add(row.id);

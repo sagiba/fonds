@@ -6,8 +6,24 @@ import {
   sourceCoverage,
   type SourceSnapshotCoverage,
 } from "./source-membership.js";
+import type { LedgerRow } from "./state.js";
 
 type Status = "posted" | "pending";
+
+/** What coverage reads of a stored row or a retained pending component. */
+type CoveredFacts = Pick<
+  Transaction,
+  | "sourceScope"
+  | "status"
+  | "transactionDate"
+  | "bookingDate"
+  | "billingDate"
+  | "purchaseId"
+  | "installmentNumber"
+  | "cardId"
+  | "lastSeenAt"
+  | "lastSeenRunId"
+>;
 
 /** Accepted coverage reconstructed from retained run metadata. */
 export interface CoverageHistory {
@@ -81,7 +97,7 @@ export function responseAbsence({
   };
   return {
     /** This response's coverage contains a stored row it may have omitted. */
-    covers(previous: Transaction): boolean {
+    covers(previous: CoveredFacts): boolean {
       const partition = result.partitions.find(
         (part) => part.status === previous.status,
       );
@@ -145,10 +161,13 @@ export function implausiblyEmpty({
   cardKeys,
   result,
   rows,
+  full,
   stale,
 }: ResponseContext & {
   result: Pick<ExtractionResult, "transactions" | "partitions" | "historical">;
-  rows: readonly Transaction[];
+  rows: readonly LedgerRow[];
+  /** The complete row, for reading its retained pending component. */
+  full: (row: LedgerRow) => Transaction;
   stale: (status: Status) => boolean;
 }): boolean {
   if (result.historical) {
@@ -171,7 +190,10 @@ export function implausiblyEmpty({
     if (!coverage) {
       return false;
     }
-    const coveredCurrent = (row: Transaction) =>
+    const coveredCurrent = (
+      row: CoveredFacts &
+        Pick<Transaction, "presence" | "sourceAbsence" | "supersededById">,
+    ) =>
       row.presence !== "removed" &&
       row.sourceAbsence === undefined &&
       !row.supersededById &&
@@ -184,15 +206,18 @@ export function implausiblyEmpty({
         cardKey(cardKeys, row),
       );
     return rows.some((row) => {
-      const link = row.details.postingLink;
-      return (
-        coveredCurrent(row) ||
-        (row.presence !== "removed" &&
-          !row.supersededById &&
-          link !== undefined &&
-          !link.split &&
-          coveredCurrent(link.pending))
-      );
+      if (coveredCurrent(row)) {
+        return true;
+      }
+      if (
+        row.presence === "removed" ||
+        row.supersededById ||
+        row.details.postingLink === undefined
+      ) {
+        return false;
+      }
+      const link = full(row).details.postingLink!;
+      return !link.split && coveredCurrent(link.pending);
     });
   });
 }

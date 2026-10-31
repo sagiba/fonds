@@ -2,7 +2,7 @@ import { isBilledLine, type TransactionFacts } from "../model.js";
 import { sortedEvidence } from "../provider-evidence.js";
 import { billedLinesByPurchase, inPerspective } from "../read-model.js";
 import type { Transaction } from "../records.js";
-import { FinancialPlan } from "./state.js";
+import { FinancialPlan, type LedgerRow } from "./state.js";
 
 /**
  * A billed line held because another identity states its purchase's ordinal:
@@ -36,7 +36,9 @@ export function withoutInstallmentFx(row: TransactionFacts): TransactionFacts {
  * restatement or line code is one too, unless its capture stated no count,
  * which never contradicts a plan.
  */
-export function awaitsRestatement(row: Pick<Transaction, "details">): boolean {
+export function awaitsRestatement(row: {
+  details: Pick<Transaction["details"], "issues">;
+}): boolean {
   const { issues } = row.details;
   return (
     issues.includes(RESTATEMENT_CONFLICT) ||
@@ -50,7 +52,7 @@ export function awaitsRestatement(row: Pick<Transaction, "details">): boolean {
  * Whether a plan purchase's live lines contradict it: they or the purchase
  * state different counts, or an ordinal lies outside a stated count.
  */
-function linesConflict(parent: Transaction, lines: Transaction[]): boolean {
+function linesConflict(parent: LedgerRow, lines: LedgerRow[]): boolean {
   const counts = new Set(
     [parent, ...lines].flatMap((row) =>
       row.installmentCount === null ? [] : [row.installmentCount],
@@ -68,8 +70,8 @@ function linesConflict(parent: Transaction, lines: Transaction[]): boolean {
 
 /** A purchase's plan conflicts, reevaluated against its live lines. */
 function conflictIssues(
-  parent: Transaction,
-  lines: Transaction[],
+  parent: LedgerRow,
+  lines: LedgerRow[],
   restated: boolean,
 ): string[] {
   // Only a plan purchase's lines can contradict it; other parents keep just
@@ -132,8 +134,9 @@ export function refreshInstallmentParents(
       JSON.stringify(issues) !==
       JSON.stringify(sortedEvidence(parent.details.issues))
     ) {
-      changed.push(parent);
-      plan.updateTransaction(id, { details: { ...parent.details, issues } });
+      const full = plan.full(parent);
+      changed.push(full);
+      plan.updateTransaction(id, { details: { ...full.details, issues } });
     }
   }
   return changed;

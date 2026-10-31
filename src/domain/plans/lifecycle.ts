@@ -20,7 +20,7 @@ import { billedLinesByPurchase, inPerspective } from "../read-model.js";
 import { nextVersion, type Transaction } from "../records.js";
 import { canonicalAnnotation, reviewBasis, reviewState } from "./annotation.js";
 import { refreshInstallmentParents } from "./installments.js";
-import { FinancialPlan } from "./state.js";
+import { FinancialPlan, type LedgerRow } from "./state.js";
 
 const versionSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const annotationVersionSchema = versionSchema.or(z.literal(0));
@@ -52,9 +52,13 @@ interface AutomaticPosting {
 }
 
 /** A split veto follows native keys even if another financial row is proposed. */
+type RejectionFacts = Pick<Transaction, "sourceKey" | "sourceAliases"> & {
+  details: Pick<TransactionDetails, "rejectedPostingKeys">;
+};
+
 export function postingRejected(
-  pending: Pick<Transaction, "sourceKey" | "sourceAliases" | "details">,
-  posted: Pick<Transaction, "sourceKey" | "sourceAliases" | "details">,
+  pending: RejectionFacts,
+  posted: RejectionFacts,
 ): boolean {
   return (
     (pending.details.rejectedPostingKeys ?? []).some((key) =>
@@ -149,16 +153,21 @@ function removeCandidateReferences(
     if (candidates.length === previousCandidates.length) {
       continue;
     }
+    const full = plan.full(row);
     const issues =
       candidates.length > 0
-        ? row.details.issues
-        : row.details.issues.filter((issue) => issue !== matchIssue);
+        ? full.details.issues
+        : full.details.issues.filter((issue) => issue !== matchIssue);
     const value = {
-      details: { ...row.details, issues, pendingPostingCandidates: candidates },
+      details: {
+        ...full.details,
+        issues,
+        pendingPostingCandidates: candidates,
+      },
     };
     const annotation = plan.annotation(row.id);
-    const before = reviewState(row, annotation?.data);
-    const after = reviewState({ ...row, ...value }, annotation?.data);
+    const before = reviewState(full, annotation?.data);
+    const after = reviewState({ ...full, ...value }, annotation?.data);
     plan.updateTransaction(row.id, value);
     recordReviewTransition(plan, row.id, before, after, command, now);
   }
@@ -175,7 +184,7 @@ function removeCandidateReferences(
 export function refreshDuplicatePlans(plan: FinancialPlan): Transaction[] {
   const rows = plan.orderedRows();
   const children = billedLinesByPurchase(rows);
-  const lookalikeKey = (row: Transaction) =>
+  const lookalikeKey = (row: LedgerRow) =>
     row.status === "posted" &&
     row.presence !== "removed" &&
     !row.supersededById &&
@@ -205,13 +214,14 @@ export function refreshDuplicatePlans(plan: FinancialPlan): Transaction[] {
     if (row.details.issues.includes(duplicatePlanIssue) === duplicate) {
       continue;
     }
-    changed.push(row);
-    const issues = row.details.issues.filter(
+    const full = plan.full(row);
+    changed.push(full);
+    const issues = full.details.issues.filter(
       (issue) => issue !== duplicatePlanIssue,
     );
     plan.updateTransaction(row.id, {
       details: {
-        ...row.details,
+        ...full.details,
         issues: duplicate ? [...issues, duplicatePlanIssue] : issues,
       },
     });
@@ -375,8 +385,9 @@ export function planPosting(
   automatic?: AutomaticPosting,
 ): Transaction {
   const command = postingSchema.parse(input);
-  const pending = plan.transaction(command.pendingId);
-  const posted = plan.transaction(command.postedId);
+  // Both participants are written, so every check reads complete rows.
+  const pending = plan.hydrated(command.pendingId);
+  const posted = plan.hydrated(command.postedId);
   if (!pending || !posted) {
     throw new NotFoundError("Transaction not found");
   }
@@ -653,8 +664,8 @@ export function planUnlinkPosting(
   now: string,
 ): PostingSplit {
   const command = postingSchema.parse(input);
-  const survivor = plan.transaction(command.pendingId);
-  const retired = plan.transaction(command.postedId);
+  const survivor = plan.hydrated(command.pendingId);
+  const retired = plan.hydrated(command.postedId);
   if (!survivor || !retired) {
     throw new NotFoundError("Transaction not found");
   }
@@ -815,7 +826,7 @@ export function planRemoval(
   now: string,
 ): Transaction {
   const command = removalSchema.parse(input);
-  const row = plan.transaction(command.transactionId);
+  const row = plan.hydrated(command.transactionId);
   if (!row) {
     throw new NotFoundError("Transaction not found");
   }

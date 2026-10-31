@@ -13,7 +13,7 @@ import {
   postingComponents,
 } from "../../src/domain/plans/auto-posting.js";
 import { planUnlinkPosting } from "../../src/domain/plans/lifecycle.js";
-import { FinancialPlan } from "../../src/domain/plans/state.js";
+import { FinancialPlan, type LedgerRow } from "../../src/domain/plans/state.js";
 import {
   extractRun,
   planRun,
@@ -205,7 +205,7 @@ function prior(
 }
 
 function capturePlan(
-  rows: Transaction[],
+  rows: LedgerRow[],
   inputs: TransactionInput[],
   day = 3,
   automatic = true,
@@ -570,7 +570,7 @@ describe("automatic posting candidate graph", () => {
 
   it("planner keeps a split pending blocker beside a new pair", () => {
     const linked = capturePlan([pending("split")], [row("original-posted")]);
-    const survivor = linked.transaction("split")!;
+    const survivor = linked.hydrated("split")!;
     const postedId = survivor.details.postingLink!.postedId;
     const { pending: split } = planUnlinkPosting(
       linked,
@@ -1024,7 +1024,7 @@ describe("provider-neutral continuation admission and freshness", () => {
       status: "posted",
       kind: "purchase",
     });
-    expect(plan.transaction("pending")!.details.postingLink!.pending.kind).toBe(
+    expect(plan.hydrated("pending")!.details.postingLink!.pending.kind).toBe(
       "unknown",
     );
     expect(

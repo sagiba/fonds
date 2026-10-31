@@ -1,5 +1,6 @@
 import type { Account } from "../accounts.js";
 import type { Card } from "../cards.js";
+import type { JsonValue, TransactionDetails } from "../model.js";
 import type {
   Annotation,
   Connection,
@@ -19,10 +20,149 @@ export type {
   Run,
 } from "../records.js";
 
+/**
+ * The columns every sync decision may read of a row it neither writes nor
+ * compares in depth. Anything else is read only through `FinancialPlan.full`.
+ */
+export type LedgerFactField =
+  | "id"
+  | "connectionId"
+  | "sourceScope"
+  | "cardId"
+  | "sourceKey"
+  | "sourceAliases"
+  | "identityStrength"
+  | "status"
+  | "presence"
+  | "sourceAbsence"
+  | "kind"
+  | "merchantName"
+  | "transactionDate"
+  | "bookingDate"
+  | "billingDate"
+  | "amountMinor"
+  | "currency"
+  | "amountBasis"
+  | "originalAmountMinor"
+  | "originalCurrency"
+  | "installmentCount"
+  | "purchaseId"
+  | "installmentNumber"
+  | "firstSeenAt"
+  | "lastSeenAt"
+  | "lastSeenRunId"
+  | "version"
+  | "supersededById";
+
+/**
+ * A stored row loaded without its evidence. It deliberately has no
+ * `sourceEvidence`, provider namespace, source references, merchant details
+ * or posting-link contents, so code that needs them cannot compile against it.
+ */
+export type NarrowRow = Pick<Transaction, LedgerFactField> & {
+  readonly hydration: "narrow";
+  /** `sourceEvidence.identity.retiredFromMatching`, read only through `retiredFromMatching`. */
+  readonly retired: boolean;
+  /** Each provider's operational identity, read only through `providerIdentity`. */
+  readonly providerIdentity: Readonly<Record<string, JsonValue>>;
+  details: Pick<
+    TransactionDetails,
+    | "issues"
+    | "pendingPostingCandidates"
+    | "rejectedPostingKeys"
+    | "postingOverlap"
+  > & {
+    /** Presence only: a link's contents need the hydrated row. */
+    postingLink?: { readonly present: true };
+  };
+};
+
+/** A complete stored transaction or its narrow projection. */
+export type LedgerRow = Transaction | NarrowRow;
+
+export function isNarrow(row: LedgerRow): row is NarrowRow {
+  return "hydration" in row;
+}
+
+/** Whether a replaced generation can no longer win source matching. */
+export function retiredFromMatching(row: LedgerRow): boolean {
+  return isNarrow(row)
+    ? row.retired
+    : row.sourceEvidence?.identity?.retiredFromMatching === true;
+}
+
+/** A provider's operational identity of a stored row or an adapter input. */
+export function providerIdentity(
+  row: LedgerRow | Pick<Transaction, "details">,
+  provider: string,
+): JsonValue | undefined {
+  return "hydration" in row
+    ? row.providerIdentity[provider]
+    : row.details.provider[provider]?.identity;
+}
+
+/**
+ * Speculative facts for a narrow row whose hydration a planning round
+ * demanded. Such a round is always discarded, so these values only let it
+ * continue far enough to name the other rows it needs.
+ */
+function standIn(row: NarrowRow): Transaction {
+  const {
+    hydration: _hydration,
+    retired,
+    providerIdentity: identities,
+    details,
+    ...facts
+  } = row;
+  return {
+    ...facts,
+    description: null,
+    counterpartyName: null,
+    merchantProviderId: null,
+    merchantCategoryCode: null,
+    cardPresent: null,
+    authorizationMethod: null,
+    wallet: null,
+    threeDSecureUsed: null,
+    recurring: null,
+    providerTransactionCode: null,
+    fxFeeMinor: null,
+    fxFeeCurrency: null,
+    ...(retired
+      ? { sourceEvidence: { identity: { retiredFromMatching: true } } }
+      : {}),
+    details: {
+      schemaVersion: 1,
+      merchant: { address: null, phone: null },
+      sourceRefs: [],
+      issues: [...details.issues],
+      provider: Object.fromEntries(
+        Object.entries(identities).map(([provider, identity]) => [
+          provider,
+          { identity },
+        ]),
+      ),
+      ...(details.pendingPostingCandidates
+        ? { pendingPostingCandidates: [...details.pendingPostingCandidates] }
+        : {}),
+      ...(details.rejectedPostingKeys
+        ? { rejectedPostingKeys: [...details.rejectedPostingKeys] }
+        : {}),
+      ...(details.postingOverlap
+        ? { postingOverlap: details.postingOverlap }
+        : {}),
+    },
+  };
+}
+
 export interface FinancialSnapshot {
   connection: Connection;
-  /** Insertion order, before source-key sorting; adapters must preserve tie identity. */
-  rows: Transaction[];
+  /**
+   * Insertion order, before source-key sorting; adapters must preserve tie
+   * identity. A narrow row stands for a stored row whose complete document
+   * was not loaded.
+   */
+  rows: LedgerRow[];
   annotations: Annotation[];
   /**
    * Applied timestamp ascending, insertion order for ties. Without
@@ -51,7 +191,7 @@ export interface DeferredCandidate {
 
 /** Finite financial write plan; the adapter supplies a consistent operation-scoped snapshot. */
 export class FinancialPlan {
-  readonly rows: Map<string, Transaction>;
+  readonly rows: Map<string, LedgerRow>;
   readonly annotations: Map<string, Annotation>;
   readonly transactionWrites = new Map<string, Transaction>();
   /** Fresh observations commit independently of unchanged transaction content. */
@@ -67,6 +207,8 @@ export class FinancialPlan {
   readonly #accounts = new Map<string, Account>();
   /** Cards minted for transaction references; written only once referenced. */
   readonly #cardReferences = new Map<string, Card>();
+  readonly #demands = new Set<string>();
+  #originals: Map<string, LedgerRow> | undefined;
 
   constructor(readonly snapshot: FinancialSnapshot) {
     this.rows = new Map(
@@ -146,7 +288,7 @@ export class FinancialPlan {
     return card.id;
   }
 
-  #writeReferencedCard(row: Transaction) {
+  #writeReferencedCard(row: LedgerRow) {
     const card = row.cardId && this.#cardReferences.get(row.cardId);
     if (card) {
       this.#cardReferences.delete(card.id);
@@ -154,8 +296,39 @@ export class FinancialPlan {
     }
   }
 
-  transaction(id: string) {
+  transaction(id: string): LedgerRow | undefined {
     return this.rows.get(id);
+  }
+
+  /**
+   * The complete document of this row object, never a later version of it.
+   * A narrow row records a hydration demand: the plan must then be discarded
+   * and replanned with that row hydrated.
+   */
+  full(row: LedgerRow): Transaction {
+    if (!isNarrow(row)) {
+      return row;
+    }
+    this.#demands.add(row.id);
+    return standIn(row);
+  }
+
+  /** The current complete document of a row that is about to be decided on or written. */
+  hydrated(id: string): Transaction | undefined {
+    const row = this.rows.get(id);
+    return row && this.full(row);
+  }
+
+  /** The row as the snapshot loaded it, complete. */
+  original(id: string): Transaction | undefined {
+    this.#originals ??= new Map(this.snapshot.rows.map((row) => [row.id, row]));
+    const row = this.#originals.get(id);
+    return row && this.full(row);
+  }
+
+  /** Narrow rows this plan needed complete; a plan with any is speculative. */
+  get demands(): ReadonlySet<string> {
+    return this.#demands;
   }
 
   annotation(id: string) {
@@ -207,11 +380,11 @@ export class FinancialPlan {
   }
 
   updateTransaction(id: string, value: Partial<Transaction>) {
-    const before = this.rows.get(id);
-    if (!before) {
+    const stored = this.rows.get(id);
+    if (!stored) {
       throw new Error("Transaction not found");
     }
-    const row = { ...before, ...value };
+    const row = { ...this.full(stored), ...value };
     this.rows.set(id, row);
     this.transactionWrites.set(id, row);
     this.#writeReferencedCard(row);
