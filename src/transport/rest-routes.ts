@@ -65,6 +65,8 @@ export const OPERATION_ROUTES = {
   get_refresh: [{ method: "GET", path: "/v1/refreshes/:refreshId" }],
   list_transactions: [{ method: "GET", path: "/v1/transactions" }],
   get_transaction_totals: [{ method: "GET", path: "/v1/transactions/totals" }],
+  // A read with an ID list, which a query string cannot carry.
+  get_transactions: [{ method: "POST", path: "/v1/transactions/batch" }],
   get_transaction: [{ method: "GET", path: "/v1/transactions/:transactionId" }],
   list_events: [{ method: "GET", path: "/v1/events" }],
   list_sync_runs: [

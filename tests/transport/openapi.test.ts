@@ -28,6 +28,7 @@ const ROUTES = [
   ["get", "/v1/transactions", "list_transactions"],
   ["get", "/v1/transactions/{transactionId}", "get_transaction"],
   ["get", "/v1/transactions/totals", "get_transaction_totals"],
+  ["post", "/v1/transactions/batch", "get_transactions"],
   ["get", "/v1/events", "list_events"],
   ["get", "/v1/connections/{connectionId}/sync-runs", "list_sync_runs"],
   ["patch", "/v1/transactions/{transactionId}/annotation", "update_annotation"],

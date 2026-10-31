@@ -180,6 +180,11 @@ export const transaction = async (db: Executor, id: string) =>
     )
   ).map(({ row }) => row);
 
+export const transactionsWithAnnotation = (db: Executor, ids: string[]) =>
+  decodedRows(
+    joinedTransactions(db).where(inArray(schema.transactions.id, ids)),
+  );
+
 export const transactionWithAnnotation = (db: Executor, id: string) =>
   decodedRows(joinedTransactions(db).where(eq(schema.transactions.id, id)));
 
@@ -199,8 +204,8 @@ export function transactionPage(db: Executor, input: TransactionQuery) {
 }
 
 /** List pages read only what `TransactionListFacts` presents. */
-export function transactionListQuery(db: Executor, input: TransactionQuery) {
-  const query = db
+function listQuery(db: Executor) {
+  return db
     .select({
       row: listColumns(schema.transactions),
       reconciliation: {
@@ -221,11 +226,26 @@ export function transactionListQuery(db: Executor, input: TransactionQuery) {
       schema.annotations,
       eq(schema.annotations.transactionId, schema.transactions.id),
     )
-    .where(pageCondition(input))
-    .orderBy(...transactionOrder(schema.transactions))
     .$dynamic();
+}
+
+export function transactionListQuery(db: Executor, input: TransactionQuery) {
+  const query = listQuery(db)
+    .where(pageCondition(input))
+    .orderBy(...transactionOrder(schema.transactions));
   return input.limit === undefined ? query : query.limit(input.limit);
 }
+
+/** The list projection of these IDs, for compact reads by ID. */
+export function transactionListByIdQuery(db: Executor, ids: string[]) {
+  return listQuery(db).where(inArray(schema.transactions.id, ids));
+}
+
+export const transactionListById = async (db: Executor, ids: string[]) =>
+  (await transactionListByIdQuery(db, ids)).map((listed) => ({
+    row: decodeTransactionListFacts(listed),
+    annotation: listed.annotation,
+  }));
 
 export const transactionListPage = async (
   db: Executor,
@@ -271,6 +291,9 @@ function summaryQuery(db: Executor) {
     )
     .$dynamic();
 }
+
+export const transactionSummariesById = (db: Executor, ids: string[]) =>
+  summaryQuery(db).where(inArray(schema.transactions.id, ids));
 
 export function transactionSummaryPage(db: Executor, input: TransactionQuery) {
   const query = summaryQuery(db)

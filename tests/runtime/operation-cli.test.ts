@@ -416,6 +416,10 @@ describe("operation commands", () => {
         ],
         ["get_transaction", { transactionId: target.id, detail: false }],
         [
+          "get_transactions",
+          { ids: [target.id, "synthetic-missing"], view: "summary" },
+        ],
+        [
           "get_transaction_totals",
           { connectionId: "synthetic-cli", perspective: "billing" },
         ],

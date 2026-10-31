@@ -143,6 +143,17 @@ export interface Statements<Db> {
   transaction(db: Db, id: string): PromiseLike<Transaction[]>;
   transactionWithAnnotation(db: Db, id: string): PromiseLike<PlanRow[]>;
   transactionPage(db: Db, input: TransactionQuery): PromiseLike<PlanRow[]>;
+  /** Full rows of these IDs, in no particular order; at most 50 IDs. */
+  transactionsWithAnnotation(db: Db, ids: string[]): PromiseLike<PlanRow[]>;
+  /** List projections of these IDs, in no particular order; at most 50 IDs. */
+  transactionListById(
+    db: Db,
+    ids: string[],
+  ): PromiseLike<
+    { row: TransactionListFacts; annotation: Annotation | null }[]
+  >;
+  /** Summary projections of these IDs, in no particular order; at most 50 IDs. */
+  transactionSummariesById(db: Db, ids: string[]): PromiseLike<SummaryRow[]>;
   transactionListPage(
     db: Db,
     input: TransactionQuery,

@@ -753,6 +753,21 @@ export const transactionReadOutputSchema = z
     ]),
   })
   .strict();
+/** Records in request order; IDs that matched none are listed, not errors. */
+export const transactionBatchOutputSchema = z
+  .object({
+    data: z
+      .array(
+        z.union([
+          transactionOutputSchema,
+          transactionDetailOutputSchema,
+          transactionSummaryOutputSchema,
+        ]),
+      )
+      .max(100),
+    missingIds: z.array(idSchema).max(100),
+  })
+  .strict();
 const transactionReceiptSchema = z
   .object({ id: idSchema, version: versionSchema })
   .strict();

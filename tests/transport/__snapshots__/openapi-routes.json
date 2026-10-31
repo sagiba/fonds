@@ -295,6 +295,25 @@
       "500"
     ]
   },
+  "POST /v1/transactions/batch": {
+    "operationId": "get_transactions",
+    "scopes": [
+      "financial:read"
+    ],
+    "body": [
+      "ids (required)",
+      "view"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
+    ]
+  },
   "GET /v1/transactions/{transactionId}": {
     "operationId": "get_transaction",
     "scopes": [

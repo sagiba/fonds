@@ -69,6 +69,7 @@ import {
   refreshStartOutputSchema,
   syncRunListOutputSchema,
   totalsOutputSchema,
+  transactionBatchOutputSchema,
   transactionListOutputSchema,
   transactionReadOutputSchema,
   transactionWriteOutputSchema,
@@ -486,6 +487,26 @@ const definitions = named({
     transactionReadOutputSchema,
     "read",
   ),
+  get_transactions: define(
+    "Read up to 100 transactions by ID in one call, such as the records an event page names, in request order. view is summary (lean analysis items), compact (default; list records), detail (get_transaction's default) or evidence (detail with the evidence preview). IDs that match no transaction are returned in missingIds rather than failing the call. A result over the response limit fails with output_too_large: request fewer IDs or a leaner view.",
+    z
+      .object({
+        ids: z
+          .array(idSchema)
+          .min(1)
+          .max(100)
+          .refine(
+            (ids) => new Set(ids).size === ids.length,
+            "IDs must be unique",
+          ),
+        view: z
+          .enum(["summary", "compact", "detail", "evidence"])
+          .default("compact"),
+      })
+      .strict(),
+    transactionBatchOutputSchema,
+    "read",
+  ),
   get_transaction_totals: define(
     totalsDescription,
     totalsInputSchema,
@@ -791,6 +812,30 @@ export function createApplication(
         includeEvidence,
       ),
     }),
+    get_transactions: async ({ ids, view }) => {
+      const records = new Map<string, unknown>(
+        view === "summary"
+          ? (await store.getTransactionSummaries(ids)).map((row) => [
+              row.id,
+              presentTransactionSummary(row),
+            ])
+          : view === "compact"
+            ? (await store.getTransactionListViews(ids)).map((row) => [
+                row.id,
+                presentWireTransaction(row),
+              ])
+            : (await store.getTransactionViews(ids)).map((row) => [
+                row.id,
+                presentWireTransaction(row, true, view === "evidence"),
+              ]),
+      );
+      return {
+        data: ids.flatMap((id) =>
+          records.has(id) ? [records.get(id) as never] : [],
+        ),
+        missingIds: ids.filter((id) => !records.has(id)),
+      };
+    },
     get_transaction_totals: async ({ groupBy, ...filters }) => {
       if (groupBy === undefined) {
         return presentWireTotals(await store.getTotals(filters));

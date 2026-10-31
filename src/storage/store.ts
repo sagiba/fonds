@@ -141,6 +141,9 @@ const interpretationErrors = new WeakSet<Error>();
 // D1 binds at most 100 parameters per statement; one is the connection ID.
 const RUN_ID_BATCH = 99;
 
+/** IDs per read by ID, well within D1's 100 parameters. */
+const ID_BATCH = 50;
+
 const utf8 = new TextEncoder();
 
 /** PostgreSQL's "C" collation and SQLite's BINARY both compare UTF-8 bytes. */
@@ -781,6 +784,18 @@ function buildStore<Db>(
       cards: await statements.cards(tx, connectionId),
       accounts: await statements.accounts(tx, connectionId),
     };
+  }
+
+  /** Reads IDs in chunks that keep each statement within D1's parameters. */
+  async function byIds<Row>(
+    ids: readonly string[],
+    read: (db: Db, ids: string[]) => PromiseLike<Row[]>,
+  ): Promise<Row[]> {
+    const rows: Row[] = [];
+    for (const chunk of chunks([...new Set(ids)], ID_BATCH)) {
+      rows.push(...(await db.execute(read(db.root, chunk))));
+    }
+    return rows;
   }
 
   /** Card and account filters must belong to the requested connection. */
@@ -1610,6 +1625,18 @@ function buildStore<Db>(
         hasMore: rows.length > limit,
       };
     },
+    getTransactionViews: async (ids) =>
+      (await byIds(ids, statements.transactionsWithAnnotation)).map((row) =>
+        presentTransaction(row.row, row.annotation),
+      ),
+    getTransactionListViews: async (ids) =>
+      (await byIds(ids, statements.transactionListById)).map((row) =>
+        presentTransaction(row.row, row.annotation),
+      ),
+    getTransactionSummaries: async (ids) =>
+      (await byIds(ids, statements.transactionSummariesById)).map(
+        decodeSummary,
+      ),
     getTransaction: async (id) => {
       const row = (
         await db.execute(statements.transactionWithAnnotation(db.root, id))

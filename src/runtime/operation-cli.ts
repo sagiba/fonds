@@ -75,6 +75,10 @@ const presentations: Readonly<
     summary: "Show one transaction",
     example: ["--transaction-id", "TRANSACTION_ID"],
   },
+  get_transactions: {
+    summary: "Show several transactions by ID",
+    example: ["--ids", '["TRANSACTION_ID"]', "--view", "summary"],
+  },
   get_transaction_totals: {
     alias: "totals",
     summary: "Sum amounts by currency and amount basis",

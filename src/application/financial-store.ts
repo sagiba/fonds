@@ -187,6 +187,14 @@ export interface FinancialStore {
     input?: TransactionPageInput,
   ): Promise<TransactionSummaryPage>;
   getTransaction(id: string): Promise<TransactionView | undefined>;
+  /** Reads by ID return the records that exist, in no particular order. */
+  getTransactionViews(ids: readonly string[]): Promise<TransactionView[]>;
+  getTransactionListViews(
+    ids: readonly string[],
+  ): Promise<TransactionListView[]>;
+  getTransactionSummaries(
+    ids: readonly string[],
+  ): Promise<TransactionSummary[]>;
   /** Undefined for an unknown connection. */
   getCoverage(connectionId: string): Promise<ConnectionCoverage | undefined>;
   getTotals(
