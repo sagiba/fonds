@@ -212,6 +212,11 @@ export interface FinancialStore {
    */
   latestEventId(connectionId?: string): Promise<number>;
   listEvents(input?: EventPageInput): Promise<LedgerEvent[]>;
+  /**
+   * The feed for public items: stored documents only on the event types
+   * whose public summary reads them, null on every other event.
+   */
+  listWireEvents(input?: EventPageInput): Promise<LedgerEvent[]>;
   listSyncRuns(
     connectionId: string,
     page: SyncRunPageInput,

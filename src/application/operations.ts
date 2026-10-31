@@ -879,7 +879,7 @@ export function createApplication(
     },
     list_events: async ({ connectionId, cursor, limit }) => {
       const after = cursor === undefined ? 0 : decodeCursor("event", cursor);
-      const rows = await store.listEvents({
+      const rows = await store.listWireEvents({
         connectionId,
         after,
         limit: limit + 1,

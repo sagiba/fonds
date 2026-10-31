@@ -231,6 +231,55 @@ export function eventFilter(
   );
 }
 
+/**
+ * Event columns a public feed item presents. Stored documents travel only for
+ * the types whose public summary reads them, as JSON text: both states of a
+ * transaction update (for changedFields), and the after state of a baseline
+ * or refresh event (for its summary or refresh reference).
+ */
+export function wireEventColumns<
+  T extends Record<
+    | "id"
+    | "connectionId"
+    | "transactionId"
+    | "runId"
+    | "type"
+    | "createdAt"
+    | "actor"
+    | "before"
+    | "after",
+    AnyColumn
+  >,
+>(
+  events: T,
+): Pick<
+  T,
+  | "id"
+  | "connectionId"
+  | "transactionId"
+  | "runId"
+  | "type"
+  | "createdAt"
+  | "actor"
+> & { before: SQL<string | null>; after: SQL<string | null> } {
+  return {
+    id: events.id,
+    connectionId: events.connectionId,
+    transactionId: events.transactionId,
+    runId: events.runId,
+    type: events.type,
+    createdAt: events.createdAt,
+    actor: events.actor,
+    before: sql<
+      string | null
+    >`case when ${events.type} = 'transaction.updated' then ${events.before} end`,
+    after: sql<
+      string | null
+    >`case when ${events.type} in ('transaction.updated', 'sync.baseline')
+      or ${events.type} like 'refresh.%' then ${events.after} end`,
+  };
+}
+
 export function connectionColumns<T extends Columns<Connection>>(
   table: T,
 ): Pick<T, "id" | "provider" | "displayName" | "createdAt" | "config"> {

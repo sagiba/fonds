@@ -108,6 +108,11 @@ export interface DeferredEvidenceWrite {
   lastSeenRunId: string;
 }
 
+export type WireEventRow = Omit<LedgerEvent, "before" | "after"> & {
+  before: string | null;
+  after: string | null;
+};
+
 export interface GroupedMoneyRow {
   groupKey: string | null;
   groupRank: unknown;
@@ -182,6 +187,8 @@ export interface Statements<Db> {
     input: TransactionQuery & { perspective: Exclude<Perspective, "all"> },
   ): PromiseLike<TotalsPartRow[]>;
   events(db: Db, input: EventQuery): PromiseLike<LedgerEvent[]>;
+  /** The feed with `wireEventColumns`: documents only where public items read them. */
+  wireEvents(db: Db, input: EventQuery): PromiseLike<WireEventRow[]>;
   /**
    * Current rows per transaction month, newest first with undated rows (a null
    * month) leading, at most `limit` groups; each row repeats the whole count

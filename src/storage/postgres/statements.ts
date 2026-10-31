@@ -43,6 +43,7 @@ import {
   transactionFilter,
   transactionOrder,
   transactionSeek,
+  wireEventColumns,
 } from "../sql.js";
 import type { DeferredEvidenceWrite } from "../statements.js";
 import {
@@ -435,6 +436,14 @@ export function totalsParts(
 export const events = (db: Executor, input: EventQuery) =>
   db
     .select()
+    .from(schema.events)
+    .where(eventFilter(schema.events, input))
+    .orderBy(asc(schema.events.id))
+    .limit(input.limit);
+
+export const wireEvents = (db: Executor, input: EventQuery) =>
+  db
+    .select(wireEventColumns(schema.events))
     .from(schema.events)
     .where(eventFilter(schema.events, input))
     .orderBy(asc(schema.events.id))

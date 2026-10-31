@@ -1770,6 +1770,17 @@ function buildStore<Db>(
       await checkEmpty(rows, filters.connectionId);
       return rows;
     },
+    listWireEvents: async (input) => {
+      const filters = cursorSchema.parse(input ?? {});
+      const rows = await db.execute(statements.wireEvents(db.root, filters));
+      await checkEmpty(rows, filters.connectionId);
+      return rows.map((row) => ({
+        ...row,
+        before:
+          row.before === null ? null : (JSON.parse(row.before) as unknown),
+        after: row.after === null ? null : (JSON.parse(row.after) as unknown),
+      }));
+    },
     listSyncRuns: async (id, page) => {
       const rows = await db.execute(statements.syncRuns(db.root, id, page));
       await checkEmpty(rows, id);
