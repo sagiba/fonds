@@ -133,7 +133,7 @@ each month or recent window is bounded at ten minutes.
 
 `fonds_sync` emits refresh/capture IDs, stage/reason codes, durations, failure
 categories, counts (`observed`: per-capture accepted identities; `extracted`:
-parser inputs; `dbBytesRead`: PostgreSQL transaction bytes, not pooled reads);
+parser inputs; `dbBytesRead`: PostgreSQL bytes, per transaction or `fonds_operation`);
 `fonds_http_request`/`fonds_operation` log bytes/rows. Logs exclude source
 values, credentials, provider identifiers; the [operator CLI](local-setup.md#operator-commands) gives bounded
 reports and temporary raw archives.

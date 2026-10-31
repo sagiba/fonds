@@ -1,10 +1,16 @@
+import { EventEmitter } from "node:events";
+
 import { sql } from "drizzle-orm";
+import { Pool } from "pg";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { CollectionStore } from "../../src/application/collection.js";
+import type { FinancialStore } from "../../src/application/financial-store.js";
 import {
   createApplication,
+  operationDefinitions,
   type OperationLog,
+  type OperationName,
 } from "../../src/application/operations.js";
 import {
   createSyncDiagnosticReport,
@@ -12,9 +18,9 @@ import {
 } from "../../src/application/sync-diagnostics.js";
 import {
   bytesReadSince,
+  databaseByteMeter,
   initializePostgresDatabase,
   openPostgresDatabase,
-  transactionByteMeter,
 } from "../../src/storage/postgres/store.js";
 import { openDatabase } from "../../src/storage/sqlite/database.js";
 import { disposableDatabase } from "../helpers/postgres-database.js";
@@ -96,7 +102,7 @@ describe("database byte readings", () => {
   const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
   it("attributes concurrent operations' transactions to their own meter", async () => {
-    const meter = transactionByteMeter();
+    const meter = databaseByteMeter();
     const a: number[] = [];
     const b: number[] = [];
     const socketA = client(5_000);
@@ -128,7 +134,7 @@ describe("database byte readings", () => {
   });
 
   it("reports parallel transactions in one operation once each", async () => {
-    const meter = transactionByteMeter();
+    const meter = databaseByteMeter();
     const observed: number[] = [];
     const first = client(0);
     const second = client(70);
@@ -150,7 +156,7 @@ describe("database byte readings", () => {
   });
 
   it("carries no bytes over when a pooled client serves the next transaction", async () => {
-    const meter = transactionByteMeter();
+    const meter = databaseByteMeter();
     const observed: number[] = [];
     const reused = client(1_000);
     await meter.run(
@@ -170,7 +176,7 @@ describe("database byte readings", () => {
   });
 
   it("reports a failed transaction's bytes once and keeps its error", async () => {
-    const meter = transactionByteMeter();
+    const meter = databaseByteMeter();
     const observed: number[] = [];
     const socket = client(200);
     const failure = new Error("synthetic statement failure");
@@ -188,7 +194,7 @@ describe("database byte readings", () => {
   });
 
   it("reads a transaction's bytes so far and reports nothing without a meter", async () => {
-    const meter = transactionByteMeter();
+    const meter = databaseByteMeter();
     const socket = client(10);
     const tx = transaction(socket);
     const midway = await meter.measure(tx, async () => {
@@ -207,6 +213,270 @@ describe("database byte readings", () => {
     );
     expect(result).toBe("result");
     expect(calls).toBe(1);
+  });
+
+  /**
+   * A pool that never connects: each checked-out client answers every
+   * statement with no rows, its socket receiving a fixed byte count. Pooled
+   * `query` fails, so a statement that escapes metering is visible.
+   */
+  function fakePool(
+    bytesPerStatement: number,
+    script: (statement: string) => {
+      bytes?: number;
+      delayMs?: number;
+      error?: Error;
+    } = () => ({}),
+  ) {
+    const pool = new Pool();
+    const log: string[] = [];
+    const received: string[][] = [];
+    let sent = 0;
+    let failNext: Error | undefined;
+    const checkout = async () => {
+      const socket = { bytesRead: 7_000 };
+      const statements: string[] = [];
+      received.push(statements);
+      return Object.assign(new EventEmitter(), {
+        connection: { stream: socket },
+        async query(config: string | { text: string }) {
+          const text = typeof config === "string" ? config : config.text;
+          statements.push(text);
+          const { bytes = bytesPerStatement, delayMs, error } = script(text);
+          await (delayMs === undefined
+            ? tick()
+            : new Promise((resolve) => setTimeout(resolve, delayMs)));
+          socket.bytesRead += bytes;
+          sent += bytes;
+          const failure = error ?? failNext;
+          failNext = undefined;
+          if (failure) {
+            throw failure;
+          }
+          return { rows: [], rowCount: 0, fields: [] };
+        },
+        release(error?: Error | boolean) {
+          log.push(error ? "discarded" : "released");
+        },
+      });
+    };
+    Object.assign(pool, {
+      connect: checkout,
+      query: async () => {
+        log.push("unmetered");
+        return { rows: [], rowCount: 0, fields: [] };
+      },
+    });
+    return {
+      pool,
+      log,
+      received,
+      takeSent: () => {
+        const bytes = sent;
+        sent = 0;
+        return bytes;
+      },
+      failNext: (error: Error) => {
+        failNext = error;
+      },
+    };
+  }
+
+  it("meters a statement outside a transaction on its own client, before releasing it", async () => {
+    const fake = fakePool(300);
+    const meter = databaseByteMeter();
+    const pool = meter.pool(fake.pool);
+    await meter.run(
+      () => pool.query("SELECT 1"),
+      (bytes) => fake.log.push(`observed ${bytes}`),
+    );
+    expect(fake.log).toEqual(["observed 300", "released"]);
+    await pool.query("SELECT 2");
+    expect(fake.log.at(-1)).toBe("unmetered");
+    expect(fake.received).toEqual([["SELECT 1"]]);
+  });
+
+  it("meters a lazy thenable that issues its statement only when awaited", async () => {
+    // Drizzle queries are thenables that start on `then`, after `run` returns them.
+    const fake = fakePool(250);
+    const meter = databaseByteMeter();
+    const pool = meter.pool(fake.pool);
+    const lazy = {
+      then: (
+        resolve: (value: unknown) => void,
+        reject: (error: unknown) => void,
+      ) => pool.query("SELECT 1").then(resolve, reject),
+    };
+    await meter.run(
+      () => lazy as unknown as Promise<unknown>,
+      (bytes) => fake.log.push(`observed ${bytes}`),
+    );
+    expect(fake.log).toEqual(["observed 250", "released"]);
+  });
+
+  it("keeps overlapping operations' pooled statements on their own meters", async () => {
+    const meter = databaseByteMeter();
+    const small = meter.pool(fakePool(20).pool);
+    const large = meter.pool(fakePool(900).pool);
+    const a: number[] = [];
+    const b: number[] = [];
+    await Promise.all([
+      meter.run(
+        () => Promise.all([small.query("A1"), large.query("A2")]),
+        (bytes) => a.push(bytes),
+      ),
+      meter.run(
+        () => large.query("B1"),
+        (bytes) => b.push(bytes),
+      ),
+    ]);
+    expect(a.sort((x, y) => x - y)).toEqual([20, 900]);
+    expect(b).toEqual([900]);
+  });
+
+  it("reports a failed pooled statement once, discards its client and keeps its error", async () => {
+    const fake = fakePool(55);
+    const meter = databaseByteMeter();
+    const pool = meter.pool(fake.pool);
+    const failure = new Error("synthetic statement failure");
+    fake.failNext(failure);
+    await expect(
+      meter.run(
+        () => pool.query("SELECT 1"),
+        (bytes) => fake.log.push(`observed ${bytes}`),
+      ),
+    ).rejects.toBe(failure);
+    expect(fake.log).toEqual(["observed 55", "discarded"]);
+  });
+
+  it("logs a failed operation once every statement it issued has reported", async () => {
+    const failure = new Error("synthetic statement failure");
+    const fake = fakePool(0, (statement) =>
+      statement === "FAILING"
+        ? { bytes: 150, error: failure }
+        : { bytes: 900, delayMs: 20 },
+    );
+    const meter = databaseByteMeter();
+    const pool = meter.pool(fake.pool);
+    const entries: OperationLog[] = [];
+    // Two connections whose reads run in parallel: one fails at once and the
+    // other is still receiving rows when the operation's promise rejects.
+    const store = {
+      backend: "postgres",
+      listConnections: async () => {
+        await Promise.all([pool.query("SLOW"), pool.query("FAILING")]);
+        return [];
+      },
+    } as unknown as FinancialStore;
+    const listConnections = createApplication(store, {
+      onOperation: (entry) => {
+        entries.push(entry);
+      },
+      meterDbBytes: meter.run,
+    }).operations.find(({ name }) => name === "list_connections")!;
+    await expect(listConnections.execute({})).rejects.toBe(failure);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      operation: "list_connections",
+      dbBytesRead: 1_050,
+    });
+    expect(fake.log.sort()).toEqual(["discarded", "released"]);
+  });
+
+  it("waits for a store transaction still starting beside a failed statement", async () => {
+    const failure = new Error("synthetic statement failure");
+    const fake = fakePool(0, (statement) =>
+      statement === "FAILING"
+        ? { bytes: 40, error: failure }
+        : /^(begin|commit|rollback)/.test(statement)
+          ? { bytes: 5 }
+          : { bytes: 600, delayMs: 20 },
+    );
+    const db = openPostgresDatabase(fake.pool);
+    const observed: number[] = [];
+    await expect(
+      db.meterDbBytes(
+        () =>
+          Promise.all([
+            // Its connection lock finds no row, after its read is received.
+            db.updateConfig("synthetic", (config) => config),
+            db.pool.query("FAILING"),
+          ]),
+        (bytes) => observed.push(bytes),
+      ),
+    ).rejects.toBe(failure);
+    // BEGIN and ROLLBACK acknowledgements fall outside the measured body.
+    expect(observed.sort((x, y) => x - y)).toEqual([40, 600]);
+    expect(fake.received.flat()).toContain("rollback");
+  });
+
+  it("stays a pool to Drizzle, which keeps a transaction on one client", async () => {
+    const fake = fakePool(10);
+    const db = openPostgresDatabase(fake.pool);
+    expect(db.pool).toBeInstanceOf(Pool);
+    await db.meterDbBytes(
+      () =>
+        db.orm.transaction(async (tx) => {
+          await tx.execute(sql`SELECT 1`);
+        }),
+      () => undefined,
+    );
+    expect(fake.received).toEqual([["begin", "SELECT 1", "commit"]]);
+    expect(fake.log).toEqual(["released"]);
+  });
+
+  it("logs every read operation's bytes, statements outside transactions included", async () => {
+    const fake = fakePool(100);
+    const db = openPostgresDatabase(fake.pool);
+    const entries: OperationLog[] = [];
+    const application = createApplication(db, {
+      onOperation: (entry) => {
+        entries.push(entry);
+      },
+      meterDbBytes: db.meterDbBytes,
+    });
+    const scope = { connectionId: "synthetic" };
+    const inputs: Partial<Record<OperationName, object[]>> = {
+      list_connections: [{}],
+      get_connection: [scope],
+      get_connection_coverage: [scope],
+      list_cards: [scope],
+      get_card: [{ cardId: "synthetic-card" }],
+      list_accounts: [scope],
+      get_account: [{ accountId: "synthetic-account" }],
+      list_transactions: [{}, { view: "summary" }],
+      get_transaction: [
+        { transactionId: "synthetic-transaction" },
+        { transactionId: "synthetic-transaction", detail: false },
+      ],
+      get_transactions: [
+        { ids: ["synthetic-transaction"] },
+        { ids: ["synthetic-transaction"], view: "summary" },
+        { ids: ["synthetic-transaction"], view: "detail" },
+      ],
+      get_transaction_totals: [{}, { groupBy: "month" }],
+      list_events: [scope],
+      list_sync_runs: [scope],
+      get_refresh: [{ refreshId: "synthetic-refresh" }],
+      list_refreshes: [scope],
+    };
+    const reads = operationDefinitions
+      .filter((definition) => definition.access === "read")
+      .map((definition) => definition.name);
+    expect(Object.keys(inputs).sort()).toEqual([...reads].sort());
+    for (const operation of application.operations) {
+      for (const input of inputs[operation.name as OperationName] ?? []) {
+        // Absent rows end some reads as not found; their bytes still count.
+        await operation.execute(input).catch(() => undefined);
+        const sent = fake.takeSent();
+        expect(sent, operation.name).toBeGreaterThan(0);
+        expect(entries.at(-1)).toMatchObject({
+          operation: operation.name,
+          dbBytesRead: sent,
+        });
+      }
+    }
+    expect(fake.log).not.toContain("unmetered");
   });
 
   it("reports no database bytes on SQLite, which is not network-metered", async () => {
@@ -290,7 +560,7 @@ describe.skipIf(!postgresUrl)("PostgreSQL database byte readings", () => {
   /** A transaction whose body reads one row of `length` ASCII bytes. */
   function reader(
     store: ReturnType<typeof openPostgresDatabase>,
-    meter: ReturnType<typeof transactionByteMeter>,
+    meter: ReturnType<typeof databaseByteMeter>,
   ) {
     return (length: number, before?: () => Promise<void>, fail = false) =>
       store.orm.transaction((tx) =>
@@ -326,7 +596,7 @@ describe.skipIf(!postgresUrl)("PostgreSQL database byte readings", () => {
   };
 
   it("keeps overlapping operations' bytes on their own meters, once each", async () => {
-    const meter = transactionByteMeter();
+    const meter = databaseByteMeter();
     const read = reader(db, meter);
     const meet = barrier(2);
     const a: number[] = [];
@@ -348,7 +618,7 @@ describe.skipIf(!postgresUrl)("PostgreSQL database byte readings", () => {
   });
 
   it("reports overlapping transactions within one operation once each", async () => {
-    const meter = transactionByteMeter();
+    const meter = databaseByteMeter();
     const read = reader(db, meter);
     const meet = barrier(2);
     const observed: number[] = [];
@@ -369,7 +639,7 @@ describe.skipIf(!postgresUrl)("PostgreSQL database byte readings", () => {
       max: 1,
     });
     try {
-      const meter = transactionByteMeter();
+      const meter = databaseByteMeter();
       const read = reader(single, meter);
       const observed: number[] = [];
       await meter.run(
@@ -388,8 +658,29 @@ describe.skipIf(!postgresUrl)("PostgreSQL database byte readings", () => {
     }
   });
 
+  it("meters overlapping statements outside transactions on their own operations", async () => {
+    const a: number[] = [];
+    const b: number[] = [];
+    const select = (length: number) =>
+      db.orm.execute(sql`SELECT repeat('x', ${length}::int) AS payload`);
+    await Promise.all([
+      db.meterDbBytes(
+        () => select(20_000),
+        (bytes) => a.push(bytes),
+      ),
+      db.meterDbBytes(
+        () => select(100),
+        (bytes) => b.push(bytes),
+      ),
+    ]);
+    expect(a).toHaveLength(1);
+    expect(b).toHaveLength(1);
+    within(a[0], 20_000);
+    within(b[0], 100);
+  });
+
   it("reports a rolled-back transaction's bytes once", async () => {
-    const meter = transactionByteMeter();
+    const meter = databaseByteMeter();
     const observed: number[] = [];
     await expect(
       meter.run(
@@ -401,7 +692,7 @@ describe.skipIf(!postgresUrl)("PostgreSQL database byte readings", () => {
     within(observed[0], 2_000);
   });
 
-  it("logs each operation's own transaction bytes and leaves pooled reads uncounted", async () => {
+  it("logs each operation's own bytes, reads outside transactions included", async () => {
     await db.ensureConnection({ id: "synthetic", provider: "cal" });
     await ingest(db, "synthetic", ["a", "b", "c"], "2040-07-02T00:00:00Z");
     const entries: OperationLog[] = [];
@@ -431,7 +722,7 @@ describe.skipIf(!postgresUrl)("PostgreSQL database byte readings", () => {
       "update_annotation",
       "update_annotation",
     ]);
-    expect(entries[0]).not.toHaveProperty("dbBytesRead");
+    expect(entries[0]!.dbBytesRead).toBeGreaterThan(0);
     // The same edit of a like row reads about the same; a concurrent call's
     // bytes counted twice or on the wrong call would double or vanish.
     const alone = entries[1]!.dbBytesRead!;

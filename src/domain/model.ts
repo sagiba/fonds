@@ -98,15 +98,21 @@ const canonicalTextSchema = z
 const nullableCanonicalText = canonicalTextSchema
   .max(CANONICAL_TEXT_MAX_LENGTH)
   .nullable();
+// A refinement rather than a lookahead pattern: published schemas reach JSON
+// Schema validators that cannot evaluate lookarounds.
+const notYearZero = (value: string) => !value.startsWith("0000");
+
 /** `YYYY-MM-DD` from year 0001: PostgreSQL's `date` has no year zero. */
-export const calendarDateSchema = z.iso.date().regex(/^(?!0000)/);
+export const calendarDateSchema = z.iso
+  .date()
+  .refine(notYearZero, "Year 0000 does not exist");
 const nullableDate = calendarDateSchema.nullable();
 
 /** Preserve source precision and any supplied offset; no offset means timezone unknown. */
 export const transactionDateTimeSchema = z.iso
   .datetime({ local: true, offset: true })
   .max(64)
-  .regex(/^(?!0000)/);
+  .refine(notYearZero, "Year 0000 does not exist");
 
 /** Exact decimal text as the source states it; never a float. */
 export const exchangeRateSchema = z

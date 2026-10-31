@@ -365,6 +365,27 @@ describe("OpenAPI document", () => {
     );
   });
 
+  it("publishes only patterns without lookaround or named groups", async () => {
+    // Generated clients and connectors commonly lack these ECMAScript extensions.
+    const patterns: string[] = [];
+    const collect = (value: unknown): void => {
+      if (Array.isArray(value)) {
+        value.forEach(collect);
+      } else if (value !== null && typeof value === "object") {
+        for (const [key, entry] of Object.entries(value)) {
+          if (key === "pattern" && typeof entry === "string") {
+            patterns.push(entry);
+          } else {
+            collect(entry);
+          }
+        }
+      }
+    };
+    collect(await hostedDocument());
+    expect(patterns.length).toBeGreaterThan(0);
+    expect(patterns.filter((pattern) => /\(\?[=!<]/.test(pattern))).toEqual([]);
+  });
+
   it("places path, query and body inputs as the routes read them", async () => {
     const document = await hostedDocument();
     const getTransaction = operation(
