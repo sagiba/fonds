@@ -2378,70 +2378,82 @@ describe("soft provider stops, attention retries and login pacing", () => {
   });
 
   it("does not log in again for a continuation sooner than the login interval", async () => {
-    const requested: string[] = [];
-    const sessions = { count: 0 };
-    const collector = async () => {
-      sessions.count++;
-      return source(async function* (options) {
-        requested.push(options.range!.from);
-        await new Promise((resolve) => setTimeout(resolve, 60));
-        yield capture(options.range!.from);
+    const start = Date.parse("2040-06-01T08:00:00.000Z");
+    vi.useFakeTimers({ toFake: ["Date", "performance"], now: start });
+    try {
+      const requested: string[] = [];
+      const sessions = { count: 0 };
+      const collector = async () => {
+        sessions.count++;
+        return source(async function* (options) {
+          requested.push(options.range!.from);
+          // Each month takes a minute.
+          vi.advanceTimersByTime(60_000);
+          yield capture(options.range!.from);
+        });
+      };
+      const targets = async () => ({
+        targets: [{ connectionId, adapter: synthetic, collector }],
+        failures: 0,
       });
-    };
-    const targets = async () => ({
-      targets: [{ connectionId, adapter: synthetic, collector }],
-      failures: 0,
-    });
-    let continuedAt = 0;
-    const loginIntervalMs = 300;
-    // Room for the first month only; the continuation waits out the interval.
-    const first = createRefreshService({
-      store: db,
-      targets,
-      log: () => {},
-      retryDelaysMs: [],
-      budgetMs: UNIT_DEADLINE_MS + 30,
-      continueLater: async () => {
-        continuedAt = Date.now();
-      },
-      loginIntervalMs,
-    });
-    const started = await first.start(connectionId, {
-      trigger: "manual",
-      range,
-    });
-    await first.settled();
-    expect(continuedAt).toBeGreaterThanOrEqual(
-      (await loginAttemptAt()) + loginIntervalMs,
-    );
-    expect(sessions.count).toBe(1);
-    // A continuation arriving at once, under the default interval, does not log in.
-    const early = createRefreshService({
-      store: db,
-      targets,
-      log: () => {},
-      retryDelaysMs: [],
-      budgetMs: 2 * UNIT_DEADLINE_MS,
-    });
-    await early.resumeStalled();
-    await early.settled();
-    expect(sessions.count).toBe(1);
-    expect(requested).toEqual(["2040-03-01"]);
-    expect(await db.getRefresh(started.refresh!.id)).toMatchObject({
-      status: "running",
-      windows: [
-        { status: "completed" },
-        { status: "pending" },
-        { status: "pending" },
-      ],
-    });
-    await age(11);
-    await early.resumeStalled();
-    await early.settled();
-    expect(sessions.count).toBe(2);
-    expect(await db.getRefresh(started.refresh!.id)).toMatchObject({
-      status: "completed",
-    });
+      const waits: number[] = [];
+      let continuedAt = 0;
+      // Room for the first month only; the continuation waits out the interval.
+      const first = createRefreshService({
+        store: db,
+        targets,
+        log: () => {},
+        retryDelaysMs: [],
+        budgetMs: UNIT_DEADLINE_MS + 30_000,
+        continueLater: async () => {
+          continuedAt = Date.now();
+        },
+        sleep: async (ms) => {
+          waits.push(ms);
+          vi.advanceTimersByTime(ms);
+        },
+      });
+      const started = await first.start(connectionId, {
+        trigger: "manual",
+        range,
+      });
+      await first.settled();
+      expect(await loginAttemptAt()).toBe(start);
+      // Login at 08:00, yield at 08:01: wait nine minutes, continue at 08:10.
+      expect(waits).toEqual([9 * 60_000]);
+      expect(continuedAt).toBe(start + 10 * 60_000);
+      expect(sessions.count).toBe(1);
+      // A continuation arriving at 08:05, as a poll's can, does not log in.
+      vi.setSystemTime(start + 5 * 60_000);
+      const early = createRefreshService({
+        store: db,
+        targets,
+        log: () => {},
+        retryDelaysMs: [],
+        budgetMs: 2 * UNIT_DEADLINE_MS,
+      });
+      await early.resumeStalled();
+      await early.settled();
+      expect(sessions.count).toBe(1);
+      expect(requested).toEqual(["2040-03-01"]);
+      expect(await db.getRefresh(started.refresh!.id)).toMatchObject({
+        status: "running",
+        windows: [
+          { status: "completed" },
+          { status: "pending" },
+          { status: "pending" },
+        ],
+      });
+      vi.setSystemTime(start + 10 * 60_000);
+      await early.resumeStalled();
+      await early.settled();
+      expect(sessions.count).toBe(2);
+      expect(await db.getRefresh(started.refresh!.id)).toMatchObject({
+        status: "completed",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("admits one manual retry past an attention block across services, whatever their interleaving", async () => {

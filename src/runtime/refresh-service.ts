@@ -103,6 +103,8 @@ export interface RefreshServiceOptions {
   retryDelaysMs?: readonly number[];
   /** The pause between a connection's logins in budgeted continuations. */
   loginIntervalMs?: number;
+  /** Waits before a paced continuation; tests drive it with their own clock. */
+  sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   log?: (entry: object) => void;
   debugArchiveDays?: number;
 }
@@ -161,6 +163,9 @@ export function createRefreshService(options: RefreshServiceOptions) {
   const emit = syncDiagnostics(log);
   const shutdown = options.signal ?? new AbortController().signal;
   const loginIntervalMs = options.loginIntervalMs ?? LOGIN_INTERVAL_MS;
+  const sleep =
+    options.sleep ??
+    ((ms: number, signal: AbortSignal) => delay(ms, undefined, { signal }));
   /** Executions in this process, by refresh, until each settles. */
   const running = new Map<string, Promise<void>>();
   /** When a read last tried to continue each refresh. */
@@ -273,7 +278,7 @@ export function createRefreshService(options: RefreshServiceOptions) {
         deadline - performance.now(),
       );
       if (waitMs > 0) {
-        await delay(waitMs, undefined, { signal: shutdown }).catch(() => {});
+        await sleep(waitMs, shutdown).catch(() => {});
       }
     } catch {
       // The continuation's own check paces it instead.
