@@ -1,4 +1,4 @@
-import "../helpers/run-history-differential.js";
+import "../helpers/application-loading-differential.js";
 
 import { describe, expect, it } from "vitest";
 

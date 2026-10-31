@@ -23,7 +23,7 @@ import type {
   PriorRun,
   RunHistoryDocument,
 } from "../domain/plans/run-history.js";
-import type { FinancialPlan } from "../domain/plans/state.js";
+import type { FinancialPlan, NarrowRow } from "../domain/plans/state.js";
 import type {
   Perspective,
   TotalsPart,
@@ -55,6 +55,13 @@ export type LatestAppliedRun = OrderedRun & {
 
 export interface PlanRow {
   row: Transaction;
+  annotation: Annotation | null;
+}
+
+/** A narrow row, whether it must be hydrated before planning, and its annotation. */
+export interface LedgerLoad {
+  row: NarrowRow;
+  doubt: boolean;
   annotation: Annotation | null;
 }
 
@@ -246,6 +253,10 @@ export interface Statements<Db> {
     limit: number,
   ): PromiseLike<Pick<Run, "id" | "parserVersion">[]>;
   planRows(db: Db, id: string, scope?: PlanScope): PromiseLike<PlanRow[]>;
+  /** Narrow rows of every transaction of the connection, in ingestion order. */
+  ledgerRows(db: Db, id: string): PromiseLike<LedgerLoad[]>;
+  /** Complete rows of these IDs, in no particular order. */
+  completeRows(db: Db, ids: string[]): PromiseLike<Transaction[]>;
   /** Every applied run, in application order. */
   priorRuns(db: Db, id: string): PromiseLike<PriorRun[]>;
   /**

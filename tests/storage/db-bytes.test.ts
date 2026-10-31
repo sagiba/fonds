@@ -16,6 +16,7 @@ import {
   createSyncDiagnosticReport,
   type SyncDiagnostic,
 } from "../../src/application/sync-diagnostics.js";
+import { emptyDetails, type TransactionInput } from "../../src/domain/model.js";
 import {
   bytesReadSince,
   databaseByteMeter,
@@ -532,6 +533,64 @@ describe.skipIf(!postgresUrl)("PostgreSQL database byte readings", () => {
     const large = await reconciled("synthetic-large", 200);
     expect(small).toBeGreaterThan(0);
     expect(large).toBeGreaterThan(small!);
+  });
+
+  it("reads complete documents only for the rows an application hydrates", async () => {
+    await db.ensureConnection({ id: "synthetic", provider: "cal" });
+    const heavy = (key: string) =>
+      row(key, {
+        details: {
+          ...emptyDetails(),
+          provider: {
+            cal: {
+              retained: {
+                comments: [{ key, text: "Synthetic evidence ".repeat(100) }],
+              },
+            },
+          },
+        },
+      });
+    const reconcile = async (
+      accountKey: string,
+      rows: TransactionInput[],
+      capturedAt: string,
+    ) => {
+      const report = createSyncDiagnosticReport();
+      await db.ingestRun(
+        {
+          runId: crypto.randomUUID(),
+          connectionId: "synthetic",
+          responses: [
+            {
+              accountKey,
+              endpoint: "synthetic",
+              capturedAt,
+              responseText: JSON.stringify(rows),
+            },
+          ],
+        },
+        synthetic,
+        report.log,
+      );
+      return report
+        .report()
+        .entries.find(
+          (entry: SyncDiagnostic) =>
+            entry.stage === "reconciliation" && entry.outcome === "completed",
+        )?.counts;
+    };
+    const ledger = keys(200).map(heavy);
+    await reconcile("account", ledger, "2040-07-02T00:00:00Z");
+    const observed = await reconcile("account", ledger, "2040-07-03T00:00:00Z");
+    // Another account's capture leaves the stored rows narrow.
+    const untouched = await reconcile(
+      "other",
+      [row("other", { sourceScope: "other" })],
+      "2040-07-04T00:00:00Z",
+    );
+    expect(observed).toMatchObject({ ledgerRows: 200, hydratedRows: 200 });
+    expect(untouched).toMatchObject({ ledgerRows: 200, hydratedRows: 0 });
+    expect(untouched!.dbBytesRead!).toBeLessThan(observed!.dbBytesRead! / 3);
   });
 
   it("tells a meter each transaction's bytes and survives a failing observer", async () => {

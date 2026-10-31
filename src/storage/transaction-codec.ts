@@ -6,11 +6,11 @@ import {
   sourceEvidenceSchema,
 } from "../domain/model.js";
 import { canonicalJson } from "../domain/observations.js";
-import type { FinancialPlan } from "../domain/plans/state.js";
+import type { FinancialPlan, NarrowRow } from "../domain/plans/state.js";
 import { sortedEvidence } from "../domain/provider-evidence.js";
 import type { TransactionListFacts } from "../domain/read-model.js";
 import type { Transaction } from "../domain/records.js";
-import type { ListColumn } from "./sql.js";
+import type { LedgerColumn, LedgerFlags, ListColumn } from "./sql.js";
 
 export { decodeScalarText, encodeScalarText } from "./scalar-text.js";
 
@@ -303,4 +303,128 @@ export function transactionContentWrites(plan: FinancialPlan): StoredRow[] {
       ? []
       : [encoded];
   });
+}
+
+const ledgerDetailsSchema = detailsSchema.pick({
+  issues: true,
+  pendingPostingCandidates: true,
+  rejectedPostingKeys: true,
+  postingOverlap: true,
+});
+
+/**
+ * A narrow ledger row, and whether its stored text left a fact in doubt; a
+ * row in doubt must be hydrated before planning. Shared fields decode as
+ * `decodeTransaction` decodes them.
+ */
+export function decodeLedgerRow(
+  input: {
+    row: Pick<StoredRow, LedgerColumn>;
+    observation: Pick<Observation, "lastSeenAt" | "lastSeenRunId">;
+    reconciliation: Pick<
+      Reconciliation,
+      | "pendingPostingCandidates"
+      | "rejectedPostingKeys"
+      | "postingOverlap"
+      | "providerIdentity"
+    >;
+    flags: LedgerFlags;
+  },
+  connectionId: string,
+): { row: NarrowRow; doubt: boolean } {
+  const { sourceAbsence, sourceIssues, ...facts } = input.row;
+  // Only proofs of `ledgerFlags` decide; every other case is in doubt.
+  const { flags } = input;
+  const retiredKnown =
+    flags.evidenceEscapes === 0 &&
+    (flags.retiredMentions === 0 ||
+      (flags.retiredMentions === 1 &&
+        flags.retiredTrue + flags.retiredFalse === 1));
+  const linkKnown = flags.linkAbsent + flags.linkObject === 1;
+  const identityKnown =
+    flags.providerIdentityMentions === 0 && flags.providerEscapes === 0;
+  const { reconciliation } = input;
+  return {
+    doubt: !retiredKnown || !linkKnown || !identityKnown,
+    row: {
+      ...facts,
+      connectionId,
+      ...(sourceAbsence === null
+        ? {}
+        : { sourceAbsence: sourceAbsenceSchema.parse(sourceAbsence) }),
+      lastSeenAt: input.observation.lastSeenAt,
+      lastSeenRunId: input.observation.lastSeenRunId,
+      hydration: "narrow",
+      retired: retiredKnown && flags.retiredTrue === 1,
+      providerIdentity: reconciliation.providerIdentity ?? {},
+      details: {
+        ...ledgerDetailsSchema.parse({
+          issues: sourceIssues,
+          ...(reconciliation.pendingPostingCandidates === null
+            ? {}
+            : {
+                pendingPostingCandidates:
+                  reconciliation.pendingPostingCandidates,
+              }),
+          ...(reconciliation.rejectedPostingKeys === null
+            ? {}
+            : { rejectedPostingKeys: reconciliation.rejectedPostingKeys }),
+          ...(reconciliation.postingOverlap === null
+            ? {}
+            : { postingOverlap: reconciliation.postingOverlap }),
+        }),
+        ...(flags.linkObject === 1
+          ? { postingLink: { present: true } as const }
+          : {}),
+      },
+    },
+  };
+}
+
+/** The narrow projection of a complete row, for checking a narrow decode. */
+export function narrowFacts(row: Transaction): NarrowRow {
+  const {
+    sourceEvidence,
+    details,
+    description: _description,
+    counterpartyName: _counterpartyName,
+    merchantProviderId: _merchantProviderId,
+    merchantCategoryCode: _merchantCategoryCode,
+    cardPresent: _cardPresent,
+    authorizationMethod: _authorizationMethod,
+    wallet: _wallet,
+    threeDSecureUsed: _threeDSecureUsed,
+    recurring: _recurring,
+    providerTransactionCode: _providerTransactionCode,
+    fxFeeMinor: _fxFeeMinor,
+    fxFeeCurrency: _fxFeeCurrency,
+    ...facts
+  } = row;
+  const providerIdentity: Record<string, JsonValue> = {};
+  for (const [provider, namespace] of Object.entries(details.provider)) {
+    if (namespace.identity !== undefined) {
+      providerIdentity[provider] = namespace.identity;
+    }
+  }
+  return {
+    ...facts,
+    hydration: "narrow",
+    retired: sourceEvidence?.identity?.retiredFromMatching === true,
+    providerIdentity,
+    details: {
+      issues: details.issues,
+      ...(details.pendingPostingCandidates === undefined
+        ? {}
+        : { pendingPostingCandidates: details.pendingPostingCandidates }),
+      ...(details.rejectedPostingKeys === undefined
+        ? {}
+        : { rejectedPostingKeys: details.rejectedPostingKeys }),
+      ...(details.postingOverlap === undefined
+        ? {}
+        : { postingOverlap: details.postingOverlap }),
+      ...(details.postingLink === undefined
+        ? {}
+        : { postingLink: { present: true } as const }),
+    },
+  };
 }

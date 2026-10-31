@@ -45,7 +45,7 @@ export function financialState(row: TransactionFacts) {
 }
 
 export function declaredIdentityBase(
-  row: LedgerRow | TransactionFacts,
+  row: LedgerRow | Pick<TransactionFacts, "details">,
   provider: string,
 ): string | undefined {
   const identity = providerIdentity(row, provider);
@@ -61,7 +61,7 @@ export function declaredIdentityBase(
 }
 
 export function identityBase(
-  row: LedgerRow | TransactionFacts,
+  row: LedgerRow | Pick<TransactionFacts, "sourceKey" | "details">,
   provider: string,
 ): string {
   return declaredIdentityBase(row, provider) ?? row.sourceKey;

@@ -36,6 +36,8 @@ import {
   excludedSet,
   groupedMoneyColumns,
   keysetSeek,
+  ledgerColumns,
+  ledgerFlags,
   listColumns,
   planCondition,
   type PlanScope,
@@ -47,6 +49,7 @@ import {
 } from "../sql.js";
 import type { DeferredEvidenceWrite } from "../statements.js";
 import {
+  decodeLedgerRow,
   decodeTransaction,
   decodeTransactionListFacts,
   encodeObservation,
@@ -642,6 +645,101 @@ export const planRows = (db: Executor, id: string, scope?: PlanScope) =>
       .where(planCondition(schema.transactions, id, scope))
       .orderBy(asc(schema.transactions.ingestionOrder)),
   );
+/**
+ * Narrow rows of every transaction of the connection, in ingestion order,
+ * with their annotations: everything sync decisions read of rows they do not
+ * hydrate (`NarrowRow`).
+ */
+export const ledgerRows = async (db: Executor, id: string) =>
+  (
+    await db
+      .select({
+        row: ledgerColumns(schema.transactions),
+        observation: {
+          lastSeenAt: schema.transactionObservations.lastSeenAt,
+          lastSeenRunId: schema.transactionObservations.lastSeenRunId,
+        },
+        reconciliation: {
+          pendingPostingCandidates:
+            schema.transactionReconciliation.pendingPostingCandidates,
+          rejectedPostingKeys:
+            schema.transactionReconciliation.rejectedPostingKeys,
+          postingOverlap: schema.transactionReconciliation.postingOverlap,
+          providerIdentity: schema.transactionReconciliation.providerIdentity,
+        },
+        flags: ledgerFlags({
+          sourceEvidence: schema.transactionReconciliation.sourceEvidence,
+          postingLink: schema.transactionPostingLinks.postingLink,
+          provider: schema.transactions.provider,
+        }),
+        annotation: schema.annotations,
+      })
+      .from(schema.transactions)
+      .innerJoin(
+        schema.transactionObservations,
+        eq(
+          schema.transactionObservations.transactionId,
+          schema.transactions.id,
+        ),
+      )
+      .innerJoin(
+        schema.transactionReconciliation,
+        eq(
+          schema.transactionReconciliation.transactionId,
+          schema.transactions.id,
+        ),
+      )
+      .innerJoin(
+        schema.transactionPostingLinks,
+        eq(
+          schema.transactionPostingLinks.transactionId,
+          schema.transactions.id,
+        ),
+      )
+      .leftJoin(
+        schema.annotations,
+        eq(schema.annotations.transactionId, schema.transactions.id),
+      )
+      .where(eq(schema.transactions.connectionId, id))
+      .orderBy(asc(schema.transactions.ingestionOrder))
+  ).map((input) => ({
+    ...decodeLedgerRow(input, id),
+    annotation: input.annotation,
+  }));
+/** Complete rows of these IDs, without annotations, in no particular order. */
+export const completeRows = async (db: Executor, ids: string[]) =>
+  (
+    await db
+      .select({
+        row: transactionColumns,
+        observation: schema.transactionObservations,
+        reconciliation: schema.transactionReconciliation,
+        posting: schema.transactionPostingLinks,
+      })
+      .from(schema.transactions)
+      .innerJoin(
+        schema.transactionObservations,
+        eq(
+          schema.transactionObservations.transactionId,
+          schema.transactions.id,
+        ),
+      )
+      .innerJoin(
+        schema.transactionReconciliation,
+        eq(
+          schema.transactionReconciliation.transactionId,
+          schema.transactions.id,
+        ),
+      )
+      .innerJoin(
+        schema.transactionPostingLinks,
+        eq(
+          schema.transactionPostingLinks.transactionId,
+          schema.transactions.id,
+        ),
+      )
+      .where(inArray(schema.transactions.id, ids))
+  ).map(decodeTransaction);
 const priorRunColumns = {
   id: schema.syncRuns.id,
   status: schema.syncRuns.status,

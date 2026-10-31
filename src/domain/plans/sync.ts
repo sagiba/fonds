@@ -1682,7 +1682,50 @@ export function finishTransactionContent(
   return { updated: changedIds.size, unchanged };
 }
 
-/** Pure reconciliation against a complete consistent connection snapshot. */
+/**
+ * Stored rows an application will very likely read complete: in each
+ * response's account, every linked row and every row that shares a source
+ * key or identity base with an input. This only saves planning rounds; the
+ * plan's hydration demands decide what it needs.
+ */
+export function predictHydration(
+  rows: readonly LedgerRow[],
+  extraction: ReturnType<typeof extractRun>,
+  adapter: SourceAdapter,
+): Set<string> {
+  const keys = new Map<string, Set<string>>();
+  const bases = new Map<string, Set<string>>();
+  for (const { response, result } of extraction.extracted) {
+    keys.set(response.accountKey, keys.get(response.accountKey) ?? new Set());
+    for (const input of result.transactions) {
+      const scopeKeys = keys.get(input.sourceScope) ?? new Set<string>();
+      for (const key of [input.sourceKey, ...input.sourceAliases]) {
+        scopeKeys.add(key);
+      }
+      keys.set(input.sourceScope, scopeKeys);
+      const scopeBases = bases.get(input.sourceScope) ?? new Set<string>();
+      scopeBases.add(identityBase(input, adapter.provider));
+      bases.set(input.sourceScope, scopeBases);
+    }
+  }
+  const ids = new Set<string>();
+  for (const row of rows) {
+    const scopeKeys = keys.get(row.sourceScope);
+    if (
+      scopeKeys &&
+      ((row.details.postingLink && !row.supersededById) ||
+        [row.sourceKey, ...row.sourceAliases].some((key) =>
+          scopeKeys.has(key),
+        ) ||
+        bases.get(row.sourceScope)?.has(identityBase(row, adapter.provider)))
+    ) {
+      ids.add(row.id);
+    }
+  }
+  return ids;
+}
+
+/** Pure reconciliation against a consistent connection snapshot. */
 export function planRun(
   plan: FinancialPlan,
   run: Run,
