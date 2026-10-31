@@ -19,6 +19,7 @@ import {
   syncDiagnosticSchema,
 } from "../application/sync-diagnostics.js";
 import { FONDS_VERSION } from "../application/version.js";
+import { presentRefreshResume } from "../application/wire-output.js";
 import { CredentialInputError } from "../domain/credentials.js";
 import { refreshFailureCodeSchema } from "../domain/model.js";
 import { ProviderConfigurationError } from "../domain/source-adapter.js";
@@ -73,7 +74,7 @@ import {
   runOperationCli,
 } from "./operation-cli.js";
 import { runtimeProvider, supportedProviders } from "./providers.js";
-import { runOperatorRefresh } from "./refresh-service.js";
+import { runOperatorRefresh, runOperatorResume } from "./refresh-service.js";
 import { StateError } from "./state.js";
 
 /** Every entry point's exit codes. */
@@ -599,6 +600,61 @@ export const operatorCommands: readonly OperatorCommand[] = [
           }),
       );
       return collectionExitCode(summary.status);
+    },
+  },
+  {
+    name: "resume",
+    summary: "Continue an unfinished refresh",
+    synopsis: ["--refresh <id> [--credentials-fd <number>]"],
+    example: ["--refresh", "REFRESH_ID"],
+    description:
+      "Continue one pending or running refresh whose process stopped, in the foreground, under the same lease as the server's: the same refresh and range, requesting only its unfinished months. It never starts a new refresh or reopens a finished one, and a recorded provider stop still ends it. Credentials come as for refresh. Prints the refresh with outcome terminal once it finished, held with retryAt when a recent provider login defers it, or accepted when another process holds it or it was interrupted.",
+    options: {
+      refresh: { type: "string" },
+      "credentials-fd": { type: "string" },
+    },
+    stdout: "result",
+    async run(context) {
+      const refreshId = required(context.values, "refresh");
+      const { credentialFd } = collectionControls({
+        "credentials-fd": text(context.values, "credentials-fd"),
+      });
+      const result = await withSession(
+        context,
+        { create: false, credentials: true },
+        async (session) => {
+          const refresh = await session.store.getRefresh(refreshId);
+          if (!refresh) {
+            throw new CommandInputError(
+              "Refresh not found; list-refreshes shows a connection's refreshes.",
+            );
+          }
+          // A finished refresh is answered without credentials.
+          const target = isActive(refresh)
+            ? await connectionTarget(context, session, refresh.connectionId, {
+                options: {},
+                credentialFd,
+              })
+            : undefined;
+          const resumed = await runOperatorResume({
+            store: session.store,
+            targets: async () => ({
+              targets: target ? [target] : [],
+              failures: 0,
+            }),
+            refreshId,
+          });
+          session.verify?.();
+          return resumed;
+        },
+      );
+      // The resume_refresh result; it has no terminal view.
+      process.stdout.write(
+        present(context.p, presentRefreshResume(result), undefined),
+      );
+      return result.outcome === "terminal"
+        ? collectionExitCode(result.refresh.status)
+        : EXIT_CODES.failed;
     },
   },
   {

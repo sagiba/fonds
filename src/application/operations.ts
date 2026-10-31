@@ -30,10 +30,9 @@ import {
   transactionListSchema,
 } from "./query-inputs.js";
 import {
-  isActive,
-  type Refresh,
   type RefreshEstimate,
   RefreshNotStartedError,
+  type RefreshResumeResult,
   type RefreshStartResult,
   validateRefreshRange,
 } from "./refreshes.js";
@@ -57,6 +56,7 @@ import {
   presentCoverage,
   presentRefresh,
   presentRefreshDetail,
+  presentRefreshResume,
   presentRefreshStart,
   presentSyncRun,
   presentTotalsGroup,
@@ -67,6 +67,7 @@ import {
   presentWireTransaction,
   refreshListOutputSchema,
   refreshReadOutputSchema,
+  refreshResumeOutputSchema,
   refreshStartOutputSchema,
   syncRunListOutputSchema,
   totalsOutputSchema,
@@ -122,7 +123,7 @@ export function publicError(error: unknown) {
       ? {
           code: "refresh_in_progress",
           message:
-            "A refresh of this connection is already running. Read it with list_refreshes.",
+            "A refresh of this connection is already running. Read it with list_refreshes; resume_refresh continues it.",
           status: 409 as const,
         }
       : {
@@ -158,7 +159,7 @@ export interface OperationDefinition<
   outputSchema: Output;
   /** The scope it needs: `read` requires `financial:read`, `write` `financial:write`. */
   access: "read" | "write";
-  /** Whether it never changes state; a read that can continue collection is not. */
+  /** Whether it never changes state. */
   readOnly: boolean;
   openWorld: boolean;
 }
@@ -168,15 +169,15 @@ export interface Operation extends OperationDefinition {
 }
 
 export interface ApplicationCapabilities {
-  /** Starts refreshes and returns their state within a bounded wait. */
+  /** Starts and resumes refreshes, returning their state within a bounded wait. */
   refreshes?: {
     start(
       connectionId: string,
       range?: CollectionRange,
     ): Promise<RefreshStartResult>;
     startAll(range?: CollectionRange): Promise<RefreshStartResult[]>;
-    /** Continues an active refresh a read meets, in case its process died. */
-    recover?(refresh: Refresh): void;
+    /** Continues an existing active refresh; NotFoundError when there is none. */
+    resume?(refreshId: string): Promise<RefreshResumeResult>;
     /** What starting would request, without starting anything. */
     estimate?(
       connectionId: string | undefined,
@@ -545,7 +546,7 @@ const definitions = named({
     "write",
   ),
   refresh_connection: define(
-    "Start a refresh from the financial provider: of connectionId, or of every connection with stored credentials when it is omitted. This calls the external provider and updates stored financial observations. Without from/to it rereads the recent window; inclusive from and to (YYYY-MM-DD, given together, at most 120 months) backfill that range month by month. Returns within about 10 seconds with the refresh (one refreshes entry per connection when none was named): completed, partial or failed, or running when it continues in the background; read it later with get_refresh. A connection already refreshing answers refresh_in_progress (in refreshes, reason busy); one whose provider needs the owner, requires_attention; one refreshed within the last minute returns that refresh (reason cooldown). estimate=true starts nothing and calls no provider: it returns estimates, one per connection, with the collection windows (a backfill's months, or 1), the cards discovery knows and the provider requests expected (null when unknown), so a long backfill can be judged first.",
+    "Start a refresh from the financial provider: of connectionId, or of every connection with stored credentials when it is omitted. This calls the external provider and updates stored financial observations. Without from/to it rereads the recent window; inclusive from and to (YYYY-MM-DD, given together, at most 120 months) backfill that range month by month. Returns within about 10 seconds with the refresh (one refreshes entry per connection when none was named): completed, partial or failed, or running when it continues in the background; read it later with get_refresh. A connection already refreshing answers refresh_in_progress (in refreshes, reason busy) and that refresh is left as it is: continue it with resume_refresh. One whose provider needs the owner, requires_attention; one refreshed within the last minute returns that refresh (reason cooldown). estimate=true starts nothing and calls no provider: it returns estimates, one per connection, with the collection windows (a backfill's months, or 1), the cards discovery knows and the provider requests expected (null when unknown), so a long backfill can be judged first.",
     z
       .object({
         connectionId: idSchema.optional(),
@@ -577,13 +578,18 @@ const definitions = named({
     "write",
     { openWorld: true },
   ),
+  resume_refresh: define(
+    "Continue an existing pending or running refresh by refreshId, such as one whose process stopped: the same refresh, range and finished months, requesting only unfinished ones. This can call the external provider. It never starts a new refresh or reopens a finished one, and a recorded provider stop still ends it. Returns within about 10 seconds with the refresh and an outcome: accepted (execution requested or underway, not a promise that it finishes: poll get_refresh), held (a recent provider login defers it; retryAt is the earliest time worth retrying, not a scheduled wake-up) or terminal (already finished; retryAt null).",
+    z.object({ refreshId: idSchema }).strict(),
+    refreshResumeOutputSchema,
+    "write",
+    { openWorld: true },
+  ),
   get_refresh: define(
-    "Read one refresh: its status or skip reason, range, timing, counts, failures and, for a ranged refresh, its month windows newest first. Reading a pending or running refresh whose process stopped continues it, which calls the provider.",
+    "Read one refresh: its status or skip reason, range, timing, counts, failures and, for a ranged refresh, its month windows newest first. Reads stored state only: it never calls the provider or continues the refresh (resume_refresh does).",
     z.object({ refreshId: idSchema }).strict(),
     refreshReadOutputSchema,
     "read",
-    // Reading an abandoned refresh continues it.
-    { openWorld: true, readOnly: false },
   ),
   list_refreshes: define(
     "Browse one connection's refreshes and recorded scheduled occurrences, newest first, without windows. Does not call the provider.",
@@ -630,7 +636,7 @@ type Definitions = typeof definitions;
 /** An operation's name: its catalog key, MCP tool name and REST route key. */
 export type OperationName = keyof Definitions;
 
-/** Every operation in API order; refresh_connection needs a collection capability. */
+/** Every operation in API order; refresh_connection and resume_refresh need a collection capability. */
 export const operationDefinitions: readonly Definitions[OperationName][] =
   Object.values(definitions);
 
@@ -945,13 +951,12 @@ export function createApplication(
       }
       return { refresh: presentRefreshDetail(result.refresh!) };
     },
+    resume_refresh: async ({ refreshId }) =>
+      presentRefreshResume(await capabilities.refreshes!.resume!(refreshId)),
     get_refresh: async ({ refreshId }) => {
       const refresh = await store.getRefresh(refreshId);
       if (!refresh) {
         throw new ApplicationError("not_found");
-      }
-      if (isActive(refresh)) {
-        capabilities.refreshes?.recover?.(refresh);
       }
       return { refresh: presentRefreshDetail(refresh) };
     },
@@ -993,19 +998,20 @@ export function createApplication(
       return { transaction: presentTransactionReceipt(row) };
     },
   };
+  // Collection delivers its changes through its own service, not afterWrite.
+  const collection: Partial<Record<OperationName, boolean>> = {
+    refresh_connection: Boolean(capabilities.refreshes),
+    resume_refresh: Boolean(capabilities.refreshes?.resume),
+  };
   return {
     backend: store.backend,
     operations: operationDefinitions
-      .filter(
-        (definition) =>
-          definition.name !== "refresh_connection" || capabilities.refreshes,
-      )
+      .filter((definition) => collection[definition.name] ?? true)
       .map((definition) =>
         bindOperation(
           definition,
           executors[definition.name],
-          definition.access === "write" &&
-            definition.name !== "refresh_connection"
+          definition.access === "write" && !(definition.name in collection)
             ? capabilities.afterWrite
             : undefined,
           capabilities.onOperation && safeLog(capabilities.onOperation),

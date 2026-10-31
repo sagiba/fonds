@@ -63,6 +63,14 @@ export const OPERATION_ROUTES = {
     { method: "GET", path: "/v1/connections/:connectionId/refreshes" },
   ],
   get_refresh: [{ method: "GET", path: "/v1/refreshes/:refreshId" }],
+  resume_refresh: [
+    {
+      method: "POST",
+      path: "/v1/refreshes/:refreshId/resume",
+      accepted: (output) =>
+        (output as { outcome: string }).outcome === "accepted",
+    },
+  ],
   list_transactions: [{ method: "GET", path: "/v1/transactions" }],
   get_transaction_totals: [{ method: "GET", path: "/v1/transactions/totals" }],
   // A read with an ID list, which a query string cannot carry.

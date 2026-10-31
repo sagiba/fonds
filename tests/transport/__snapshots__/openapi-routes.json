@@ -211,6 +211,27 @@
       "500"
     ]
   },
+  "POST /v1/refreshes/{refreshId}/resume": {
+    "operationId": "resume_refresh",
+    "scopes": [
+      "financial:write"
+    ],
+    "parameters": [
+      "path refreshId (required)"
+    ],
+    "body": [],
+    "responses": [
+      "200",
+      "202",
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "413",
+      "500"
+    ]
+  },
   "GET /v1/transactions": {
     "operationId": "list_transactions",
     "scopes": [

@@ -196,6 +196,7 @@ PostgreSQL; otherwise SQLite uses `--db` or the default ledger.
 | `connect`    | Adds a provider login, or updates credentials with `--connection <id>`                     |
 | `disconnect` | Removes stored credentials; later refreshes skip it; the ledger stays                      |
 | `refresh`    | Refreshes now; without `--connection`, every connection with stored credentials, in turn   |
+| `resume`     | Continues an unfinished refresh, which `refresh` leaves alone                              |
 | `consume`    | Delivers the event feed to stdout as JSON lines and advances a consumer cursor             |
 | `ingest`     | Archives and applies one captured provider response offline                                |
 | `backup`     | SQLite: a coherent copy of the ledger; on PostgreSQL use `pg_dump` and the state directory |

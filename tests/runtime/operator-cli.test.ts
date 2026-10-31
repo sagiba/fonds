@@ -27,6 +27,7 @@ import {
   postgresBackend,
   runPostgresCommand,
 } from "../../src/runtime/postgres-cli.js";
+import { openDatabase } from "../../src/storage/sqlite/database.js";
 
 const collected = vi.hoisted(() => ({ connections: [] as unknown[] }));
 
@@ -527,6 +528,74 @@ describe("collect on SQLite", () => {
         stderr: "--archive-days must be an integer from 1 through 30.\n",
       });
     }
+  });
+
+  it("resumes an abandoned refresh in the foreground, which refresh leaves alone", async () => {
+    await seedConnection("first", "cal");
+    await connect("first", "INVENTED-RESUMED");
+    const createdAt = new Date().toISOString();
+    const store = await openDatabase(dbPath);
+    try {
+      await store.admitRefresh(
+        {
+          id: "abandoned",
+          connectionId: "first",
+          trigger: "manual",
+          status: "running",
+          skipReason: null,
+          range: null,
+          occurrence: null,
+          scheduledAt: null,
+          createdAt,
+          startedAt: createdAt,
+          finishedAt: null,
+          requiresAttention: false,
+          counts: {
+            captures: 0,
+            unchanged: 0,
+            observed: 0,
+            unchangedTransactions: 0,
+            unlisted: 0,
+            failures: 0,
+            created: 0,
+            updated: 0,
+          },
+          failureCodes: [],
+          failureReason: null,
+          missed: null,
+          windows: [],
+        },
+        { operator: true, now: Date.now() },
+      );
+    } finally {
+      await store.close();
+    }
+    const busy = await run("refresh", "--connection", "first");
+    expect(busy.status).toBe(EXIT_CODES.failed);
+    expect(collectionSummarySchema.parse(JSON.parse(busy.stdout)).status).toBe(
+      "busy",
+    );
+    expect(collected.connections).toEqual([]);
+    const resumed = await run("resume", "--refresh", "abandoned");
+    expect(resumed).toMatchObject({ status: EXIT_CODES.ok, stderr: "" });
+    expect(JSON.parse(resumed.stdout)).toMatchObject({
+      outcome: "terminal",
+      retryAt: null,
+      refresh: { id: "abandoned", status: "completed", createdAt },
+    });
+    expect(collected.connections).toHaveLength(1);
+    expect(resumed.stdout).not.toContain("INVENTED");
+    // A finished refresh is answered as it is, without credentials or collection.
+    expect(
+      JSON.parse((await run("resume", "--refresh", "abandoned")).stdout),
+    ).toMatchObject({ outcome: "terminal", refresh: { status: "completed" } });
+    expect(collected.connections).toHaveLength(1);
+    expect(await run("resume", "--refresh", "missing")).toEqual({
+      status: EXIT_CODES.failed,
+      stdout: "",
+      stderr:
+        "Refresh not found; list-refreshes shows a connection's refreshes.\n",
+    });
   });
 
   it("summarizes every refresh's failure codes as one sorted list", async () => {

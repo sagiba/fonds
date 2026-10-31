@@ -109,6 +109,10 @@ const presentations: Readonly<
     summary: "Ask a running service to refresh a connection",
     example: ["--connection-id", "cal"],
   },
+  resume_refresh: {
+    summary: "Ask a running service to continue an unfinished refresh",
+    example: ["--refresh-id", "REFRESH_ID"],
+  },
   get_refresh: {
     summary: "Show one refresh and its windows",
     example: ["--refresh-id", "REFRESH_ID"],

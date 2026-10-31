@@ -24,7 +24,7 @@ Selecting a backend adds no copy of the financial rules.
 
 Refreshes (API, CLI and scheduled) and Events delivery behave the
 same on SQLite and PostgreSQL: the SQLite server, the PostgreSQL launchers and the
-hosted service offer refreshes, and only the `get_refresh` read
+hosted service offer refreshes, and no read
 [resumes](../api.md#refreshes) interrupted work. Turso and D1 share the SQLite
 lease and stores, but no Turso or D1 launcher composes refresh, and the Turso
 target has no refresh command. Reuse one store handle per local SQLite file in

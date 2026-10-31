@@ -65,10 +65,10 @@ without recovering raw bodies.
 
 - **Backfill** requests a bounded historical range (about seven years is enough).
   Providers own windowing, paging, overlap and budgets; partial results are kept
-  and inaccessible periods are reported as gaps.
+  and inaccessible periods reported as gaps.
 - **Incremental refresh** rereads the provider's overlapping recent window, never
   narrowed by a last-seen transaction or delivery cursor. Unchanged records stay
-  quiet, and corrections preserve annotations.
+  quiet; corrections preserve annotations.
 
 Successful responses do not certify completeness. Resources, cards, filters and
 posted or pending partitions scope comparability and health recovery: a filtered
@@ -215,9 +215,8 @@ in [auto-posting.ts](../src/domain/plans/auto-posting.ts) and its tests.
 
 Annotations are independently versioned owner documents that source refresh never
 writes. A review change also guards the transaction version, and staleness
-compares recorded money, currency, basis and kind, not versions. Reads are live
-and bounded; only `get_refresh` calls the provider, to [resume](api.md#refreshes) an
-interrupted refresh. Writes return committed receipts; with no general command
+compares recorded money, currency, basis and kind, not versions. Reads are live,
+bounded and never call a provider. Writes return committed receipts; with no general command
 idempotency, an uncertain outcome needs a reread. The event feed names records to
 refetch, not deltas, and imports are not fresh spending. Webhooks only wake
 consumers and run outside SQL transactions, so delivery can repeat and polling
@@ -226,9 +225,10 @@ recovers a missed wake-up; exactly-once delivery is not promised
 
 ## Runtime and deliberate limits
 
-[Refreshes](api.md#refreshes) run in the service, independently of reads, the
-same on every supported backend, under one per-connection
-[lock](../src/application/collection-lock.ts). Scheduled refresh is off until
+[Refreshes](api.md#refreshes) run in the service, the same on every supported
+backend, under one per-connection [lock](../src/application/collection-lock.ts).
+Only scheduler ticks, continuations and resumes advance or expire interrupted
+refreshes. Scheduled refresh is off until
 [configured](guides/hosted-service.md#scheduling). Owner identity and
 exact resource and operation scopes constrain access
 ([admission](security-model.md#admission)); local bearer HTTP and stdio are

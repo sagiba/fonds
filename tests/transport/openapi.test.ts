@@ -35,6 +35,7 @@ const ROUTES = [
   ["post", "/v1/connections/{connectionId}/refreshes", "refresh_connection"],
   ["post", "/v1/refreshes", "refresh_all_connections"],
   ["get", "/v1/refreshes/{refreshId}", "get_refresh"],
+  ["post", "/v1/refreshes/{refreshId}/resume", "resume_refresh"],
   ["get", "/v1/connections/{connectionId}/refreshes", "list_refreshes"],
   ["post", "/v1/annotations/undo", "undo_annotation"],
   [

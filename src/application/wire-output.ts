@@ -53,6 +53,7 @@ import {
   type Refresh,
   REFRESH_STATUSES,
   REFRESH_TRIGGERS,
+  type RefreshResumeResult,
   type RefreshStartResult,
   SKIP_REASONS,
   WINDOW_STATUSES,
@@ -585,6 +586,13 @@ export const refreshListOutputSchema = listOutputSchema(
   refreshSummaryOutputSchema,
   100,
 );
+export const refreshResumeOutputSchema = z
+  .object({
+    refresh: refreshOutputSchema,
+    outcome: z.enum(["accepted", "held", "terminal"]),
+    retryAt: nullableTextSchema,
+  })
+  .strict();
 /** One connection's start, or every connection's when none was named. */
 export const refreshStartOutputSchema = z
   .object({
@@ -1147,6 +1155,14 @@ export function presentRefreshDetail(refresh: Refresh) {
       to,
       status,
     })),
+  };
+}
+
+export function presentRefreshResume(result: RefreshResumeResult) {
+  return {
+    refresh: presentRefreshDetail(result.refresh),
+    outcome: result.outcome,
+    retryAt: result.retryAt,
   };
 }
 

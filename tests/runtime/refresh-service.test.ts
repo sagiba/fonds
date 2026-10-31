@@ -21,6 +21,7 @@ import {
   ownerRefreshes,
   type RefreshServiceOptions,
   runOperatorRefresh,
+  runOperatorResume,
   UNIT_DEADLINE_MS,
 } from "../../src/runtime/refresh-service.js";
 import {
@@ -73,6 +74,8 @@ describe("refresh service", () => {
       }),
       log: () => {},
       retryDelaysMs: [],
+      // Resumption pacing has its own tests; these resume at once.
+      loginIntervalMs: 0,
       ...options,
     });
   }
@@ -553,7 +556,7 @@ describe("refresh service", () => {
       ],
     });
     // The continuation, in a new invocation, resumes the remaining months.
-    const continued = service(collector);
+    const continued = service(collector, { loginIntervalMs: 0 });
     await continued.resumeStalled();
     await continued.settled();
     expect(requested).toEqual(["2040-03-01", "2040-02-01", "2040-01-15"]);
@@ -1376,7 +1379,7 @@ describe("refresh service", () => {
     }
   });
 
-  it("leaves an operator's run unstarted, and another process's refresh alone, while one is active", async () => {
+  it("leaves the active refresh alone when an operator's or owner's start meets it, until an explicit resume", async () => {
     const now = new Date().toISOString();
     await db.admitRefresh(
       {
@@ -1409,7 +1412,7 @@ describe("refresh service", () => {
       },
       { operator: true, now: Date.now() },
     );
-    const collect = vi.fn(async function* () {
+    const collect = vi.fn<ProviderCollector["collect"]>(async function* () {
       yield capture("operator");
     });
     const [result] = await runOperatorRefresh({
@@ -1428,8 +1431,47 @@ describe("refresh service", () => {
       range: { from: "2041-05-01", to: "2041-05-31" },
     });
     expect(result).toMatchObject({ reason: "busy", refresh: { id: "stale" } });
+    // An owner's start of another range answers busy without running either.
+    const owner = service(async () => source(collect));
+    expect(
+      await ownerRefreshes(owner, 1_000).start(connectionId, {
+        from: "2041-06-01",
+        to: "2041-06-30",
+      }),
+    ).toMatchObject({ reason: "busy", refresh: { id: "stale" } });
+    await owner.settled();
     expect(collect).not.toHaveBeenCalled();
-    expect(await db.getRefresh("stale")).toMatchObject({ status: "running" });
+    expect(await db.getRefresh("stale")).toMatchObject({
+      status: "running",
+      range: { from: "2040-01-01", to: "2040-01-31" },
+      windows: [{ status: "running" }],
+    });
+    // The operator continues it explicitly, as the stale refresh's own range.
+    const ranges: unknown[] = [];
+    collect.mockImplementation(async function* (options) {
+      ranges.push(options.range);
+      yield capture("resumed");
+    });
+    expect(
+      await runOperatorResume({
+        store: db,
+        targets: async () => ({
+          targets: [
+            {
+              connectionId,
+              adapter: synthetic,
+              collector: async () => source(collect),
+            },
+          ],
+          failures: 0,
+        }),
+        refreshId: "stale",
+      }),
+    ).toMatchObject({
+      outcome: "terminal",
+      refresh: { id: "stale", status: "completed" },
+    });
+    expect(ranges).toEqual([{ from: "2040-01-01", to: "2040-01-31" }]);
   });
 
   it("reads credentials only once the execution holds the lease", async () => {
@@ -1648,31 +1690,6 @@ describe("refresh service", () => {
         }),
       ]),
     );
-  });
-
-  it("finishes an abandoned refresh when a read polls it", async () => {
-    await abandoned(new Date().toISOString());
-    const collect = vi.fn(async function* () {
-      yield capture("recovered");
-    });
-    const refreshes = service(async () => source(collect));
-    const application = createApplication(db, {
-      refreshes: ownerRefreshes(refreshes),
-    });
-    // A read that can continue a refresh can reach the provider.
-    expect(
-      application.operations.find((entry) => entry.name === "get_refresh"),
-    ).toMatchObject({ openWorld: true });
-    const invoker = inProcessInvoker(application);
-    expect(
-      await invoker.invoke("get_refresh", { refreshId: "abandoned" }),
-    ).toMatchObject({ refresh: { status: "running" } });
-    await refreshes.settled();
-    // Only its unfinished month is requested.
-    expect(collect).toHaveBeenCalledOnce();
-    expect(
-      await invoker.invoke("get_refresh", { refreshId: "abandoned" }),
-    ).toMatchObject({ refresh: { status: "completed" } });
   });
 
   it("finishes a stopped refresh in the same write as its checkpoint, and resume honors a recorded stop", async () => {
@@ -2133,6 +2150,19 @@ describe("provider sessions across a backfill", () => {
       await early.resumeStalled();
       await early.settled();
       expect(cal.calls.logins).toBe(2);
+      // Nor does an explicit resume on a host without an execution budget.
+      const unbudgeted = createRefreshService({
+        store: db,
+        targets,
+        log: () => {},
+        retryDelaysMs: [],
+      });
+      expect(await unbudgeted.resume(started.refresh!.id)).toMatchObject({
+        outcome: "held",
+        retryAt: "2040-06-01T08:13:00.000Z",
+      });
+      await unbudgeted.settled();
+      expect(cal.calls.logins).toBe(2);
       // Ten minutes after the renewal.
       vi.setSystemTime(start + 13 * 60_000);
       const due = slice(2 * UNIT_DEADLINE_MS);
@@ -2431,7 +2461,7 @@ describe("soft provider stops, attention retries and login pacing", () => {
       expect(waits).toEqual([9 * 60_000]);
       expect(continuedAt).toBe(start + 10 * 60_000);
       expect(sessions.count).toBe(1);
-      // A continuation arriving at 08:05, as a poll's can, does not log in.
+      // A continuation arriving at 08:05, as a resume or tick can, does not log in.
       vi.setSystemTime(start + 5 * 60_000);
       const early = createRefreshService({
         store: db,

@@ -23,6 +23,7 @@ which runtimes offer refreshes.
 | `list_connections`, `get_connection`                     | `GET /v1/connections`, `GET /v1/connections/:id`                                     | Read   | `list_connections` takes no input. A connection carries its [latest refresh](#connection).                                                                                                         |
 | `get_connection_coverage`                                | `GET /v1/connections/:id/coverage`                                                   | Read   | [Coverage](#coverage) by month.                                                                                                                                                                    |
 | `refresh_connection` (optional)                          | `POST /v1/connections/:id/refreshes`, `POST /v1/refreshes`                           | Write  | Body `{}` or `{from, to}`, with optional `estimate`; without a connection, every connection. See [refreshes](#refreshes).                                                                          |
+| `resume_refresh` (optional)                              | `POST /v1/refreshes/:id/resume`                                                      | Write  | Body `{}`.                                                                                                                                                                                         |
 | `get_refresh`, `list_refreshes`                          | `GET /v1/refreshes/:id`, `GET /v1/connections/:id/refreshes`                         | Read   | [Refreshes](#refreshes), newest first.                                                                                                                                                             |
 | `list_sync_runs`                                         | `GET /v1/connections/:id/sync-runs`                                                  | Read   | [Sync runs](#sync-run).                                                                                                                                                                            |
 | `list_accounts`, `get_account`                           | `GET /v1/accounts`, `GET /v1/accounts/:id`                                           | Read   | `list_accounts` requires `connectionId`. [Accounts](#account).                                                                                                                                     |
@@ -62,8 +63,8 @@ JSON output, embedded on a local database or against this API with `--remote`.
 HTTP GET arguments are query parameters. MCP arguments are one JSON object with the
 same names. An ID that appears in an HTTP path must not also appear in the query or
 body; MCP names it `connectionId`, `accountId`, `cardId`, `transactionId` or
-`refreshId`. Successful calls return HTTP 200, except a refresh start that is
-still running, which returns 202.
+`refreshId`. Successful calls return HTTP 200, except unfinished refresh starts
+and `accepted` resumes, which return 202.
 
 HTTP write bodies are JSON objects sent with `Content-Type: application/json`, at
 most 64 KiB. Query keys may occur only once. `limit` is an unsigned decimal integer
@@ -191,7 +192,7 @@ A refresh records one connection's manual or scheduled provider update.
 | `failureCodes`                         | Sorted failure causes: `authentication_challenge`, `authentication_failed`, `budget_exhausted`, `implausible_empty`, `invalid_response`, `network_error` or `rate_limited`. |
 | `failureReason`                        | `expired` when it was still unfinished a day after `createdAt`; otherwise `null`.                                                                                           |
 | `missed`                               | A `missed` skip's gap `{through, count}`, from `scheduledAt` through `through`; otherwise `null`.                                                                           |
-| `windows`                              | `get_refresh` and starts only: a backfill's months, newest first, each `{from, to, status}`.                                                                                |
+| `windows`                              | `get_refresh`, starts and resumes only: a backfill's months, newest first, each `{from, to, status}`.                                                                       |
 
 `counts` distinguishes applied financial `captures` (including recovery), `unchanged` captures of
 successful, content-unchanged runs, and accepted `observed` transaction identities counted once
@@ -203,7 +204,7 @@ Counts need not partition observations. `failures` is positive when failed.
 neither, at most 120 months). A start records the refresh, runs it in the same
 process and waits about 10 seconds: `200 {refresh}` when it finished, otherwise
 `202 {refresh}` while it continues; read it later with `get_refresh`. A pending
-or running refresh answers `409 refresh_in_progress`; a connection needing
+or running refresh is left alone and answers `409 refresh_in_progress`; a connection needing
 attention admits one start an hour, clearing the block if it completes, and
 answers `409 requires_attention`; within 60 seconds of a finished refresh a start
 returns that one without calling the provider. Without `connectionId` (HTTP
@@ -218,14 +219,21 @@ window), `cards` the cards discovery recorded, and `providerCalls` the provider
 requests expected under default collection options, without retries, or `null`
 when unknown.
 
+`resume_refresh` continues the active refresh `refreshId`, keeping its ID, range
+and finished months, without readmission, and waits like a start:
+`{refresh, outcome, retryAt}` with `accepted` (HTTP 202; requested or underway,
+not certain to finish), `held` (a recent provider login defers it; advisory
+`retryAt`) or `terminal` (finished; never reopened).
+
 A backfill requests and checkpoints each month: an interrupted refresh resumes,
 redoing only unfinished months, and an authentication, rate-limit or budget
 failure stops it. Its months share one provider login, renewed at most once when
-the provider rejects the session; a resumed refresh logs in again. A held lease
-or failed execution is retried for about a minute; an active refresh then
-resumes on the next scheduler tick, start or `get_refresh`, and expires a day
-after creation. `completed` means the requested work succeeded, not that history
-is complete; see [refresh behavior](guides/hosted-service.md#refresh-and-scheduling).
+the provider rejects the session; a resumed refresh logs in again,
+[paced](guides/hosted-service.md#refresh-and-scheduling). A held lease or failed
+execution is retried for about a minute; an active refresh then waits for a
+scheduler tick, continuation or `resume_refresh`, never a read, and expires a day
+after creation, recorded when one runs. `completed` means the requested work
+succeeded, not that history is complete.
 
 ## Sync run
 
@@ -696,9 +704,8 @@ JSON-RPC.
 MCP advertises the same input and output schemas and returns each result in both
 `structuredContent` and JSON text in `content`. Tool descriptions state the
 perspective semantics and that totals groups are never added together. Tools
-carry the MCP behavior hints set in [mcp.ts](../src/transport/mcp.ts); refresh
-and `get_refresh` declare external-world access, and `get_refresh` is not
-read-only. These hints do not replace authorization. See
+carry the MCP behavior hints set in [mcp.ts](../src/transport/mcp.ts); only
+refresh starts and resumes declare external-world access. These hints do not replace authorization. See
 [local setup](guides/local-setup.md#connect-an-mcp-client-locally)
 for configuration.
 

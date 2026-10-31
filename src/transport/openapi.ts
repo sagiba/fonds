@@ -28,7 +28,7 @@ const SCOPE_DESCRIPTIONS: Readonly<Record<string, string>> = {
   offline_access: "Receive a refresh token.",
   "financial:read": "Read financial records.",
   "financial:write":
-    "Annotate, match and remove transactions, and start refreshes.",
+    "Annotate, match and remove transactions, and start or resume refreshes.",
 };
 
 const QUERY_TYPES = new Set(["string", "integer", "number", "boolean"]);
@@ -204,7 +204,7 @@ function describeOperation(
     responses: {
       200: { description: "The operation's output.", ...output },
       ...(route.accepted && {
-        202: { description: "Started and still running.", ...output },
+        202: { description: "Accepted and not yet finished.", ...output },
       }),
       ...Object.fromEntries(
         errorStatuses(definition).map((status) => [
