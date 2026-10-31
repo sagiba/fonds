@@ -416,7 +416,15 @@ export async function* collectCal(
       delete session.token;
       reusable = false;
       if ((session.logins ?? 0) >= SESSION_LOGINS) {
-        throw new CalTransportError("authentication_failed", true);
+        // Every allowed login issued a session that CAL then rejected: an
+        // authentication failure. Otherwise an attempt ended without a verdict
+        // on the credentials, so another one is a pacing matter, not a block.
+        throw new CalTransportError(
+          (session.issued?.length ?? 0) >= SESSION_LOGINS
+            ? "authentication_failed"
+            : "rate_limited",
+          true,
+        );
       }
       session.logins = (session.logins ?? 0) + 1;
       endpoint = CAL_ENDPOINTS.login;

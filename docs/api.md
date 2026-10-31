@@ -179,8 +179,9 @@ Counts need not partition observations. `failures` is positive when failed.
 neither, at most 120 months). A start records the refresh, runs it in the same
 process and waits about 10 seconds: `200 {refresh}` when it finished, otherwise
 `202 {refresh}` while it continues; read it later with `get_refresh`. A pending
-or running refresh answers `409 refresh_in_progress`, a connection needing operator attention
-`409 requires_attention`, and within 60 seconds of a finished refresh a start
+or running refresh answers `409 refresh_in_progress`; a connection needing
+attention admits one start an hour, clearing the block if it completes, and
+answers `409 requires_attention`; within 60 seconds of a finished refresh a start
 returns that one without calling the provider. Without `connectionId` (HTTP
 `POST /v1/refreshes`), every connection with stored credentials, under the same
 rules: `{refreshes: [{connectionId, reason, refresh}]}`, `reason` `null` or the

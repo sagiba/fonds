@@ -249,6 +249,26 @@ function parseRetryAfterMs(header: string | null): number | undefined {
 
 const RETRYABLE_SERVER_STATUSES = [500, 502, 503, 504];
 
+function parsesAsJson(text: string): boolean {
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A login CAL refused without an explicit challenge or credential rejection:
+ * an error status (other than 401/403) or a body that is not JSON. CAL has
+ * answered repeated logins this way while the same credentials stayed valid,
+ * so it stops the refresh as a rate limit, never as a credential failure.
+ * See cal.login in the source notes.
+ */
+function loginRefused(): CalTransportError {
+  return new CalTransportError("rate_limited", true);
+}
+
 /** Codes that stand on their own even when the attempt was rate limited. */
 const RATE_LIMIT_OVERRIDING_CODES: readonly CalFailureCode[] = [
   "authentication_challenge",
@@ -396,11 +416,15 @@ export function createCalTransport(options: CalTransportOptions = {}) {
           throw new CalTransportError("rate_limited", true);
         }
       }
-      if (RETRYABLE_SERVER_STATUSES.includes(response.status)) {
+      // A refused login is classified from its body below; see
+      // `loginRefused` for why it is not a credential failure.
+      const login = endpoint === CAL_ENDPOINTS.login;
+      if (!login && RETRYABLE_SERVER_STATUSES.includes(response.status)) {
         throw new CalTransportError("network_error", false, true);
       }
       if (
         !response.ok &&
+        !login &&
         !(financial && response.status >= 400 && response.status < 500)
       ) {
         throw new CalTransportError("invalid_response");
@@ -464,10 +488,18 @@ export function createCalTransport(options: CalTransportOptions = {}) {
           },
         });
       } catch {
+        if (login && !parsesAsJson(responseText)) {
+          stage = response.ok ? "json_parse" : "http_status";
+          throw loginRefused();
+        }
         throw new CalTransportError("invalid_response", true);
       }
       stage = "json_shape";
       if (!isObject(payload)) {
+        if (login && !response.ok) {
+          stage = "http_status";
+          throw loginRefused();
+        }
         throw new CalTransportError("invalid_response");
       }
       stage = "authentication";
@@ -476,6 +508,10 @@ export function createCalTransport(options: CalTransportOptions = {}) {
       }
       if (hasAuthenticationFailure(payload)) {
         throw new CalTransportError("authentication_failed", true);
+      }
+      if (login && !response.ok) {
+        stage = "http_status";
+        throw loginRefused();
       }
       diagnose(
         endpoint,

@@ -622,6 +622,7 @@ describe.each(backends)("operations parity on %s", (backend) => {
         budgetMs: UNIT_DEADLINE_MS + 500,
         background: (work) => background.push(work),
         continueLater: async () => {},
+        loginIntervalMs: 0,
       });
       const started = await bounded.start(connectionId, {
         trigger: "manual",
@@ -786,7 +787,10 @@ describe.each(backends)("operations parity on %s", (backend) => {
       });
       const refreshes = service({ [connectionId]: source });
       expect(
-        await refreshes.start(connectionId, { trigger: "manual" }),
+        await refreshes.start(connectionId, {
+          trigger: "scheduled",
+          occurrence: { key: `scheduled-${randomUUID()}`, at: Date.now() },
+        }),
       ).toMatchObject({ reason: "requires_attention" });
       expect(source.calls).toBe(0);
       const [retried] = await refreshes.wait([

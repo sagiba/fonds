@@ -145,14 +145,18 @@ refreshes by itself, apart from resuming refreshes a stopped process left active
 A lost or expired client request is not proof the provider work did not run;
 list the connection's refreshes before retrying.
 
-Authentication failure or challenge sets `requiresAttention`, blocking
-refreshes until an operator retry succeeds;
-[events](../api.md#events) announce the block and its end. After
-resolving it, POST `{}` to `/internal/refresh/recent` on the public origin with
+A rate limit, or a login refused without a credential verdict, stops the
+refresh as `rate_limited`: scheduled refreshes skip as `cooldown` for six hours,
+the next retries, and a second such stop in a row needs attention, as an
+authentication failure or challenge does at once. Attention blocks scheduled
+refreshes until a retry completes; [events](../api.md#events) announce the
+block and its end. Owners may retry manually once an hour, or POST `{}` to
+`/internal/refresh/recent` on the public origin with
 `Authorization: Bearer <FONDS_REFRESH_SECRET>`, or run
-`fonds refresh --connection …`. The route refreshes every target past
-the block and cooldown, really calling each provider; the Neon runbook wraps
-it as `neon:smoke --refresh`. An `implausible_empty` rejection
+`fonds refresh --connection …`. That route refreshes every target past the
+block and the cooldown, really calling each provider; the Neon runbook wraps it
+as `neon:smoke --refresh`. A continuation slice logs in again only ten minutes
+after the previous slice's last capture. An `implausible_empty` rejection
 ([design](../design.md#identity-corrections-and-absence)) is logged in
 `fonds_refresh` but sets no attention block: the cooldown still applies, and
 a scheduled refresh can retry. The [provider guides](../README.md#providers)

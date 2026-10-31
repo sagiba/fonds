@@ -91,6 +91,7 @@ See [coverage rationale](../../src/providers/cal/source-notes.md#calwindow-recen
 
 Authentication challenges, invalid credentials and rate limits stop the refresh,
 and repeated network or invalid-response failures stop after a bounded budget
-and report the gap. Resolve a challenge or password change on CAL's own site,
-run `connect` again if the credentials changed, wait out a rate limit, then rerun
-the refresh or the reported history range.
+and report the gap. A login refused without rejecting the credentials is a rate
+limit, [retried once](../guides/hosted-service.md#refresh-and-scheduling).
+Resolve a challenge or password change on CAL's site, rerun `connect` for
+changed credentials, then rerun the refresh or reported history range.

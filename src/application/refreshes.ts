@@ -42,6 +42,29 @@ export type NotStartedReason = Exclude<SkipReason, "missed">;
 /** A finished refresh blocks the next ordinary start for this long. */
 export const REFRESH_COOLDOWN_MS = 60_000;
 
+/**
+ * After a soft provider stop, scheduled refreshes skip as `cooldown` for this
+ * long; the first one after it is the single automatic retry.
+ */
+export const SOFT_STOP_COOLDOWN_MS = 6 * 60 * 60_000;
+
+/** While attention is required, an owner's manual retry runs at most this often. */
+export const ATTENTION_RETRY_INTERVAL_MS = 60 * 60_000;
+
+/**
+ * A provider stop without a verdict on the credentials: the provider limited
+ * or refused requests. It needs no operator unless the next executed refresh
+ * of the connection stops the same way.
+ */
+export const isSoftStop = (refresh: Pick<Refresh, "providerStopReason">) =>
+  refresh.providerStopReason === "rate_limited";
+
+/** Refreshes that ran, as opposed to active or skipped ones. */
+export const isExecuted = (refresh: Pick<Refresh, "status">) =>
+  refresh.status === "completed" ||
+  refresh.status === "partial" ||
+  refresh.status === "failed";
+
 /** A refresh still active this long after it was created fails as expired. */
 export const REFRESH_MAX_AGE_MS = 24 * 60 * 60_000;
 
