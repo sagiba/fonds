@@ -23,7 +23,7 @@ import {
 import { minorToDecimal } from "../domain/money.js";
 import { canonicalJson } from "../domain/observations.js";
 import type {
-  calculateTotals,
+  totalsFromParts,
   TransactionListView,
   TransactionView,
 } from "../domain/read-model.js";
@@ -794,7 +794,7 @@ export const totalsOutputSchema = z
   })
   .strict();
 
-export function presentWireTotals(result: ReturnType<typeof calculateTotals>) {
+export function presentWireTotals(result: ReturnType<typeof totalsFromParts>) {
   return {
     totals: result.totals.map((group) => ({
       ...presentMoney(group.amountMinor, group.currency)!,

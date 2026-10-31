@@ -91,7 +91,7 @@ import {
   type RunInput,
   type SyncResult,
 } from "../domain/plans/sync.js";
-import { calculateTotals, presentTransaction } from "../domain/read-model.js";
+import { presentTransaction, totalsFromParts } from "../domain/read-model.js";
 import type {
   Annotation,
   Connection,
@@ -110,7 +110,12 @@ import {
   retainedRun,
   runEvidenceDigest,
 } from "./run-evidence.js";
-import { BACKFILL_OUTCOMES, chunks, type PlanScope } from "./sql.js";
+import {
+  BACKFILL_OUTCOMES,
+  chunks,
+  exactInteger,
+  type PlanScope,
+} from "./sql.js";
 import type {
   LatestAppliedRun,
   OrderedRun,
@@ -1662,9 +1667,20 @@ function buildStore<Db>(
     getTotals: async (input) => {
       const filters = totalsSchema.parse(input ?? {});
       await checkScope(filters);
-      const rows = await db.execute(statements.totals(db.root, filters));
+      const rows = await db.execute(
+        statements.totalsParts(db.root, {
+          ...filters,
+          perspective: filters.perspective,
+        }),
+      );
       await checkEmpty(rows, filters.connectionId);
-      return calculateTotals(rows, filters.perspective);
+      return totalsFromParts(
+        rows.map((row) => ({
+          ...row,
+          amountMinor: exactInteger(row.amountMinor),
+          fxFeeMinor: exactInteger(row.fxFeeMinor),
+        })),
+      );
     },
     listEvents: async (input) => {
       const filters = cursorSchema.parse(input ?? {});

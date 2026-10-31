@@ -26,6 +26,7 @@ import {
   LIST_FACT_FIELDS,
   type Perspective,
   perspectiveRule,
+  type TotalsBucket,
 } from "../domain/read-model.js";
 import type { Connection, Transaction } from "../domain/records.js";
 
@@ -241,37 +242,86 @@ export function connectionColumns<T extends Columns<Connection>>(
   };
 }
 
-export function totalsColumns<T extends TransactionColumns>(
-  table: T,
-): Pick<
-  T,
-  | "supersededById"
-  | "presence"
-  | "sourceAbsence"
-  | "status"
-  | "kind"
-  | "amountMinor"
-  | "currency"
-  | "amountBasis"
-  | "identityStrength"
-  | "originalCurrency"
-  | "fxFeeMinor"
-  | "fxFeeCurrency"
-> {
-  return {
-    supersededById: table.supersededById,
-    presence: table.presence,
-    sourceAbsence: table.sourceAbsence,
-    status: table.status,
-    kind: table.kind,
-    amountMinor: table.amountMinor,
-    currency: table.currency,
-    amountBasis: table.amountBasis,
-    identityStrength: table.identityStrength,
-    originalCurrency: table.originalCurrency,
-    fxFeeMinor: table.fxFeeMinor,
-    fxFeeCurrency: table.fxFeeCurrency,
+/** `totalsBucket` from domain/read-model.ts, compiled to SQL with its precedence. */
+export function totalsBucket(table: TransactionColumns) {
+  return sql<TotalsBucket>`case
+    when ${table.supersededById} is not null or ${table.presence} = 'removed'
+      then 'retiredOrRemoved'
+    when ${table.sourceAbsence} is not null then 'sourceAbsent'
+    when ${table.status} = 'pending' then 'pending'
+    when ${table.kind} in ('transfer', 'income') then 'transferOrIncome'
+    when ${table.amountBasis} = 'authorization' then 'authorization'
+    when ${table.amountMinor} is null or ${table.currency} is null
+      or ${table.amountBasis} not in ('booked_entry', 'purchase_commitment')
+      or ${table.kind} = 'unknown' or ${table.identityStrength} = 'ambiguous'
+      then 'unresolved'
+    else 'included' end`;
+}
+
+/**
+ * The grouping and exact aggregates of `TotalsPart`: one row per bucket and,
+ * for included rows, per money group and published fee currency. The caller
+ * groups by every key. Integer sums are exact in both dialects (SQLite fails
+ * on 64-bit overflow, PostgreSQL sums bigint as numeric) and travel as decimal
+ * text, so no driver rounds a total beyond the safe range.
+ */
+export function totalsPartColumns(
+  table: TransactionColumns,
+  perspective: Exclude<Perspective, "all">,
+) {
+  const bucket = totalsBucket(table);
+  const included = sql`(${bucket}) = 'included'`;
+  const published = sql`${included} and ${table.fxFeeMinor} is not null and ${table.fxFeeCurrency} is not null`;
+  const amountBasis =
+    perspective === "spending"
+      ? sql<
+          Transaction["amountBasis"] | null
+        >`case when ${included} then ${table.amountBasis} end`
+      : undefined;
+  const keys = {
+    bucket,
+    currency: sql<
+      string | null
+    >`case when ${included} then ${table.currency} end`,
+    fxFeeCurrency: sql<
+      string | null
+    >`case when ${published} then ${table.fxFeeCurrency} end`,
+    // PostgreSQL refuses a constant grouping key, so billing omits it.
+    ...(amountBasis && { amountBasis }),
   };
+  return {
+    keys,
+    columns: {
+      ...keys,
+      amountBasis: amountBasis ?? sql<Transaction["amountBasis"] | null>`null`,
+      count: sql<number>`count(*)`.mapWith(Number),
+      amountMinor: sql<unknown>`cast(sum(case when ${included} then ${table.amountMinor} else 0 end) as text)`,
+      fxFeeMinor: sql<unknown>`cast(sum(case when ${published} then ${table.fxFeeMinor} else 0 end) as text)`,
+      fxFeeUnknownCount: sql<number>`sum(case when ${included}
+        and not (${published})
+        and ${table.originalCurrency} is not null and ${table.currency} is not null
+        and ${table.originalCurrency} <> ${table.currency} then 1 else 0 end)`.mapWith(
+        Number,
+      ),
+    },
+  };
+}
+
+/** An exact integer aggregate as a driver returns it: number, bigint or decimal text. */
+export function exactInteger(value: unknown): bigint {
+  if (typeof value === "bigint") {
+    return value;
+  }
+  if (typeof value === "number" && Number.isSafeInteger(value)) {
+    return BigInt(value);
+  }
+  if (typeof value === "string" && /^-?\d+$/.test(value)) {
+    return BigInt(value);
+  }
+  if (value === null) {
+    return 0n;
+  }
+  throw new TypeError("Aggregate is not an exact integer");
 }
 
 /** Canonical-row columns that hold the details a list item presents. */

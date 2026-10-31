@@ -24,7 +24,8 @@ import type {
 } from "../domain/plans/run-history.js";
 import type { FinancialPlan } from "../domain/plans/state.js";
 import type {
-  calculateTotals,
+  Perspective,
+  TotalsPart,
   TransactionListFacts,
 } from "../domain/read-model.js";
 import type {
@@ -106,6 +107,11 @@ export interface DeferredEvidenceWrite {
   lastSeenRunId: string;
 }
 
+export type TotalsPartRow = Omit<TotalsPart, "amountMinor" | "fxFeeMinor"> & {
+  amountMinor: unknown;
+  fxFeeMinor: unknown;
+};
+
 export type SummaryRow = Omit<TransactionSummary, "category"> & {
   category: string | null;
 };
@@ -136,10 +142,11 @@ export interface Statements<Db> {
     db: Db,
     input: TransactionQuery,
   ): PromiseLike<SummaryRow[]>;
-  totals(
+  /** `TotalsPart` aggregates, with sums as the driver returns them. */
+  totalsParts(
     db: Db,
-    input: TransactionQuery,
-  ): PromiseLike<Parameters<typeof calculateTotals>[0]>;
+    input: TransactionQuery & { perspective: Exclude<Perspective, "all"> },
+  ): PromiseLike<TotalsPartRow[]>;
   events(db: Db, input: EventQuery): PromiseLike<LedgerEvent[]>;
   /**
    * Current rows per transaction month, newest first with undated rows (a null

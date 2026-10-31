@@ -14,7 +14,7 @@ import type {
 } from "../domain/plans/lifecycle.js";
 import type { RunInput, SyncResult } from "../domain/plans/sync.js";
 import type {
-  calculateTotals,
+  totalsFromParts,
   TransactionListView,
   TransactionView,
 } from "../domain/read-model.js";
@@ -166,7 +166,7 @@ export interface FinancialStore {
   getCoverage(connectionId: string): Promise<ConnectionCoverage | undefined>;
   getTotals(
     input?: TransactionFilters,
-  ): Promise<ReturnType<typeof calculateTotals>>;
+  ): Promise<ReturnType<typeof totalsFromParts>>;
   listEvents(input?: EventPageInput): Promise<LedgerEvent[]>;
   listSyncRuns(
     connectionId: string,

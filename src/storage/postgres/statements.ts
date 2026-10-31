@@ -36,7 +36,7 @@ import {
   listColumns,
   planCondition,
   type PlanScope,
-  totalsColumns,
+  totalsPartColumns,
   transactionFilter,
   transactionOrder,
   transactionSeek,
@@ -282,11 +282,21 @@ export function transactionSummaryPage(db: Executor, input: TransactionQuery) {
   return input.limit === undefined ? query : query.limit(input.limit);
 }
 
-export const totals = (db: Executor, input: TransactionQuery) =>
-  db
-    .select(totalsColumns(schema.transactions))
+export function totalsParts(
+  db: Executor,
+  input: TransactionQuery & { perspective: "spending" | "billing" },
+) {
+  const { keys, columns } = totalsPartColumns(
+    schema.transactions,
+    input.perspective,
+  );
+  return db
+    .select(columns)
     .from(schema.transactions)
-    .where(transactionFilter(schema.transactions, input, schema.cards));
+    .where(transactionFilter(schema.transactions, input, schema.cards))
+    .groupBy(...Object.values(keys));
+}
+
 export const events = (db: Executor, input: EventQuery) =>
   db
     .select()
