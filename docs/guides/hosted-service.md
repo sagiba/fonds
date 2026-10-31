@@ -134,7 +134,7 @@ each month or recent window is bounded at ten minutes.
 `fonds_sync` emits refresh/capture IDs, stage/reason codes, durations, failure
 categories and counts (`observed`: accepted identities per capture;
 `extracted`: parser inputs); `fonds_http_request` and `fonds_operation` log
-bytes and rows. Logs exclude source values, credentials and private provider
+bytes and rows. Logs exclude source values, credentials and provider
 identifiers; the [operator CLI](local-setup.md#operator-commands) gives bounded
 reports and temporary raw archives.
 
@@ -145,8 +145,8 @@ refreshes by itself, apart from resuming refreshes a stopped process left active
 A lost or expired client request is not proof the provider work did not run;
 list the connection's refreshes before retrying.
 
-Authentication failure or challenge sets `requiresAttention`, blocking ordinary
-and scheduled refreshes until an operator retry succeeds;
+Authentication failure or challenge sets `requiresAttention`, blocking
+refreshes until an operator retry succeeds;
 [events](../api.md#events) announce the block and its end. After
 resolving it, POST `{}` to `/internal/refresh/recent` on the public origin with
 `Authorization: Bearer <FONDS_REFRESH_SECRET>`, or run
