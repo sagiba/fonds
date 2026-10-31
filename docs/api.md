@@ -87,7 +87,8 @@ cursor only to the list that issued it.
 - **Browsing lists** (transactions, cards, accounts, sync runs): `nextCursor` is
   `null` exactly when `hasMore` is false; pass it back as `cursor` for the next
   page. A page can hold fewer items than `limit` when the 256 KiB response budget
-  is reached, so follow `nextCursor` while `hasMore` is true. `list_connections`
+  is reached, so follow `nextCursor` while `hasMore` is true. A transaction
+  page also echoes the `filters` it applied, defaults included. `list_connections`
   returns every connection in one page.
 - **The event feed** always returns a `nextCursor`, even on an empty or final page.
   It is a resumable checkpoint. See [events](#events).
@@ -127,6 +128,8 @@ Superseded posting components require
 | `currency`                                     | Uppercase ISO 4217 code                               | Matches the primary money's currency, not the original currency.                                                                                                                                        |
 | `merchantName`                                 | String, at most 4,096 characters                      | Exact match, not substring search.                                                                                                                                                                      |
 | `merchantCategoryCode`                         | Four digits                                           | Exact match. The shape does not certify registry membership.                                                                                                                                            |
+| `merchantContains`                             | String, at most 4,096 characters                      | Case-insensitive substring of `merchantName` or `counterpartyName`; ASCII letters always fold.                                                                                                          |
+| `amountMin`, `amountMax`                       | Decimal strings                                       | Inclusive bounds on the signed `amount` (outflows are negative) at the precision of `currency`, which they require. Null money matches neither.                                                         |
 | `dateRole`, `from`, `to`                       | `transaction`, `booking` or `billing`; `YYYY-MM-DD`   | `dateRole` is required when a bound is given. Bounds are inclusive dates from year 0001; a row with no date for the role matches neither.                                                               |
 | `cardPresent`, `threeDSecureUsed`, `recurring` | Boolean                                               | Match the stated [payment context](#payment-context).                                                                                                                                                   |
 | `authorizationMethod`, `wallet`                | [Enum](#fields)                                       |                                                                                                                                                                                                         |
@@ -264,8 +267,11 @@ and are never merged by their last four digits.
 ## Transaction
 
 Lists and `get_transaction` with `detail: false` return compact records, and the
-default single read returns the [detailed record](#detailed-read);
-`get_transaction` wraps either as `{transaction: {...}}`. A transaction has one
+default single read returns the [detailed record](#detailed-read).
+`list_transactions` with `view: "summary"` returns lean items instead:
+`{id, transactionDate, bookingDate, billingDate, merchantName, counterpartyName, merchantCategoryCode, amount, amountBasis, kind, status, presence, category}`,
+where `category` is the annotation's. `get_transaction` wraps its record as
+`{transaction: {...}}`. A transaction has one
 primary `amount`, interpreted through its `amountBasis` and `status`; an evidenced
 `originalAmount` is a second money object. Provider facts and owner annotations
 stay separate.

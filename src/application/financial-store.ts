@@ -88,6 +88,29 @@ export interface SyncRun {
   refreshId: string | null;
 }
 
+/** The facts a summary list item presents, with the owner's category. */
+export type TransactionSummary = Pick<
+  Transaction,
+  | "id"
+  | "transactionDate"
+  | "bookingDate"
+  | "billingDate"
+  | "merchantName"
+  | "counterpartyName"
+  | "merchantCategoryCode"
+  | "amountMinor"
+  | "currency"
+  | "amountBasis"
+  | "kind"
+  | "status"
+  | "presence"
+> & { category: string | null };
+
+export interface TransactionSummaryPage {
+  transactions: TransactionSummary[];
+  hasMore: boolean;
+}
+
 export interface TransactionPage {
   transactions: TransactionListView[];
   hasMore: boolean;
@@ -134,6 +157,10 @@ export interface FinancialStore {
   getAccount(id: string): Promise<Account | undefined>;
   getConnection(id: string): Promise<PublicConnection | undefined>;
   listTransactionPage(input?: TransactionPageInput): Promise<TransactionPage>;
+  /** The same page, projected to summary items. */
+  listTransactionSummaryPage(
+    input?: TransactionPageInput,
+  ): Promise<TransactionSummaryPage>;
   getTransaction(id: string): Promise<TransactionView | undefined>;
   /** Undefined for an unknown connection. */
   getCoverage(connectionId: string): Promise<ConnectionCoverage | undefined>;

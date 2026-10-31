@@ -58,6 +58,7 @@ import {
   presentRefreshStart,
   presentSyncRun,
   presentTransactionReceipt,
+  presentTransactionSummary,
   presentWireEvent,
   presentWireTotals,
   presentWireTransaction,
@@ -288,29 +289,35 @@ function listPage<Item>(
  * Pages may hold fewer rows than fetched to respect the response byte limit.
  * `nextCursor` is always the keyset position of the last emitted row.
  */
-function fitPage<Row, Item>(
+function fitPage<Row, Item, Extra extends object = object>(
   rows: readonly Row[],
   hasMore: boolean,
   present: (row: Row) => Item,
   cursorOf: (row: Row) => string,
+  // Page members beside the list, counted in the byte budget.
+  extra = {} as Extra,
 ) {
+  const page = (data: Item[], nextCursor: string | null) => ({
+    ...listPage(data, nextCursor),
+    ...extra,
+  });
   const data: Item[] = [];
   for (const [index, row] of rows.entries()) {
     data.push(present(row));
     const more = index < rows.length - 1 || hasMore;
     if (
-      outputByteLength(listPage(data, more ? cursorOf(row) : null)) >
+      outputByteLength(page(data, more ? cursorOf(row) : null)) >
       OUTPUT_MAX_BYTES
     ) {
       data.pop();
       if (data.length === 0) {
         throw new OutputLimitError();
       }
-      return listPage(data, cursorOf(rows[index - 1]!));
+      return page(data, cursorOf(rows[index - 1]!));
     }
   }
   const last = rows.at(-1);
-  return listPage(data, hasMore && last ? cursorOf(last) : null);
+  return page(data, hasMore && last ? cursorOf(last) : null);
 }
 
 function catalogAfter(kind: "cards" | "accounts", cursor: string | undefined) {
@@ -338,7 +345,8 @@ function syncRunAfter(cursor: string | undefined) {
 }
 
 const transactionsDescription = [
-  "Browse a bounded live page of compact transactions, newest transactionDate first (unknown dates last).",
+  "Browse a bounded live page of compact transactions, newest transactionDate first (unknown dates last). view=summary returns lean analysis items (dates, merchant and counterparty names, money, basis, kind, status, presence, MCC and the owner's category) instead; read a record with get_transaction for everything else.",
+  "merchantContains matches a case-insensitive substring of merchantName or counterpartyName. amountMin and amountMax bound the signed amount (outflows are negative) as decimal strings in the required currency. Each page echoes the filters it applied, defaults included, in filters: check them when a page looks wrong.",
   "perspective selects which rows represent a plan: spending (default) is every row without purchaseId, including fees and cancellations; billing is every row except plan purchases (an installmentCount of 2 or more without installmentNumber, or live billed lines even when the count is unknown), whose money appears through their billed lines, and a held or unknown line amount is never replaced by the purchase's; all is every row and counts a plan's money twice. A billed line has purchaseId (its purchase) and installmentNumber; filtering by purchaseId requires billing or all.",
   "Money is exact decimal strings; keep each amount with its currency and amount basis.",
   "Pages may hold fewer rows to respect the response byte limit; follow nextCursor while hasMore is true. Reads are live: concurrent changes can shift later pages.",
@@ -750,16 +758,27 @@ export function createApplication(
       }
       return { account: presentAccount(account) };
     },
-    list_transactions: async ({ cursor, ...input }) => {
-      const page = await store.listTransactionPage({
-        ...input,
-        after: transactionAfter(cursor),
-      });
+    list_transactions: async ({ cursor, limit, view, ...filters }) => {
+      const query = { ...filters, limit, after: transactionAfter(cursor) };
+      const cursorOf = (row: { transactionDate: string | null; id: string }) =>
+        encodeKeyset("transactions", [row.transactionDate, row.id]);
+      if (view === "summary") {
+        const page = await store.listTransactionSummaryPage(query);
+        return fitPage(
+          page.transactions,
+          page.hasMore,
+          presentTransactionSummary,
+          cursorOf,
+          { filters },
+        );
+      }
+      const page = await store.listTransactionPage(query);
       return fitPage(
         page.transactions,
         page.hasMore,
         (row) => presentWireTransaction(row),
-        (row) => encodeKeyset("transactions", [row.transactionDate, row.id]),
+        cursorOf,
+        { filters },
       );
     },
     get_transaction: async ({ transactionId, detail, includeEvidence }) => ({

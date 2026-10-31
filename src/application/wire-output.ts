@@ -38,8 +38,9 @@ import {
   COVERAGE_MAX_MONTHS,
   type PublicConnection,
   type SyncRun,
+  type TransactionSummary,
 } from "./financial-store.js";
-import { listCursorSchema } from "./query-inputs.js";
+import { filtersSchema, listCursorSchema } from "./query-inputs.js";
 import {
   FAILURE_REASONS,
   MAX_REFRESH_MONTHS,
@@ -686,10 +687,58 @@ export function presentAccount(
   };
 }
 
-export const transactionListOutputSchema = listOutputSchema(
-  transactionOutputSchema,
-  200,
-);
+/** A summary list item: what analysis needs, without enrichment or review context. */
+export const transactionSummaryOutputSchema = z
+  .object({
+    id: idSchema,
+    transactionDate: dateSchema,
+    bookingDate: dateSchema,
+    billingDate: dateSchema,
+    merchantName: nullableTextSchema,
+    counterpartyName: nullableTextSchema,
+    merchantCategoryCode: merchantCategoryCodeSchema.nullable(),
+    amount: moneyOutputSchema.nullable(),
+    amountBasis: amountBasisSchema,
+    kind: kindSchema,
+    status: transactionStatusSchema,
+    presence: presenceSchema,
+    category: annotationDocumentShape.category,
+  })
+  .strict();
+
+export function presentTransactionSummary(
+  row: TransactionSummary,
+): z.input<typeof transactionSummaryOutputSchema> {
+  const source = sourceTextPreview();
+  return {
+    id: row.id,
+    transactionDate: row.transactionDate,
+    bookingDate: row.bookingDate,
+    billingDate: row.billingDate,
+    merchantName: source.text(row.merchantName),
+    counterpartyName: source.text(row.counterpartyName),
+    merchantCategoryCode: row.merchantCategoryCode,
+    amount: presentMoney(row.amountMinor, row.currency),
+    amountBasis: row.amountBasis,
+    kind: row.kind,
+    status: row.status,
+    presence: row.presence,
+    category: row.category,
+  };
+}
+
+/** A transaction page echoes the filters it applied, defaults included. */
+export const transactionListOutputSchema = z
+  .object({
+    data: z
+      .array(z.union([transactionOutputSchema, transactionSummaryOutputSchema]))
+      .max(200),
+    hasMore: z.boolean(),
+    nextCursor: listCursorSchema.nullable(),
+    filters: filtersSchema,
+  })
+  .strict()
+  .refine((page) => page.hasMore === (page.nextCursor !== null));
 export const transactionReadOutputSchema = z
   .object({
     transaction: z.union([

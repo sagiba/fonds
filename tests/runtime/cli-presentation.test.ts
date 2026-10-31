@@ -113,11 +113,13 @@ function transaction(overrides: Partial<Transaction> = {}): Transaction {
 }
 
 function page(data: Transaction[], nextCursor: string | null = null) {
-  return transactionListOutputSchema.parse({
+  const parsed = transactionListOutputSchema.parse({
     data,
     hasMore: nextCursor !== null,
     nextCursor,
+    filters: {},
   });
+  return { ...parsed, data };
 }
 
 const ESC = "\u001b";

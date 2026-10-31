@@ -13,6 +13,7 @@ import {
   connectionInputSchema,
   COVERAGE_MAX_MONTHS,
   type InternalStore,
+  type TransactionSummary,
 } from "../application/financial-store.js";
 import {
   catalogPageSchema,
@@ -116,7 +117,15 @@ import type {
   RefreshRow,
   RefreshWindowRow,
   Statements,
+  SummaryRow,
 } from "./statements.js";
+
+/** The category travels as JSON text so no driver decodes the annotation. */
+function decodeSummary(row: SummaryRow): TransactionSummary {
+  const category: unknown =
+    row.category === null ? null : JSON.parse(row.category);
+  return { ...row, category: typeof category === "string" ? category : null };
+}
 
 // Keep public error identity (for example version conflicts) while classifying recovery.
 const interpretationErrors = new WeakSet<Error>();
@@ -1574,6 +1583,22 @@ function buildStore<Db>(
         transactions: rows
           .slice(0, limit)
           .map(({ row, annotation }) => presentTransaction(row, annotation)),
+        hasMore: rows.length > limit,
+      };
+    },
+    listTransactionSummaryPage: async (input) => {
+      const filters = pageSchema.parse(input ?? {});
+      await checkScope(filters);
+      const { limit } = filters;
+      const rows = await db.execute(
+        statements.transactionSummaryPage(db.root, {
+          ...filters,
+          limit: limit + 1,
+        }),
+      );
+      await checkEmpty(rows, filters.connectionId);
+      return {
+        transactions: rows.slice(0, limit).map(decodeSummary),
         hasMore: rows.length > limit,
       };
     },

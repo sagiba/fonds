@@ -222,7 +222,10 @@
       "query presence",
       "query includeSuperseded",
       "query merchantName",
+      "query merchantContains",
       "query merchantCategoryCode",
+      "query amountMin",
+      "query amountMax",
       "query dateRole",
       "query from",
       "query to",
@@ -237,7 +240,8 @@
       "query purchaseId",
       "query perspective",
       "query limit",
-      "query cursor"
+      "query cursor",
+      "query view"
     ],
     "responses": [
       "200",
@@ -262,7 +266,10 @@
       "query presence",
       "query includeSuperseded",
       "query merchantName",
+      "query merchantContains",
       "query merchantCategoryCode",
+      "query amountMin",
+      "query amountMax",
       "query dateRole",
       "query from",
       "query to",

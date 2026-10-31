@@ -17,9 +17,10 @@ import {
 } from "drizzle-orm";
 
 import type { BackfillOutcome } from "../application/financial-store.js";
-import type {
-  EventQuery,
-  TransactionQuery,
+import {
+  amountBoundMinor,
+  type EventQuery,
+  type TransactionQuery,
 } from "../application/query-inputs.js";
 import {
   LIST_FACT_FIELDS,
@@ -164,9 +165,28 @@ export function transactionFilter(
     filters.merchantName === undefined
       ? undefined
       : eq(table.merchantName, filters.merchantName),
+    filters.merchantContains === undefined
+      ? undefined
+      : or(
+          containsText(table.merchantName, filters.merchantContains),
+          containsText(table.counterpartyName, filters.merchantContains),
+        ),
     filters.merchantCategoryCode === undefined
       ? undefined
       : eq(table.merchantCategoryCode, filters.merchantCategoryCode),
+    // Validation requires the currency with either bound.
+    filters.amountMin === undefined
+      ? undefined
+      : gte(
+          table.amountMinor,
+          amountBoundMinor(filters.amountMin, filters.currency!),
+        ),
+    filters.amountMax === undefined
+      ? undefined
+      : lte(
+          table.amountMinor,
+          amountBoundMinor(filters.amountMax, filters.currency!),
+        ),
     filters.cardPresent === undefined
       ? undefined
       : eq(table.cardPresent, filters.cardPresent),
@@ -186,6 +206,15 @@ export function transactionFilter(
       : eq(table.purchaseId, filters.purchaseId),
     perspectiveFilter(table, filters.perspective),
   );
+}
+
+/**
+ * A literal substring, compared after the database lowercases both sides:
+ * ASCII letters always fold, other scripts as the database's lower() does.
+ */
+function containsText(column: AnyColumn, text: string) {
+  const pattern = `%${text.replace(/[\\%_]/g, (character) => `\\${character}`)}%`;
+  return sql`lower(${column}) like lower(${pattern}) escape '\\'`;
 }
 
 export function eventFilter(

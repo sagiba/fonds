@@ -239,6 +239,49 @@ export const transactionListPage = async (
     annotation: listed.annotation,
   }));
 
+/**
+ * The annotation category as JSON text, never decoding the document: a
+ * category with an escaped NUL stays readable on PostgreSQL.
+ */
+const annotationCategory = sql<
+  string | null
+>`nullif((${schema.annotations.data}::json -> 'category')::text, 'null')`;
+
+/** Summary items read only their own columns and the annotation category. */
+function summaryQuery(db: Executor) {
+  const table = schema.transactions;
+  return db
+    .select({
+      id: table.id,
+      transactionDate: table.transactionDate,
+      bookingDate: table.bookingDate,
+      billingDate: table.billingDate,
+      merchantName: table.merchantName,
+      counterpartyName: table.counterpartyName,
+      merchantCategoryCode: table.merchantCategoryCode,
+      amountMinor: table.amountMinor,
+      currency: table.currency,
+      amountBasis: table.amountBasis,
+      kind: table.kind,
+      status: table.status,
+      presence: table.presence,
+      category: annotationCategory,
+    })
+    .from(table)
+    .leftJoin(
+      schema.annotations,
+      eq(schema.annotations.transactionId, table.id),
+    )
+    .$dynamic();
+}
+
+export function transactionSummaryPage(db: Executor, input: TransactionQuery) {
+  const query = summaryQuery(db)
+    .where(pageCondition(input))
+    .orderBy(...transactionOrder(schema.transactions));
+  return input.limit === undefined ? query : query.limit(input.limit);
+}
+
 export const totals = (db: Executor, input: TransactionQuery) =>
   db
     .select(totalsColumns(schema.transactions))

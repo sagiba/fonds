@@ -1,6 +1,7 @@
 import type {
   SyncRun,
   SyncRunPageInput,
+  TransactionSummary,
 } from "../application/financial-store.js";
 import type {
   CatalogQuery,
@@ -105,6 +106,10 @@ export interface DeferredEvidenceWrite {
   lastSeenRunId: string;
 }
 
+export type SummaryRow = Omit<TransactionSummary, "category"> & {
+  category: string | null;
+};
+
 /** Unexecuted Drizzle statements. The driver owns execution and transactions. */
 export interface Statements<Db> {
   cards(db: Db, connectionId: string): PromiseLike<Card[]>;
@@ -126,6 +131,11 @@ export interface Statements<Db> {
   ): PromiseLike<
     { row: TransactionListFacts; annotation: Annotation | null }[]
   >;
+  /** `category` is the annotation's category as JSON text, or null. */
+  transactionSummaryPage(
+    db: Db,
+    input: TransactionQuery,
+  ): PromiseLike<SummaryRow[]>;
   totals(
     db: Db,
     input: TransactionQuery,
