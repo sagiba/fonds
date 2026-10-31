@@ -360,6 +360,33 @@ describe("MCP SDK v2 over HTTP", () => {
   );
 
   it.each(modes)(
+    "publishes only patterns without lookaround or named groups using %s",
+    async (mode) => {
+      // Connector-side JSON Schema validators commonly lack these ECMAScript extensions.
+      const { tools } = await (await connect(mode)).listTools();
+      const patterns: string[] = [];
+      const collect = (value: unknown): void => {
+        if (Array.isArray(value)) {
+          value.forEach(collect);
+        } else if (value !== null && typeof value === "object") {
+          for (const [key, entry] of Object.entries(value)) {
+            if (key === "pattern" && typeof entry === "string") {
+              patterns.push(entry);
+            } else {
+              collect(entry);
+            }
+          }
+        }
+      };
+      collect(tools);
+      expect(patterns.length).toBeGreaterThan(0);
+      expect(patterns.filter((pattern) => /\(\?[=!<]/.test(pattern))).toEqual(
+        [],
+      );
+    },
+  );
+
+  it.each(modes)(
     "shares canonical reads, annotation writes and conflicts using %s",
     async (mode) => {
       const client = await connect(mode);
