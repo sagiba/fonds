@@ -42,8 +42,10 @@ delivery keep their own storage without a second financial model.
 
 ## Collection and evidence
 
-Each capture and its safe collection context commits before extraction and before
-the next provider request; a provider that assembles one capture from several
+Each collection unit, the recent window or one backfill month, commits its captures
+and their safe collection context before extraction, normally as one run, also when
+interrupted or stopped; a crash first loses only that unit's responses, which its
+resume requests again. A provider that assembles one capture from several
 responses says in its guide what an interrupted unit loses. Financial application
 is a separate transaction that commits transactions, events and the run's applied
 marker together, so a failure leaves the evidence for retry. Provider calls never

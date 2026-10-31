@@ -170,7 +170,7 @@ A refresh records one connection's manual or scheduled provider update.
 | `windows`                              | `get_refresh` and starts only: a backfill's months, newest first, each `{from, to, status}`.                                                                                |
 
 `counts` distinguishes applied financial `captures` (including recovery), successful `unchanged` captures
-without content changes, and accepted `observed` transaction identities counted once
+of runs without content changes, and accepted `observed` transaction identities counted once
 per capture (overlaps repeat). `unchangedTransactions` counts unchanged observations;
 `created`, `updated`, `unlisted` count creations, content updates and absence marks.
 Counts need not partition observations. `failures` is positive when failed.
@@ -201,7 +201,8 @@ Collection receipt:
 `{id, connectionId, status, startedAt, finishedAt, appliedAt, collectorVersion, parserVersion, refreshId}`.
 `status` is `started`, `completed`, `partial` or `failed`; nullable `finishedAt` and `appliedAt`
 distinguish collection from application. `refreshId` names its
-refresh, or `null` for offline ingestion. Unchanged reads still create receipts.
+refresh, or `null` for offline ingestion. A refresh run normally holds one month's or
+the recent window's captures and failures. Unchanged reads still create receipts.
 `list_sync_runs` excludes bodies and coverage and never starts a refresh.
 
 Optional enrichment failures remain visible in status and failure counts without

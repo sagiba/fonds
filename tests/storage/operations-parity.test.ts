@@ -650,7 +650,8 @@ describe.each(backends)("operations parity on %s", (backend) => {
       expect(await db.getRefresh(id)).toMatchObject({
         status: "partial",
         failureCodes: expected,
-        counts: { captures: 4, failures: 3 },
+        // March and February each commit one partial run.
+        counts: { captures: 4, failures: 2 },
         windows: [
           { status: "partial" },
           { status: "partial" },

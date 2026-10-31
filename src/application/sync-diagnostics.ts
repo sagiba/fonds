@@ -6,6 +6,8 @@ export const syncDiagnosticSchema = z.object({
   event: z.literal("fonds_sync"),
   refreshId: z.uuid().optional(),
   captureId: z.uuid().optional(),
+  /** The sync run that holds a capture; a run can hold several captures. */
+  runId: z.uuid().optional(),
   stage: z.enum([
     "refresh",
     "collection",

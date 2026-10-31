@@ -542,7 +542,8 @@ describe("collect on SQLite", () => {
       {
         status: "partial",
         captures: 3,
-        failures: 3,
+        // One partial run each for the first and second connections.
+        failures: 2,
         failureCodes: ["network_error", "rate_limited"],
       },
     );

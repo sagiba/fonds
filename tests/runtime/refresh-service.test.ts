@@ -717,8 +717,16 @@ describe("refresh service", () => {
     );
     const first = service(async () =>
       source(async function* () {
-        yield capture("committed-first");
-        yield capture("pending-second", -200);
+        type Capture = Extract<CollectionEvent, { type: "capture" }>;
+
+        const committed = capture("committed-first") as Capture;
+        yield committed;
+        const pending = capture("pending-second", -200) as Capture;
+        // A later capture of the same scope must not share the earlier one's instant.
+        pending.capture.capturedAt = new Date(
+          Date.parse(committed.capture.capturedAt) + 1,
+        ).toISOString();
+        yield pending;
       }),
     );
     const [failed] = await first.wait([
