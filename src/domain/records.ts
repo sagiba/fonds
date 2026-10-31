@@ -3,10 +3,12 @@ import type {
   AnnotationData,
   CollectionFailureCode,
   JsonObject,
+  RefreshFailureCode,
   SourceAbsence,
   SourceEvidence,
   StoredTransactionFacts,
 } from "./model.js";
+import type { RefreshTrigger } from "./refreshes.js";
 
 /** Requested collection boundaries, not evidence of complete source coverage. */
 export interface CollectionScope {
@@ -139,9 +141,25 @@ export const EVENT_TYPES = [
   "transaction.review_required",
   "transaction.review_resolved",
   "annotation.updated",
+  "refresh.failed",
+  "refresh.attention_required",
+  "refresh.recovered",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
+
+/**
+ * A refresh health event's stored `after` (the finished refresh) and `before`
+ * (the connection's previous finished refresh, or null). The feed publishes
+ * only `refreshId`; readers refetch the refresh itself.
+ */
+export interface RefreshHealthDocument {
+  refreshId: string;
+  trigger: RefreshTrigger;
+  status: "completed" | "partial" | "failed";
+  failureCodes: RefreshFailureCode[];
+  requiresAttention: boolean;
+}
 
 export interface LedgerEvent {
   id: number;

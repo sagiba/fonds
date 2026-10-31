@@ -2,6 +2,7 @@ import { inspect } from "node:util";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { deliverFromStore } from "../../src/application/change-delivery.js";
 import {
   createApplication,
   inProcessInvoker,
@@ -357,6 +358,164 @@ describe("refresh service", () => {
         { from: "2040-01-15", status: "pending" },
       ],
     });
+  });
+
+  it("announces an attention block once, keeps its skips quiet and announces the operator's recovery", async () => {
+    let authenticationFails = true;
+    const refreshes = service(async () =>
+      source(async function* (options) {
+        if (authenticationFails && options.range?.from === "2040-02-01") {
+          yield {
+            type: "failure",
+            failure: {
+              accountKey: null,
+              endpoint: "login",
+              code: "authentication_failed",
+            },
+            fatal: true,
+          };
+          return;
+        }
+        yield capture(options.range?.from ?? "recent");
+      }),
+    );
+    const invoker = inProcessInvoker(
+      createApplication(db, { refreshes: ownerRefreshes(refreshes) }),
+    );
+    const healthEvents = async () =>
+      (await db.listEvents()).filter((event) =>
+        event.type.startsWith("refresh."),
+      );
+
+    const [blocked] = await refreshes.wait([
+      await refreshes.start(connectionId, { trigger: "manual", range }),
+    ]);
+    const blockedId = blocked!.refresh!.id;
+    const blockedHealth = {
+      refreshId: blockedId,
+      trigger: "manual",
+      status: "partial",
+      failureCodes: ["authentication_failed"],
+      requiresAttention: true,
+    };
+    expect(await healthEvents()).toMatchObject([
+      {
+        type: "refresh.failed",
+        connectionId,
+        transactionId: null,
+        runId: null,
+        actor: "system",
+        before: null,
+        after: blockedHealth,
+      },
+      {
+        type: "refresh.attention_required",
+        connectionId,
+        transactionId: null,
+        runId: null,
+        actor: "system",
+        before: null,
+        after: blockedHealth,
+      },
+    ]);
+
+    // Blocked starts record skips or refuse; neither adds to the feed.
+    const feed = await db.listEvents();
+    for (const hour of [9, 15]) {
+      const skipped = await refreshes.start(connectionId, {
+        trigger: "scheduled",
+        occurrence: {
+          key: `scheduled-2040-04-01T${hour}:00Z`,
+          at: Date.UTC(2040, 3, 1, hour),
+        },
+      });
+      expect(skipped).toMatchObject({
+        reason: "requires_attention",
+        refresh: { status: "skipped", skipReason: "requires_attention" },
+      });
+    }
+    expect(
+      await refreshes.start(connectionId, { trigger: "manual" }),
+    ).toMatchObject({ reason: "requires_attention" });
+    await refreshes.settled();
+    expect(await db.listEvents()).toEqual(feed);
+
+    authenticationFails = false;
+    const [retry] = await refreshes.wait([
+      await refreshes.start(connectionId, {
+        trigger: "manual",
+        operator: true,
+      }),
+    ]);
+    const retryId = retry!.refresh!.id;
+    expect(retry!.refresh).toMatchObject({
+      status: "completed",
+      requiresAttention: false,
+    });
+    expect((await healthEvents()).slice(2)).toMatchObject([
+      {
+        type: "refresh.recovered",
+        actor: "system",
+        before: blockedHealth,
+        after: {
+          refreshId: retryId,
+          trigger: "manual",
+          status: "completed",
+          failureCodes: [],
+          requiresAttention: false,
+        },
+      },
+    ]);
+    expect(await healthEvents()).toHaveLength(3);
+    // The block is gone: the next occurrence meets only the cooldown.
+    expect(
+      await refreshes.start(connectionId, {
+        trigger: "scheduled",
+        occurrence: {
+          key: "scheduled-2040-04-02T09:00Z",
+          at: Date.UTC(2040, 3, 2, 9),
+        },
+      }),
+    ).toMatchObject({ reason: "cooldown" });
+    expect(await healthEvents()).toHaveLength(3);
+
+    // The feed names each refresh to refetch and publishes nothing else of it.
+    const page = (await invoker.invoke("list_events", {
+      connectionId,
+      limit: 100,
+    })) as { data: Record<string, unknown>[] };
+    expect(
+      page.data.filter((event) => String(event.type).startsWith("refresh.")),
+    ).toEqual([
+      expect.objectContaining({ type: "refresh.failed", refreshId: blockedId }),
+      expect.objectContaining({
+        type: "refresh.attention_required",
+        refreshId: blockedId,
+      }),
+      expect.objectContaining({
+        type: "refresh.recovered",
+        refreshId: retryId,
+      }),
+    ]);
+    for (const event of page.data) {
+      expect(Object.keys(event)).not.toContain("after");
+      expect(Object.keys(event)).not.toContain("failureCodes");
+    }
+
+    // Durable consumers receive them in feed order, like every other event.
+    const delivered: string[] = [];
+    await deliverFromStore(
+      db,
+      { connectionId, consumerId: "synthetic-health" },
+      async ({ event }) => {
+        delivered.push(event.type);
+      },
+    );
+    expect(delivered.filter((type) => type.startsWith("refresh."))).toEqual([
+      "refresh.failed",
+      "refresh.attention_required",
+      "refresh.recovered",
+    ]);
   });
 
   it("yields between months when its invocation budget runs out, and continues elsewhere", async () => {
