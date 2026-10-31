@@ -282,17 +282,20 @@ export function createRefreshService(options: RefreshServiceOptions) {
       : 0;
   }
 
-  /** Delays a continuation until its login is due, within this invocation's budget. */
-  async function paceContinuation(id: string, deadline: number) {
+  /**
+   * Delays a continuation until the first of these refreshes may log in,
+   * within this invocation's budget.
+   */
+  async function paceContinuation(ids: readonly string[], deadline: number) {
     try {
-      const refresh = await store.getRefresh(id);
-      if (!refresh || !isActive(refresh)) {
-        return;
+      let due = Number.POSITIVE_INFINITY;
+      for (const id of ids) {
+        const refresh = await store.getRefresh(id);
+        if (refresh && isActive(refresh)) {
+          due = Math.min(due, await loginAllowedAt(store, refresh));
+        }
       }
-      const waitMs = Math.min(
-        (await loginAllowedAt(store, refresh)) - Date.now(),
-        deadline - performance.now(),
-      );
+      const waitMs = Math.min(due - Date.now(), deadline - performance.now());
       if (waitMs > 0) {
         await sleep(waitMs, shutdown).catch(() => {});
       }
@@ -743,24 +746,35 @@ export function createRefreshService(options: RefreshServiceOptions) {
       options.budgetMs === undefined
         ? undefined
         : performance.now() + options.budgetMs;
+    const settle = (id: string) => {
+      const execution = executions.get(id)!;
+      execution.outcome.resolve(undefined);
+      running.delete(id);
+      execution.settled.resolve();
+    };
     const chain = (async () => {
+      // An exhausted budget stops the batch; one connection's login pacing
+      // only defers that refresh, so the others still execute.
       let yielded = false;
+      const deferred: string[] = [];
       for (const id of fresh) {
-        const execution = executions.get(id)!;
         if (!yielded && !shutdown.aborted) {
           const outcome = await executeWithRetries(id, deadline, retries);
-          execution.outcome.resolve(outcome);
-          yielded = outcome === "yielded" || outcome === "paced";
-          if (yielded && deadline !== undefined && options.continueLater) {
-            // Still marked running here, so a resume starts no second waiter.
-            await paceContinuation(id, deadline);
+          executions.get(id)!.outcome.resolve(outcome);
+          yielded = outcome === "yielded";
+          if (yielded || outcome === "paced") {
+            deferred.push(id);
+            continue;
           }
         }
-        execution.outcome.resolve(undefined);
-        running.delete(id);
-        execution.settled.resolve();
+        settle(id);
       }
-      if (yielded) {
+      if (deferred.length && deadline !== undefined && options.continueLater) {
+        // Still marked running here, so a resume starts no second waiter.
+        await paceContinuation(deferred, deadline);
+      }
+      deferred.forEach(settle);
+      if (deferred.length) {
         await options
           .continueLater?.()
           .catch(() => log({ event: "fonds_refresh_continuation_failed" }));

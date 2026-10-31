@@ -462,6 +462,66 @@ describe("refresh status reads and explicit resume", () => {
     });
   });
 
+  it.each([
+    ["without an execution budget", {}],
+    ["with an execution budget", { budgetMs: 2 * UNIT_DEADLINE_MS }],
+  ] as const)(
+    "lets a tick recover another connection's refresh after one connection's is paced, %s",
+    async (_, budget) => {
+      const other = "resume-other";
+      await db.ensureConnection({ id: other, provider: "cal" });
+      // The first refresh's connection logged in a minute ago.
+      await db.updateConfig(connectionId, (config) => ({
+        ...config,
+        providerLoginAttemptAt: new Date(Date.now() - 60_000).toISOString(),
+      }));
+      const earlier = new Date(Date.now() - 1_000).toISOString();
+      await db.admitRefresh(
+        stored("paced", { createdAt: earlier, startedAt: earlier }),
+        { operator: true, now: Date.now() },
+      );
+      await db.admitRefresh(stored("due", { connectionId: other }), {
+        operator: true,
+        now: Date.now(),
+      });
+      const requested: string[] = [];
+      const continueLater = vi.fn(async () => {});
+      const refreshes = createRefreshService({
+        store: db,
+        targets: async () => ({
+          targets: [connectionId, other].map((id) => ({
+            connectionId: id,
+            adapter: synthetic,
+            collector: async () => ({
+              provider: "cal",
+              collectorVersion: "synthetic-v1",
+              async *collect(input) {
+                requested.push(`${id} ${input.range?.from}`);
+                yield capture(`${id}-${input.range?.from}`);
+              },
+            }),
+          })),
+          failures: 0,
+        }),
+        log: () => {},
+        retryDelaysMs: [],
+        continueLater,
+        // A paced continuation waits no real time here.
+        sleep: async () => {},
+        ...budget,
+      });
+      await refreshes.resumeStalled();
+      await refreshes.settled();
+      expect(requested).toEqual([`${other} 2040-01-01`]);
+      expect(await db.getRefresh("due")).toMatchObject({ status: "completed" });
+      expect(await db.getRefresh("paced")).toMatchObject({
+        status: "running",
+      });
+      // The paced refresh still asks for one continuation, after the batch.
+      expect(continueLater).toHaveBeenCalledOnce();
+    },
+  );
+
   describe.each([
     ["without an execution budget", {}],
     ["with an execution budget", { budgetMs: 2 * UNIT_DEADLINE_MS }],
