@@ -1,10 +1,12 @@
 import type {
   SyncRun,
   SyncRunPageInput,
+  TransactionSummary,
 } from "../application/financial-store.js";
 import type {
   CatalogQuery,
   EventQuery,
+  TotalsGrouping,
   TransactionQuery,
 } from "../application/query-inputs.js";
 import type {
@@ -23,7 +25,8 @@ import type {
 } from "../domain/plans/run-history.js";
 import type { FinancialPlan } from "../domain/plans/state.js";
 import type {
-  calculateTotals,
+  Perspective,
+  TotalsPart,
   TransactionListFacts,
 } from "../domain/read-model.js";
 import type {
@@ -105,6 +108,27 @@ export interface DeferredEvidenceWrite {
   lastSeenRunId: string;
 }
 
+export type WireEventRow = Omit<LedgerEvent, "before" | "after"> & {
+  before: string | null;
+  after: string | null;
+};
+
+export interface GroupedMoneyRow {
+  groupKey: string | null;
+  groupRank: unknown;
+  currency: string;
+  amountBasis: Transaction["amountBasis"] | null;
+  count: number;
+  amountMinor: unknown;
+  minMinor: unknown;
+  maxMinor: unknown;
+}
+
+export type TotalsPartRow = Omit<TotalsPart, "amountMinor" | "fxFeeMinor"> & {
+  amountMinor: unknown;
+  fxFeeMinor: unknown;
+};
+
 /** Unexecuted Drizzle statements. The driver owns execution and transactions. */
 export interface Statements<Db> {
   cards(db: Db, connectionId: string): PromiseLike<Card[]>;
@@ -120,17 +144,80 @@ export interface Statements<Db> {
   transaction(db: Db, id: string): PromiseLike<Transaction[]>;
   transactionWithAnnotation(db: Db, id: string): PromiseLike<PlanRow[]>;
   transactionPage(db: Db, input: TransactionQuery): PromiseLike<PlanRow[]>;
+  /** Full rows of these IDs, in no particular order; at most 50 IDs. */
+  transactionsWithAnnotation(db: Db, ids: string[]): PromiseLike<PlanRow[]>;
+  /** List projections of these IDs, in no particular order; at most 50 IDs. */
+  transactionListById(
+    db: Db,
+    ids: string[],
+  ): PromiseLike<
+    { row: TransactionListFacts; annotation: Annotation | null }[]
+  >;
+  /** Summary projections of these IDs, in no particular order; at most 50 IDs. */
+  transactionSummariesById(
+    db: Db,
+    ids: string[],
+  ): PromiseLike<TransactionSummary[]>;
   transactionListPage(
     db: Db,
     input: TransactionQuery,
   ): PromiseLike<
     { row: TransactionListFacts; annotation: Annotation | null }[]
   >;
-  totals(
+  transactionSummaryPage(
     db: Db,
     input: TransactionQuery,
-  ): PromiseLike<Parameters<typeof calculateTotals>[0]>;
+  ): PromiseLike<TransactionSummary[]>;
+  /**
+   * Included rows' money per group, currency and (in `spending`) basis, for
+   * the first `limit` groups by included rows, then key bytewise (null last).
+   */
+  groupedTotals(
+    db: Db,
+    input: TransactionQuery & { perspective: Exclude<Perspective, "all"> },
+    groupBy: TotalsGrouping,
+    limit: number,
+  ): PromiseLike<GroupedMoneyRow[]>;
+  /** `TotalsPart` aggregates, with sums as the driver returns them. */
+  totalsParts(
+    db: Db,
+    input: TransactionQuery & { perspective: Exclude<Perspective, "all"> },
+  ): PromiseLike<TotalsPartRow[]>;
   events(db: Db, input: EventQuery): PromiseLike<LedgerEvent[]>;
+  /** The feed with `wireEventColumns`: documents only where public items read them. */
+  wireEvents(db: Db, input: EventQuery): PromiseLike<WireEventRow[]>;
+  /**
+   * Current rows per transaction month, newest first with undated rows (a null
+   * month) leading, at most `limit` groups; each row repeats the whole count
+   * and the first and last transaction dates.
+   */
+  transactionMonths(
+    db: Db,
+    connectionId: string,
+    limit: number,
+  ): PromiseLike<
+    {
+      month: string | null;
+      count: number;
+      total: number;
+      earliest: string | null;
+      latest: string | null;
+    }[]
+  >;
+  /**
+   * Each month a backfill window requested, newest first, at most `limit`:
+   * its best `backfillOutcomeRank` and when a refresh that completed it finished.
+   */
+  backfillMonths(
+    db: Db,
+    connectionId: string,
+    limit: number,
+  ): PromiseLike<{ month: string; rank: number; completedAt: string | null }[]>;
+  /** When a recent-window refresh of the connection last completed. */
+  recentCompletion(
+    db: Db,
+    connectionId: string,
+  ): PromiseLike<{ finishedAt: string | null }[]>;
   transactionCount(
     db: Db,
     connectionId: string,

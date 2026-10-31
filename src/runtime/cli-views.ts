@@ -2,10 +2,11 @@ import type { z } from "zod";
 
 import type {
   connectionListOutputSchema,
-  totalsOutputSchema,
   transactionDetailOutputSchema,
   transactionListOutputSchema,
+  transactionOutputSchema,
   transactionReadOutputSchema,
+  UngroupedTotalsOutput,
 } from "../application/wire-output.js";
 import type { SyncResult } from "../domain/plans/sync.js";
 import { option } from "./cli-invocation.js";
@@ -30,9 +31,13 @@ import type { collectionSummarySchema } from "./operator-cli.js";
  * null stays unknown, and every source string passes through safe().
  */
 
-type TransactionPage = z.infer<typeof transactionListOutputSchema>;
+type Transaction = z.infer<typeof transactionOutputSchema>;
 
-type Transaction = TransactionPage["data"][number];
+/** A page of compact records; summary pages stay JSON. */
+type TransactionPage = Omit<
+  z.infer<typeof transactionListOutputSchema>,
+  "data"
+> & { data: Transaction[] };
 
 type TransactionDetail = z.infer<typeof transactionDetailOutputSchema>;
 
@@ -538,7 +543,7 @@ export const transactionView: View<
   ].join("\n");
 };
 
-type Totals = z.infer<typeof totalsOutputSchema>;
+type Totals = UngroupedTotalsOutput;
 
 /** Every exclusion reason; a new one fails to compile until it has a name. */
 const exclusions = {
@@ -670,6 +675,15 @@ export const connectionListView: View<ConnectionPage> = (page, p, context) => {
     ) ?? rows.map((row) => flow(p, row)).join("\n")
   }\n${more ? `\nMore: ${more}\n` : ""}`;
 };
+
+/** Inputs whose results a view cannot render, such as summary items, stay JSON. */
+export function viewApplies(input: Readonly<Record<string, unknown>>) {
+  return (
+    (input.view === undefined || input.view === "compact") &&
+    input.groupBy === undefined &&
+    input.estimate !== true
+  );
+}
 
 /** Operation results with a terminal view; the rest stay JSON. */
 export const operationViews: Readonly<Record<string, View<never>>> = {

@@ -23,7 +23,7 @@ import {
 import { minorToDecimal } from "../domain/money.js";
 import { canonicalJson } from "../domain/observations.js";
 import type {
-  calculateTotals,
+  totalsFromParts,
   TransactionListView,
   TransactionView,
 } from "../domain/read-model.js";
@@ -33,8 +33,20 @@ import type {
   Transaction,
 } from "../domain/records.js";
 import { transactionChangedFields } from "../domain/transaction-content.js";
-import type { PublicConnection, SyncRun } from "./financial-store.js";
-import { listCursorSchema } from "./query-inputs.js";
+import {
+  type ConnectionCoverage,
+  COVERAGE_MAX_MONTHS,
+  type PublicConnection,
+  type SyncRun,
+  type TotalsGroup,
+  type TransactionSummary,
+} from "./financial-store.js";
+import {
+  filtersSchema,
+  listCursorSchema,
+  TOTALS_GROUPINGS,
+  TOTALS_MAX_GROUPS,
+} from "./query-inputs.js";
 import {
   FAILURE_REASONS,
   MAX_REFRESH_MONTHS,
@@ -589,11 +601,31 @@ export const refreshStartOutputSchema = z
       )
       .max(1000)
       .optional(),
+    estimates: z
+      .array(
+        z
+          .object({
+            connectionId: idSchema,
+            range: z
+              .object({ from: z.iso.date(), to: z.iso.date() })
+              .strict()
+              .nullable(),
+            windows: versionSchema.positive().max(MAX_REFRESH_MONTHS),
+            cards: versionSchema,
+            providerCalls: versionSchema.nullable(),
+          })
+          .strict(),
+      )
+      .max(1000)
+      .optional(),
   })
   .strict()
+  // Exactly one of a start, starts of every connection, or estimates.
   .refine(
     (output) =>
-      (output.refresh === undefined) !== (output.refreshes === undefined),
+      [output.refresh, output.refreshes, output.estimates].filter(
+        (member) => member !== undefined,
+      ).length === 1,
   );
 
 export const connectionOutputSchema = z
@@ -681,16 +713,81 @@ export function presentAccount(
   };
 }
 
-export const transactionListOutputSchema = listOutputSchema(
-  transactionOutputSchema,
-  200,
-);
+/** A summary list item: what analysis needs, without enrichment or review context. */
+export const transactionSummaryOutputSchema = z
+  .object({
+    id: idSchema,
+    transactionDate: dateSchema,
+    bookingDate: dateSchema,
+    billingDate: dateSchema,
+    merchantName: nullableTextSchema,
+    counterpartyName: nullableTextSchema,
+    merchantCategoryCode: merchantCategoryCodeSchema.nullable(),
+    amount: moneyOutputSchema.nullable(),
+    amountBasis: amountBasisSchema,
+    kind: kindSchema,
+    status: transactionStatusSchema,
+    presence: presenceSchema,
+    category: annotationDocumentShape.category,
+  })
+  .strict();
+
+export function presentTransactionSummary(
+  row: TransactionSummary,
+): z.input<typeof transactionSummaryOutputSchema> {
+  const source = sourceTextPreview();
+  return {
+    id: row.id,
+    transactionDate: row.transactionDate,
+    bookingDate: row.bookingDate,
+    billingDate: row.billingDate,
+    merchantName: source.text(row.merchantName),
+    counterpartyName: source.text(row.counterpartyName),
+    merchantCategoryCode: row.merchantCategoryCode,
+    amount: presentMoney(row.amountMinor, row.currency),
+    amountBasis: row.amountBasis,
+    kind: row.kind,
+    status: row.status,
+    presence: row.presence,
+    category: row.category,
+  };
+}
+
+/** A transaction page echoes the filters it applied, defaults included. */
+export const transactionListOutputSchema = z
+  .object({
+    data: z
+      .array(z.union([transactionOutputSchema, transactionSummaryOutputSchema]))
+      .max(200),
+    hasMore: z.boolean(),
+    nextCursor: listCursorSchema.nullable(),
+    filters: filtersSchema,
+    latestEventId: versionSchema,
+  })
+  .strict()
+  .refine((page) => page.hasMore === (page.nextCursor !== null));
 export const transactionReadOutputSchema = z
   .object({
     transaction: z.union([
       transactionOutputSchema,
       transactionDetailOutputSchema,
     ]),
+  })
+  .strict();
+/** Records in request order; IDs that matched none are listed, not errors. */
+export const transactionBatchOutputSchema = z
+  .object({
+    data: z
+      .array(
+        z.union([
+          transactionOutputSchema,
+          transactionDetailOutputSchema,
+          transactionSummaryOutputSchema,
+        ]),
+      )
+      .max(100),
+    missingIds: z.array(idSchema).max(100),
+    latestEventId: versionSchema,
   })
   .strict();
 const transactionReceiptSchema = z
@@ -713,7 +810,7 @@ export const unlinkOutputSchema = z
   })
   .strict();
 
-export const totalsOutputSchema = z
+export const ungroupedTotalsOutputSchema = z
   .object({
     // spending groups carry amountBasis; billing groups are per currency only.
     totals: z
@@ -740,7 +837,66 @@ export const totalsOutputSchema = z
   })
   .strict();
 
-export function presentWireTotals(result: ReturnType<typeof calculateTotals>) {
+/** Grouped totals: the same money groups per key, with counts and extremes. */
+const groupedTotalsOutputSchema = z
+  .object({
+    groupBy: z.enum(TOTALS_GROUPINGS),
+    groups: z
+      .array(
+        z
+          .object({
+            key: nullableTextSchema,
+            includedCount: versionSchema,
+            totals: z
+              .array(
+                moneyOutputSchema
+                  .extend({
+                    amountBasis: amountBasisSchema.optional(),
+                    count: versionSchema,
+                    min: moneyOutputSchema.shape.amount,
+                    max: moneyOutputSchema.shape.amount,
+                  })
+                  .strict(),
+              )
+              .max(100),
+          })
+          .strict(),
+      )
+      .max(TOTALS_MAX_GROUPS),
+    truncated: z.boolean(),
+  })
+  .strict();
+
+/** Ungrouped members without groupBy, grouped members with it; never both. */
+export const totalsOutputSchema = ungroupedTotalsOutputSchema
+  .partial()
+  .extend(groupedTotalsOutputSchema.partial().shape)
+  .strict()
+  .refine((output) =>
+    output.groupBy === undefined
+      ? ungroupedTotalsOutputSchema.safeParse(output).success
+      : groupedTotalsOutputSchema.safeParse(output).success,
+  );
+
+export type UngroupedTotalsOutput = z.infer<typeof ungroupedTotalsOutputSchema>;
+
+export function presentTotalsGroup(group: TotalsGroup) {
+  const source = sourceTextPreview();
+  return {
+    key: source.text(group.key),
+    includedCount: group.includedCount,
+    totals: group.totals.map((money) => ({
+      currency: money.currency,
+      amount: minorToDecimal(money.amountMinor, money.currency),
+      ...(money.amountBasis !== null && { amountBasis: money.amountBasis }),
+      count: money.count,
+      min: minorToDecimal(money.minMinor, money.currency),
+      max: minorToDecimal(money.maxMinor, money.currency),
+    })),
+  };
+}
+
+export function presentWireTotals(result: ReturnType<typeof totalsFromParts>) {
   return {
     totals: result.totals.map((group) => ({
       ...presentMoney(group.amountMinor, group.currency)!,
@@ -753,6 +909,101 @@ export function presentWireTotals(result: ReturnType<typeof calculateTotals>) {
     includedCount: result.includedCount,
     excludedCount: result.excludedCount,
     excluded: result.excluded,
+  };
+}
+
+const monthSchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
+
+export const coverageOutputSchema = z
+  .object({
+    coverage: z
+      .object({
+        connectionId: idSchema,
+        transactionCount: versionSchema,
+        undatedCount: versionSchema,
+        earliestDate: dateSchema,
+        latestDate: dateSchema,
+        months: z
+          .array(
+            z
+              .object({
+                month: monthSchema,
+                transactionCount: versionSchema,
+                backfill: z.enum([
+                  "completed",
+                  "partial",
+                  "failed",
+                  "in_progress",
+                  "not_requested",
+                ]),
+                backfilledAt: nullableTextSchema,
+              })
+              .strict(),
+          )
+          .max(COVERAGE_MAX_MONTHS),
+        monthsTruncated: z.boolean(),
+        recentRefreshCompletedAt: nullableTextSchema,
+        requiresAttention: z.boolean(),
+        failureCodes: z.array(refreshFailureCodeSchema).max(20),
+      })
+      .strict(),
+  })
+  .strict();
+
+const monthIndex = (month: string) =>
+  Number(month.slice(0, 4)) * 12 + Number(month.slice(5, 7)) - 1;
+
+const monthLabel = (index: number) =>
+  `${String(Math.floor(index / 12)).padStart(4, "0")}-${String((index % 12) + 1).padStart(2, "0")}`;
+
+/**
+ * Every month from the newest to the oldest one that holds transactions or a
+ * backfill request, newest first, so a month without purchases is listed
+ * beside the months collection asked for.
+ */
+export function presentCoverage(coverage: ConnectionCoverage) {
+  const counts = new Map(
+    coverage.transactionMonths.map((row) => [row.month, row.count]),
+  );
+  const backfill = new Map(
+    coverage.backfillMonths.map((row) => [row.month, row]),
+  );
+  const indexes = [...counts.keys(), ...backfill.keys()].map(monthIndex);
+  const months = [];
+  let truncated =
+    coverage.transactionMonths.length > COVERAGE_MAX_MONTHS ||
+    coverage.backfillMonths.length > COVERAGE_MAX_MONTHS;
+  if (indexes.length > 0) {
+    const newest = Math.max(...indexes);
+    const oldest = Math.min(...indexes);
+    for (let index = newest; index >= oldest; index--) {
+      if (months.length === COVERAGE_MAX_MONTHS) {
+        truncated = true;
+        break;
+      }
+      const month = monthLabel(index);
+      const requested = backfill.get(month);
+      months.push({
+        month,
+        transactionCount: counts.get(month) ?? 0,
+        backfill: requested?.outcome ?? ("not_requested" as const),
+        backfilledAt: requested?.completedAt ?? null,
+      });
+    }
+  }
+  return {
+    coverage: {
+      connectionId: coverage.connectionId,
+      transactionCount: coverage.transactionCount,
+      undatedCount: coverage.undatedCount,
+      earliestDate: coverage.earliestDate,
+      latestDate: coverage.latestDate,
+      months,
+      monthsTruncated: truncated,
+      recentRefreshCompletedAt: coverage.recentCompletedAt,
+      requiresAttention: coverage.lastFinished?.requiresAttention ?? false,
+      failureCodes: coverage.lastFinished?.failureCodes ?? [],
+    },
   };
 }
 

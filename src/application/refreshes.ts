@@ -209,6 +209,18 @@ export const emptyCounts = (): RefreshCounts => ({
   updated: 0,
 });
 
+/** What a refresh would request, judged without starting it. */
+export interface RefreshEstimate {
+  connectionId: string;
+  range: CollectionRange | null;
+  /** Collection units: a backfill's months, or 1 for the recent window. */
+  windows: number;
+  /** Cards discovery recorded; cards known only from transactions are not counted. */
+  cards: number;
+  /** Null when the provider offers no estimate or discovery recorded no card. */
+  providerCalls: number | null;
+}
+
 /** A start: the refresh it created or met, and why none started when one did not. */
 export interface RefreshStartResult {
   connectionId: string;

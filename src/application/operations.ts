@@ -25,12 +25,14 @@ import {
   encodeCursor,
   encodeKeyset,
   listCursorSchema,
-  totalsSchema,
+  TOTALS_MAX_GROUPS,
+  totalsInputSchema,
   transactionListSchema,
 } from "./query-inputs.js";
 import {
   isActive,
   type Refresh,
+  type RefreshEstimate,
   RefreshNotStartedError,
   type RefreshStartResult,
   validateRefreshRange,
@@ -44,6 +46,7 @@ import {
   cardReadOutputSchema,
   connectionListOutputSchema,
   connectionReadOutputSchema,
+  coverageOutputSchema,
   eventListOutputSchema,
   OUTPUT_MAX_BYTES,
   outputByteLength,
@@ -51,11 +54,14 @@ import {
   presentAnnotationReceipt,
   presentCard,
   presentConnection,
+  presentCoverage,
   presentRefresh,
   presentRefreshDetail,
   presentRefreshStart,
   presentSyncRun,
+  presentTotalsGroup,
   presentTransactionReceipt,
+  presentTransactionSummary,
   presentWireEvent,
   presentWireTotals,
   presentWireTransaction,
@@ -64,6 +70,7 @@ import {
   refreshStartOutputSchema,
   syncRunListOutputSchema,
   totalsOutputSchema,
+  transactionBatchOutputSchema,
   transactionListOutputSchema,
   transactionReadOutputSchema,
   transactionWriteOutputSchema,
@@ -170,6 +177,11 @@ export interface ApplicationCapabilities {
     startAll(range?: CollectionRange): Promise<RefreshStartResult[]>;
     /** Continues an active refresh a read meets, in case its process died. */
     recover?(refresh: Refresh): void;
+    /** What starting would request, without starting anything. */
+    estimate?(
+      connectionId: string | undefined,
+      range?: CollectionRange,
+    ): Promise<RefreshEstimate[]>;
   };
   /**
    * Told when an owner write has committed, so its events can be delivered; a
@@ -286,29 +298,35 @@ function listPage<Item>(
  * Pages may hold fewer rows than fetched to respect the response byte limit.
  * `nextCursor` is always the keyset position of the last emitted row.
  */
-function fitPage<Row, Item>(
+function fitPage<Row, Item, Extra extends object = object>(
   rows: readonly Row[],
   hasMore: boolean,
   present: (row: Row) => Item,
   cursorOf: (row: Row) => string,
+  // Page members beside the list, counted in the byte budget.
+  extra = {} as Extra,
 ) {
+  const page = (data: Item[], nextCursor: string | null) => ({
+    ...listPage(data, nextCursor),
+    ...extra,
+  });
   const data: Item[] = [];
   for (const [index, row] of rows.entries()) {
     data.push(present(row));
     const more = index < rows.length - 1 || hasMore;
     if (
-      outputByteLength(listPage(data, more ? cursorOf(row) : null)) >
+      outputByteLength(page(data, more ? cursorOf(row) : null)) >
       OUTPUT_MAX_BYTES
     ) {
       data.pop();
       if (data.length === 0) {
         throw new OutputLimitError();
       }
-      return listPage(data, cursorOf(rows[index - 1]!));
+      return page(data, cursorOf(rows[index - 1]!));
     }
   }
   const last = rows.at(-1);
-  return listPage(data, hasMore && last ? cursorOf(last) : null);
+  return page(data, hasMore && last ? cursorOf(last) : null);
 }
 
 function catalogAfter(kind: "cards" | "accounts", cursor: string | undefined) {
@@ -336,10 +354,11 @@ function syncRunAfter(cursor: string | undefined) {
 }
 
 const transactionsDescription = [
-  "Browse a bounded live page of compact transactions, newest transactionDate first (unknown dates last).",
+  "Browse a bounded live page of compact transactions, newest transactionDate first (unknown dates last). view=summary returns lean analysis items (dates, merchant and counterparty names, money, basis, kind, status, presence, MCC and the owner's category) instead; read a record with get_transaction for everything else.",
+  "merchantContains matches a case-insensitive substring of merchantName or counterpartyName. amountMin and amountMax bound the signed amount (outflows are negative) as decimal strings in the required currency. Each page echoes the filters it applied, defaults included, in filters: check them when a page looks wrong.",
   "perspective selects which rows represent a plan: spending (default) is every row without purchaseId, including fees and cancellations; billing is every row except plan purchases (an installmentCount of 2 or more without installmentNumber, or live billed lines even when the count is unknown), whose money appears through their billed lines, and a held or unknown line amount is never replaced by the purchase's; all is every row and counts a plan's money twice. A billed line has purchaseId (its purchase) and installmentNumber; filtering by purchaseId requires billing or all.",
   "Money is exact decimal strings; keep each amount with its currency and amount basis.",
-  "Pages may hold fewer rows to respect the response byte limit; follow nextCursor while hasMore is true. Reads are live: concurrent changes can shift later pages.",
+  "Pages may hold fewer rows to respect the response byte limit; follow nextCursor while hasMore is true. Reads are live: concurrent changes can shift later pages. latestEventId is the event feed's position (the connection's with connectionId, otherwise the whole ledger's) read before the page: when it moves past a stored value, catch up with list_events instead of rereading pages.",
   "cardId and billingAccountId must belong to connectionId when both are given; otherwise the input is invalid.",
 ].join(" ");
 
@@ -350,6 +369,7 @@ const totalsDescription = [
   "all is rejected because it would double-count.",
   "Never add groups together across currencies, bases or perspectives. fxFees sums published FX fees per currency; fxFeeUnknownCount counts included converted rows whose fee is unknown, which is never zero.",
   "Pending, authorization, removed, superseded, unknown, ambiguous, income and transfer rows are excluded. No balances or exchange rates are inferred.",
+  "groupBy (merchant, month, year, category, status, kind or card) returns the included rows' money groups per key instead, each with count, min and max, the busiest groups first; month and year follow dateRole, category is the owner's annotation category, and truncated means more groups existed. Group keys are exact values, never merged; a null key collects rows without one.",
 ].join(" ");
 
 const identifierKeys = [
@@ -422,6 +442,12 @@ const definitions = named({
     connectionReadOutputSchema,
     "read",
   ),
+  get_connection_coverage: define(
+    "Show how far a connection's history reaches without paging it: current transaction counts with the first and last transaction dates, and one entry per month, newest first, with its transaction count and backfill state. A month with no transactions and backfill not_requested was never asked for by a backfill, so it does not show an absence of purchases; refresh it with from/to before concluding that. Recent refreshes cover only the provider's recent window, reported by its last completion. requiresAttention and failureCodes come from the last finished refresh. Does not call the provider.",
+    connectionScopeSchema,
+    coverageOutputSchema,
+    "read",
+  ),
   list_cards: define(
     "Browse a bounded live page of one connection's cards, oldest first. A card's id matches transaction cardId. Unknown metadata stays null, and omission from discovery does not establish closure. Follow nextCursor while hasMore is true; concurrent changes can shift later pages.",
     catalogListSchema,
@@ -467,9 +493,29 @@ const definitions = named({
     transactionReadOutputSchema,
     "read",
   ),
+  get_transactions: define(
+    "Read up to 100 transactions by ID in one call, such as the records an event page names, in request order. view is summary (lean analysis items), compact (default; list records), detail (get_transaction's default) or evidence (detail with the evidence preview). IDs that match no transaction are returned in missingIds rather than failing the call. latestEventId is the whole ledger's event position, read before the records. A result over the response limit fails with output_too_large: request fewer IDs or a leaner view.",
+    z
+      .object({
+        ids: z
+          .array(idSchema)
+          .min(1)
+          .max(100)
+          .refine(
+            (ids) => new Set(ids).size === ids.length,
+            "IDs must be unique",
+          ),
+        view: z
+          .enum(["summary", "compact", "detail", "evidence"])
+          .default("compact"),
+      })
+      .strict(),
+    transactionBatchOutputSchema,
+    "read",
+  ),
   get_transaction_totals: define(
     totalsDescription,
-    totalsSchema,
+    totalsInputSchema,
     totalsOutputSchema,
     "read",
   ),
@@ -498,12 +544,13 @@ const definitions = named({
     "write",
   ),
   refresh_connection: define(
-    "Start a refresh from the financial provider: of connectionId, or of every connection with stored credentials when it is omitted. This calls the external provider and updates stored financial observations. Without from/to it rereads the recent window; inclusive from and to (YYYY-MM-DD, given together, at most 120 months) backfill that range month by month. Returns within about 10 seconds with the refresh (one refreshes entry per connection when none was named): completed, partial or failed, or running when it continues in the background; read it later with get_refresh. A connection already refreshing answers refresh_in_progress (in refreshes, reason busy); one whose provider needs the owner, requires_attention; one refreshed within the last minute returns that refresh (reason cooldown).",
+    "Start a refresh from the financial provider: of connectionId, or of every connection with stored credentials when it is omitted. This calls the external provider and updates stored financial observations. Without from/to it rereads the recent window; inclusive from and to (YYYY-MM-DD, given together, at most 120 months) backfill that range month by month. Returns within about 10 seconds with the refresh (one refreshes entry per connection when none was named): completed, partial or failed, or running when it continues in the background; read it later with get_refresh. A connection already refreshing answers refresh_in_progress (in refreshes, reason busy); one whose provider needs the owner, requires_attention; one refreshed within the last minute returns that refresh (reason cooldown). estimate=true starts nothing and calls no provider: it returns estimates, one per connection, with the collection windows (a backfill's months, or 1), the cards discovery knows and the provider requests expected (null when unknown), so a long backfill can be judged first.",
     z
       .object({
         connectionId: idSchema.optional(),
         from: z.iso.date().optional(),
         to: z.iso.date().optional(),
+        estimate: z.boolean().default(false),
       })
       .strict()
       .superRefine((input, context) => {
@@ -703,6 +750,13 @@ export function createApplication(
       }
       return { connection: presentConnection(connection) };
     },
+    get_connection_coverage: async ({ connectionId }) => {
+      const coverage = await store.getCoverage(connectionId);
+      if (!coverage) {
+        throw new ApplicationError("not_found");
+      }
+      return presentCoverage(coverage);
+    },
     list_cards: async ({ cursor, ...input }) => {
       const page = await store.listCards({
         ...input,
@@ -735,30 +789,104 @@ export function createApplication(
       }
       return { account: presentAccount(account) };
     },
-    list_transactions: async ({ cursor, ...input }) => {
-      const page = await store.listTransactionPage({
-        ...input,
-        after: transactionAfter(cursor),
-      });
+    list_transactions: async ({ cursor, limit, view, ...filters }) => {
+      // Read before the page: any change the page misses has a later event.
+      const latestEventId = await store.latestEventId(filters.connectionId);
+      const query = { ...filters, limit, after: transactionAfter(cursor) };
+      const cursorOf = (row: { transactionDate: string | null; id: string }) =>
+        encodeKeyset("transactions", [row.transactionDate, row.id]);
+      if (view === "summary") {
+        const page = await store.listTransactionSummaryPage(query);
+        return fitPage(
+          page.transactions,
+          page.hasMore,
+          presentTransactionSummary,
+          cursorOf,
+          { filters, latestEventId },
+        );
+      }
+      const page = await store.listTransactionPage(query);
       return fitPage(
         page.transactions,
         page.hasMore,
         (row) => presentWireTransaction(row),
-        (row) => encodeKeyset("transactions", [row.transactionDate, row.id]),
+        cursorOf,
+        { filters, latestEventId },
       );
     },
-    get_transaction: async ({ transactionId, detail, includeEvidence }) => ({
-      transaction: presentWireTransaction(
-        await requireTransaction(transactionId),
-        detail,
-        includeEvidence,
-      ),
-    }),
-    get_transaction_totals: async (input) =>
-      presentWireTotals(await store.getTotals(input)),
+    get_transaction: async ({ transactionId, detail, includeEvidence }) => {
+      if (!detail) {
+        // A compact record needs only the list projection.
+        const [row] = await store.getTransactionListViews([transactionId]);
+        if (!row) {
+          throw new ApplicationError("not_found");
+        }
+        return { transaction: presentWireTransaction(row) };
+      }
+      return {
+        transaction: presentWireTransaction(
+          await requireTransaction(transactionId),
+          detail,
+          includeEvidence,
+        ),
+      };
+    },
+    get_transactions: async ({ ids, view }) => {
+      // IDs can span connections, so the checkpoint is the whole ledger's.
+      const latestEventId = await store.latestEventId();
+      const records = new Map<string, unknown>(
+        view === "summary"
+          ? (await store.getTransactionSummaries(ids)).map((row) => [
+              row.id,
+              presentTransactionSummary(row),
+            ])
+          : view === "compact"
+            ? (await store.getTransactionListViews(ids)).map((row) => [
+                row.id,
+                presentWireTransaction(row),
+              ])
+            : (await store.getTransactionViews(ids)).map((row) => [
+                row.id,
+                presentWireTransaction(row, true, view === "evidence"),
+              ]),
+      );
+      return {
+        data: ids.flatMap((id) =>
+          records.has(id) ? [records.get(id) as never] : [],
+        ),
+        missingIds: ids.filter((id) => !records.has(id)),
+        latestEventId,
+      };
+    },
+    get_transaction_totals: async ({ groupBy, ...filters }) => {
+      if (groupBy === undefined) {
+        return presentWireTotals(await store.getTotals(filters));
+      }
+      const result = await store.getGroupedTotals(
+        filters,
+        groupBy,
+        TOTALS_MAX_GROUPS,
+      );
+      // Long keys can exceed the response budget before the group limit.
+      const output = {
+        groupBy,
+        groups: [] as ReturnType<typeof presentTotalsGroup>[],
+        truncated: false,
+      };
+      for (const group of result.groups) {
+        output.groups.push(presentTotalsGroup(group));
+        if (outputByteLength(output) > OUTPUT_MAX_BYTES) {
+          output.groups.pop();
+          output.truncated = true;
+          return output;
+        }
+      }
+      output.truncated = result.truncated;
+      return output;
+    },
     list_events: async ({ connectionId, cursor, limit }) => {
       const after = cursor === undefined ? 0 : decodeCursor("event", cursor);
-      const rows = await store.listEvents({
+      const rows = await store.listWireEvents({
         connectionId,
         after,
         limit: limit + 1,
@@ -787,8 +915,19 @@ export function createApplication(
         await store.editAnnotation({ ...input, actor: "owner" }),
       ),
     }),
-    refresh_connection: async ({ connectionId, from, to }) => {
+    refresh_connection: async ({ connectionId, from, to, estimate }) => {
       const range = from === undefined ? undefined : { from, to: to! };
+      if (estimate) {
+        if (!capabilities.refreshes!.estimate) {
+          throw new InvalidInputError("Refresh estimates are unavailable");
+        }
+        return {
+          estimates: await capabilities.refreshes!.estimate(
+            connectionId,
+            range,
+          ),
+        };
+      }
       if (connectionId === undefined) {
         return {
           refreshes: (await capabilities.refreshes!.startAll(range)).map(

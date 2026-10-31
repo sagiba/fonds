@@ -447,7 +447,8 @@ describe("durable transaction event operations", () => {
     });
     const listEvents = createApplication({
       backend: "sqlite",
-      listEvents: source.listEvents,
+      // Full events present the same public items as the projected feed.
+      listWireEvents: source.listEvents,
     } as never).operations.find(
       (operation) => operation.name === "list_events",
     )!;
@@ -497,7 +498,8 @@ describe("durable transaction event operations", () => {
     });
     const listEvents = createApplication({
       backend: "sqlite",
-      listEvents: source.listEvents,
+      // Full events present the same public items as the projected feed.
+      listWireEvents: source.listEvents,
     } as never).operations.find(
       (operation) => operation.name === "list_events",
     )!;

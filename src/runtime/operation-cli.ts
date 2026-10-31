@@ -47,6 +47,11 @@ const presentations: Readonly<
     summary: "Show one connection",
     example: ["--connection-id", "cal"],
   },
+  get_connection_coverage: {
+    alias: "coverage",
+    summary: "Show which months a connection's history covers",
+    example: ["--connection-id", "cal"],
+  },
   list_cards: {
     summary: "List a connection's cards",
     example: ["--connection-id", "cal"],
@@ -69,6 +74,10 @@ const presentations: Readonly<
     alias: "get",
     summary: "Show one transaction",
     example: ["--transaction-id", "TRANSACTION_ID"],
+  },
+  get_transactions: {
+    summary: "Show several transactions by ID",
+    example: ["--ids", '["TRANSACTION_ID"]', "--view", "summary"],
   },
   get_transaction_totals: {
     alias: "totals",

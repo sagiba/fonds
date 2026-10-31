@@ -37,6 +37,9 @@ function refreshStillRunning(output: unknown) {
 export const OPERATION_ROUTES = {
   list_connections: [{ method: "GET", path: "/v1/connections" }],
   get_connection: [{ method: "GET", path: "/v1/connections/:connectionId" }],
+  get_connection_coverage: [
+    { method: "GET", path: "/v1/connections/:connectionId/coverage" },
+  ],
   list_accounts: [{ method: "GET", path: "/v1/accounts" }],
   get_account: [{ method: "GET", path: "/v1/accounts/:accountId" }],
   list_cards: [{ method: "GET", path: "/v1/cards" }],
@@ -62,6 +65,8 @@ export const OPERATION_ROUTES = {
   get_refresh: [{ method: "GET", path: "/v1/refreshes/:refreshId" }],
   list_transactions: [{ method: "GET", path: "/v1/transactions" }],
   get_transaction_totals: [{ method: "GET", path: "/v1/transactions/totals" }],
+  // A read with an ID list, which a query string cannot carry.
+  get_transactions: [{ method: "POST", path: "/v1/transactions/batch" }],
   get_transaction: [{ method: "GET", path: "/v1/transactions/:transactionId" }],
   list_events: [{ method: "GET", path: "/v1/events" }],
   list_sync_runs: [

@@ -32,6 +32,24 @@
       "500"
     ]
   },
+  "GET /v1/connections/{connectionId}/coverage": {
+    "operationId": "get_connection_coverage",
+    "scopes": [
+      "financial:read"
+    ],
+    "parameters": [
+      "path connectionId (required)"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
+    ]
+  },
   "GET /v1/accounts": {
     "operationId": "list_accounts",
     "scopes": [
@@ -118,7 +136,8 @@
     ],
     "body": [
       "from",
-      "to"
+      "to",
+      "estimate"
     ],
     "responses": [
       "200",
@@ -159,7 +178,8 @@
     ],
     "body": [
       "from",
-      "to"
+      "to",
+      "estimate"
     ],
     "responses": [
       "200",
@@ -204,7 +224,10 @@
       "query presence",
       "query includeSuperseded",
       "query merchantName",
+      "query merchantContains",
       "query merchantCategoryCode",
+      "query amountMin",
+      "query amountMax",
       "query dateRole",
       "query from",
       "query to",
@@ -219,7 +242,8 @@
       "query purchaseId",
       "query perspective",
       "query limit",
-      "query cursor"
+      "query cursor",
+      "query view"
     ],
     "responses": [
       "200",
@@ -244,7 +268,10 @@
       "query presence",
       "query includeSuperseded",
       "query merchantName",
+      "query merchantContains",
       "query merchantCategoryCode",
+      "query amountMin",
+      "query amountMax",
       "query dateRole",
       "query from",
       "query to",
@@ -257,7 +284,27 @@
       "query threeDSecureUsed",
       "query recurring",
       "query purchaseId",
-      "query perspective"
+      "query perspective",
+      "query groupBy"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
+    ]
+  },
+  "POST /v1/transactions/batch": {
+    "operationId": "get_transactions",
+    "scopes": [
+      "financial:read"
+    ],
+    "body": [
+      "ids (required)",
+      "view"
     ],
     "responses": [
       "200",

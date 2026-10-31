@@ -18,21 +18,23 @@ grant does not imply read access. Optional operations appear only when the runti
 supplies their capability; the [storage guide](guides/storage-backends.md) lists
 which runtimes offer refreshes.
 
-| Operation / MCP tool                                     | HTTP method and path                                                                 | Access | Notes                                                                                                                                               |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `list_connections`, `get_connection`                     | `GET /v1/connections`, `GET /v1/connections/:id`                                     | Read   | `list_connections` takes no input. A connection carries its [latest refresh](#connection).                                                          |
-| `refresh_connection` (optional)                          | `POST /v1/connections/:id/refreshes`, `POST /v1/refreshes`                           | Write  | Body `{}` or `{from, to}`; without a connection, every connection. See [refreshes](#refreshes).                                                     |
-| `get_refresh`, `list_refreshes`                          | `GET /v1/refreshes/:id`, `GET /v1/connections/:id/refreshes`                         | Read   | [Refreshes](#refreshes), newest first.                                                                                                              |
-| `list_sync_runs`                                         | `GET /v1/connections/:id/sync-runs`                                                  | Read   | [Sync runs](#sync-run).                                                                                                                             |
-| `list_accounts`, `get_account`                           | `GET /v1/accounts`, `GET /v1/accounts/:id`                                           | Read   | `list_accounts` requires `connectionId`. [Accounts](#account).                                                                                      |
-| `list_cards`, `get_card`                                 | `GET /v1/cards`, `GET /v1/cards/:id`                                                 | Read   | `list_cards` requires `connectionId`. [Cards](#card).                                                                                               |
-| `list_transactions`, `get_transaction`                   | `GET /v1/transactions`, `GET /v1/transactions/:id`                                   | Read   | [Filters](#transaction-filters) and [records](#transaction). `get_transaction` takes `detail` (default true) and `includeEvidence` (default false). |
-| `get_transaction_totals`                                 | `GET /v1/transactions/totals`                                                        | Read   | Same filters as the list, without paging. [Totals](#totals).                                                                                        |
-| `list_events`                                            | `GET /v1/events`                                                                     | Read   | Requires `connectionId`. [Event feed](#events).                                                                                                     |
-| `update_annotation`                                      | `PATCH /v1/transactions/:id/annotation`                                              | Write  | [Partial update](#annotations), guarded by `expectedVersion`.                                                                                       |
-| `undo_annotation`                                        | `POST /v1/annotations/undo`                                                          | Write  | Inputs `eventId` and `expectedVersion`.                                                                                                             |
-| `link_pending_transaction`, `unlink_pending_transaction` | `POST /v1/transactions/:id/link-pending`, `POST /v1/transactions/:id/unlink-pending` | Write  | `:id` is the pending transaction, which survives. See [matching](#pending-to-posted-matching).                                                      |
-| `confirm_removal`                                        | `POST /v1/transactions/:id/removal`                                                  | Write  | Needs a `reason` and `expectedTransactionVersion`. Absence from a capture is never enough.                                                          |
+| Operation / MCP tool                                     | HTTP method and path                                                                 | Access | Notes                                                                                                                                                                                              |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_connections`, `get_connection`                     | `GET /v1/connections`, `GET /v1/connections/:id`                                     | Read   | `list_connections` takes no input. A connection carries its [latest refresh](#connection).                                                                                                         |
+| `get_connection_coverage`                                | `GET /v1/connections/:id/coverage`                                                   | Read   | [Coverage](#coverage) by month.                                                                                                                                                                    |
+| `refresh_connection` (optional)                          | `POST /v1/connections/:id/refreshes`, `POST /v1/refreshes`                           | Write  | Body `{}` or `{from, to}`, with optional `estimate`; without a connection, every connection. See [refreshes](#refreshes).                                                                          |
+| `get_refresh`, `list_refreshes`                          | `GET /v1/refreshes/:id`, `GET /v1/connections/:id/refreshes`                         | Read   | [Refreshes](#refreshes), newest first.                                                                                                                                                             |
+| `list_sync_runs`                                         | `GET /v1/connections/:id/sync-runs`                                                  | Read   | [Sync runs](#sync-run).                                                                                                                                                                            |
+| `list_accounts`, `get_account`                           | `GET /v1/accounts`, `GET /v1/accounts/:id`                                           | Read   | `list_accounts` requires `connectionId`. [Accounts](#account).                                                                                                                                     |
+| `list_cards`, `get_card`                                 | `GET /v1/cards`, `GET /v1/cards/:id`                                                 | Read   | `list_cards` requires `connectionId`. [Cards](#card).                                                                                                                                              |
+| `list_transactions`, `get_transaction`                   | `GET /v1/transactions`, `GET /v1/transactions/:id`                                   | Read   | [Filters](#transaction-filters) and [records](#transaction). `get_transaction` takes `detail` (default true) and `includeEvidence` (default false).                                                |
+| `get_transactions`                                       | `POST /v1/transactions/batch`                                                        | Read   | Body `{ids, view}`: up to 100 unique IDs; `view` `summary`, `compact` (default), `detail` or `evidence`. Returns `{data, missingIds, latestEventId}` in request order; unknown IDs are not errors. |
+| `get_transaction_totals`                                 | `GET /v1/transactions/totals`                                                        | Read   | Same filters as the list, without paging. [Totals](#totals).                                                                                                                                       |
+| `list_events`                                            | `GET /v1/events`                                                                     | Read   | Requires `connectionId`. [Event feed](#events).                                                                                                                                                    |
+| `update_annotation`                                      | `PATCH /v1/transactions/:id/annotation`                                              | Write  | [Partial update](#annotations), guarded by `expectedVersion`.                                                                                                                                      |
+| `undo_annotation`                                        | `POST /v1/annotations/undo`                                                          | Write  | Inputs `eventId` and `expectedVersion`.                                                                                                                                                            |
+| `link_pending_transaction`, `unlink_pending_transaction` | `POST /v1/transactions/:id/link-pending`, `POST /v1/transactions/:id/unlink-pending` | Write  | `:id` is the pending transaction, which survives. See [matching](#pending-to-posted-matching).                                                                                                     |
+| `confirm_removal`                                        | `POST /v1/transactions/:id/removal`                                                  | Write  | Needs a `reason` and `expectedTransactionVersion`. Absence from a capture is never enough.                                                                                                         |
 
 `GET /health` is an authenticated, HTTP-only read, not an MCP tool. It returns
 `{service: "fonds", status: "ok", storage, scope}`. `storage` is
@@ -86,7 +88,11 @@ cursor only to the list that issued it.
 - **Browsing lists** (transactions, cards, accounts, sync runs): `nextCursor` is
   `null` exactly when `hasMore` is false; pass it back as `cursor` for the next
   page. A page can hold fewer items than `limit` when the 256 KiB response budget
-  is reached, so follow `nextCursor` while `hasMore` is true. `list_connections`
+  is reached, so follow `nextCursor` while `hasMore` is true. A transaction
+  page also echoes the `filters` it applied, defaults included, and carries
+  `latestEventId`: the highest event ID, of the connection or else the whole
+  ledger, read before the page. When it passes a stored value, catch up with the
+  [event feed](#events) rather than rereading pages. `list_connections`
   returns every connection in one page.
 - **The event feed** always returns a `nextCursor`, even on an empty or final page.
   It is a resumable checkpoint. See [events](#events).
@@ -126,6 +132,8 @@ Superseded posting components require
 | `currency`                                     | Uppercase ISO 4217 code                               | Matches the primary money's currency, not the original currency.                                                                                                                                        |
 | `merchantName`                                 | String, at most 4,096 characters                      | Exact match, not substring search.                                                                                                                                                                      |
 | `merchantCategoryCode`                         | Four digits                                           | Exact match. The shape does not certify registry membership.                                                                                                                                            |
+| `merchantContains`                             | String, at most 4,096 characters                      | Case-insensitive substring of `merchantName` or `counterpartyName`; ASCII letters always fold.                                                                                                          |
+| `amountMin`, `amountMax`                       | Decimal strings                                       | Inclusive bounds on the signed `amount` (outflows are negative) at the precision of `currency`, which they require. Null money matches neither.                                                         |
 | `dateRole`, `from`, `to`                       | `transaction`, `booking` or `billing`; `YYYY-MM-DD`   | `dateRole` is required when a bound is given. Bounds are inclusive dates from year 0001; a row with no date for the role matches neither.                                                               |
 | `cardPresent`, `threeDSecureUsed`, `recurring` | Boolean                                               | Match the stated [payment context](#payment-context).                                                                                                                                                   |
 | `authorizationMethod`, `wallet`                | [Enum](#fields)                                       |                                                                                                                                                                                                         |
@@ -148,6 +156,22 @@ refresh configuration, which may expose several cards and accounts.
 Credentials and internal configuration are never included. `latestRefresh` is the
 newest [refresh](#refreshes) or recorded scheduled occurrence, without its
 windows, or `null` before any.
+
+## Coverage
+
+`get_connection_coverage` shows one connection's history reach without paging:
+`{coverage: {connectionId, transactionCount, undatedCount, earliestDate, latestDate, months, monthsTruncated, recentRefreshCompletedAt, requiresAttention, failureCodes}}`.
+Counts and dates cover current, non-superseded rows of every perspective by
+`transactionDate`. `months` runs newest first, at most 240, from the newest to the
+oldest month holding transactions or a backfill request, each
+`{month, transactionCount, backfill, backfilledAt}`. `backfill` is the best
+outcome of the [refresh](#refreshes) windows that requested the month:
+`completed`, `partial`, `failed` (including windows a stopped refresh never
+ran), `in_progress` or `not_requested`; `backfilledAt` is when a refresh that
+completed it finished. A zero count with `not_requested` is not an absence of
+purchases: backfill the month first. Recent refreshes reread a provider-defined
+window and appear only as `recentRefreshCompletedAt`. `requiresAttention` and
+`failureCodes` come from the last finished refresh.
 
 ## Refreshes
 
@@ -186,6 +210,13 @@ returns that one without calling the provider. Without `connectionId` (HTTP
 `POST /v1/refreshes`), every connection with stored credentials, under the same
 rules: `{refreshes: [{connectionId, reason, refresh}]}`, `reason` `null` or the
 rule met; HTTP answers 202 while any runs.
+
+With `estimate: true`, `refresh_connection` records and collects nothing and
+returns `{estimates: [{connectionId, range, windows, cards, providerCalls}]}`,
+one per connection: `windows` counts a backfill's months (1 for the recent
+window), `cards` the cards discovery recorded, and `providerCalls` the provider
+requests expected under default collection options, without retries, or `null`
+when unknown.
 
 A backfill requests and checkpoints each month: an interrupted refresh resumes,
 redoing only unfinished months, and an authentication, rate-limit or budget
@@ -246,8 +277,11 @@ and are never merged by their last four digits.
 ## Transaction
 
 Lists and `get_transaction` with `detail: false` return compact records, and the
-default single read returns the [detailed record](#detailed-read);
-`get_transaction` wraps either as `{transaction: {...}}`. A transaction has one
+default single read returns the [detailed record](#detailed-read).
+`list_transactions` with `view: "summary"` returns lean items instead:
+`{id, transactionDate, bookingDate, billingDate, merchantName, counterpartyName, merchantCategoryCode, amount, amountBasis, kind, status, presence, category}`,
+where `category` is the annotation's. `get_transaction` wraps its record as
+`{transaction: {...}}`. A transaction has one
 primary `amount`, interpreted through its `amountBasis` and `status`; an evidenced
 `originalAmount` is a second money object. Provider facts and owner annotations
 stay separate.
@@ -491,6 +525,15 @@ where `excluded` is
 - Rows with `sourceAbsence` never contribute, even when selecting history.
   `not_returned` alone does not exclude valid money. Absence implies no refund or
   cancellation; no offsetting entry is invented. Empty totals prove no completeness.
+
+With `groupBy` (`merchant`, `month`, `year`, `category`, `status`, `kind` or
+`card`), the result is `{groupBy, groups, truncated}` instead. Each group
+`{key, includedCount, totals}` holds the included rows of one key: `month` and
+`year` use the `dateRole` date, `category` the annotation's (`null` when its
+document contains NUL), `card` the card ID, and `null` collects rows without
+one. Its `totals` add `count`, `min` and `max` to the money groups above. Groups
+run from most included rows, then by key; at most 500, `truncated` when more
+existed. Exclusion counts and FX fees appear only ungrouped.
 
 ## Pending-to-posted matching
 

@@ -11,7 +11,9 @@ import {
 } from "../application/collection-lock.js";
 import {
   connectionInputSchema,
+  COVERAGE_MAX_MONTHS,
   type InternalStore,
+  type TotalsGroup,
 } from "../application/financial-store.js";
 import {
   catalogPageSchema,
@@ -51,6 +53,8 @@ import {
   InvalidInputError,
   NotFoundError,
 } from "../domain/errors.js";
+import { toSafeMinor } from "../domain/money.js";
+import { compareStrings } from "../domain/observations.js";
 import {
   editSchema,
   planAnnotation,
@@ -89,7 +93,7 @@ import {
   type RunInput,
   type SyncResult,
 } from "../domain/plans/sync.js";
-import { calculateTotals, presentTransaction } from "../domain/read-model.js";
+import { presentTransaction, totalsFromParts } from "../domain/read-model.js";
 import type {
   Annotation,
   Connection,
@@ -108,7 +112,13 @@ import {
   retainedRun,
   runEvidenceDigest,
 } from "./run-evidence.js";
-import { chunks, type PlanScope } from "./sql.js";
+import {
+  BACKFILL_OUTCOMES,
+  chunks,
+  exactInteger,
+  exactSumValue,
+  type PlanScope,
+} from "./sql.js";
 import type {
   LatestAppliedRun,
   OrderedRun,
@@ -122,6 +132,9 @@ const interpretationErrors = new WeakSet<Error>();
 
 // D1 binds at most 100 parameters per statement; one is the connection ID.
 const RUN_ID_BATCH = 99;
+
+/** IDs per read by ID, well within D1's 100 parameters. */
+const ID_BATCH = 50;
 
 const utf8 = new TextEncoder();
 
@@ -763,6 +776,18 @@ function buildStore<Db>(
       cards: await statements.cards(tx, connectionId),
       accounts: await statements.accounts(tx, connectionId),
     };
+  }
+
+  /** Reads IDs in chunks that keep each statement within D1's parameters. */
+  async function byIds<Row>(
+    ids: readonly string[],
+    read: (db: Db, ids: string[]) => PromiseLike<Row[]>,
+  ): Promise<Row[]> {
+    const rows: Row[] = [];
+    for (const chunk of chunks([...new Set(ids)], ID_BATCH)) {
+      rows.push(...(await db.execute(read(db.root, chunk))));
+    }
+    return rows;
   }
 
   /** Card and account filters must belong to the requested connection. */
@@ -1576,24 +1601,171 @@ function buildStore<Db>(
         hasMore: rows.length > limit,
       };
     },
+    listTransactionSummaryPage: async (input) => {
+      const filters = pageSchema.parse(input ?? {});
+      await checkScope(filters);
+      const { limit } = filters;
+      const rows = await db.execute(
+        statements.transactionSummaryPage(db.root, {
+          ...filters,
+          limit: limit + 1,
+        }),
+      );
+      await checkEmpty(rows, filters.connectionId);
+      return {
+        transactions: rows.slice(0, limit),
+        hasMore: rows.length > limit,
+      };
+    },
+    getTransactionViews: async (ids) =>
+      (await byIds(ids, statements.transactionsWithAnnotation)).map((row) =>
+        presentTransaction(row.row, row.annotation),
+      ),
+    getTransactionListViews: async (ids) =>
+      (await byIds(ids, statements.transactionListById)).map((row) =>
+        presentTransaction(row.row, row.annotation),
+      ),
+    getTransactionSummaries: async (ids) =>
+      byIds(ids, statements.transactionSummariesById),
     getTransaction: async (id) => {
       const row = (
         await db.execute(statements.transactionWithAnnotation(db.root, id))
       )[0];
       return row && presentTransaction(row.row, row.annotation);
     },
+    getCoverage: async (connectionId) => {
+      const connection = await getConnection(connectionId);
+      if (!connection) {
+        return undefined;
+      }
+      const months = await db.execute(
+        statements.transactionMonths(
+          db.root,
+          connectionId,
+          COVERAGE_MAX_MONTHS + 2,
+        ),
+      );
+      const backfill = await db.execute(
+        statements.backfillMonths(
+          db.root,
+          connectionId,
+          COVERAGE_MAX_MONTHS + 1,
+        ),
+      );
+      const recent = (
+        await db.execute(statements.recentCompletion(db.root, connectionId))
+      )[0];
+      const finished = (
+        await db.execute(statements.lastExecutedRefresh(db.root, connectionId))
+      )[0];
+      const dated = months.filter(
+        (row): row is typeof row & { month: string } => row.month !== null,
+      );
+      return {
+        connectionId,
+        transactionCount: months[0]?.total ?? 0,
+        undatedCount: months.find((row) => row.month === null)?.count ?? 0,
+        earliestDate: months[0]?.earliest ?? null,
+        latestDate: months[0]?.latest ?? null,
+        transactionMonths: dated
+          .slice(0, COVERAGE_MAX_MONTHS + 1)
+          .map(({ month, count }) => ({ month, count })),
+        backfillMonths: backfill.map(({ month, rank, completedAt }) => ({
+          month,
+          outcome: BACKFILL_OUTCOMES[rank - 1]!,
+          completedAt,
+        })),
+        recentCompletedAt: recent?.finishedAt ?? null,
+        lastFinished: finished
+          ? {
+              requiresAttention: finished.requiresAttention,
+              failureCodes: finished.failureCodes,
+            }
+          : null,
+      };
+    },
     getTotals: async (input) => {
       const filters = totalsSchema.parse(input ?? {});
       await checkScope(filters);
-      const rows = await db.execute(statements.totals(db.root, filters));
+      const rows = await db.execute(
+        statements.totalsParts(db.root, {
+          ...filters,
+          perspective: filters.perspective,
+        }),
+      );
       await checkEmpty(rows, filters.connectionId);
-      return calculateTotals(rows, filters.perspective);
+      return totalsFromParts(
+        rows.map((row) => ({
+          ...row,
+          amountMinor: exactSumValue(row.amountMinor),
+          fxFeeMinor: exactSumValue(row.fxFeeMinor),
+        })),
+      );
+    },
+    getGroupedTotals: async (input, groupBy, limit) => {
+      const filters = totalsSchema.parse(input);
+      await checkScope(filters);
+      const rows = await db.execute(
+        statements.groupedTotals(
+          db.root,
+          { ...filters, perspective: filters.perspective },
+          groupBy,
+          limit + 1,
+        ),
+      );
+      await checkEmpty(rows, filters.connectionId);
+      const groups = new Map<unknown, TotalsGroup>();
+      for (const row of rows) {
+        const rank = exactInteger(row.groupRank);
+        let group = groups.get(rank);
+        if (!group) {
+          group = {
+            key: row.groupKey,
+            includedCount: 0,
+            totals: [],
+          };
+          groups.set(rank, group);
+        }
+        group.includedCount += row.count;
+        group.totals.push({
+          currency: row.currency,
+          amountBasis: row.amountBasis,
+          count: row.count,
+          amountMinor: toSafeMinor(exactSumValue(row.amountMinor)),
+          minMinor: toSafeMinor(exactInteger(row.minMinor)),
+          maxMinor: toSafeMinor(exactInteger(row.maxMinor)),
+        });
+      }
+      const ordered = [...groups.values()];
+      for (const group of ordered) {
+        group.totals.sort((left, right) =>
+          compareStrings(
+            `${left.amountBasis ?? ""}:${left.currency}`,
+            `${right.amountBasis ?? ""}:${right.currency}`,
+          ),
+        );
+      }
+      return {
+        groups: ordered.slice(0, limit),
+        truncated: ordered.length > limit,
+      };
     },
     listEvents: async (input) => {
       const filters = cursorSchema.parse(input ?? {});
       const rows = await db.execute(statements.events(db.root, filters));
       await checkEmpty(rows, filters.connectionId);
       return rows;
+    },
+    listWireEvents: async (input) => {
+      const filters = cursorSchema.parse(input ?? {});
+      const rows = await db.execute(statements.wireEvents(db.root, filters));
+      await checkEmpty(rows, filters.connectionId);
+      return rows.map((row) => ({
+        ...row,
+        before:
+          row.before === null ? null : (JSON.parse(row.before) as unknown),
+        after: row.after === null ? null : (JSON.parse(row.after) as unknown),
+      }));
     },
     listSyncRuns: async (id, page) => {
       const rows = await db.execute(statements.syncRuns(db.root, id, page));

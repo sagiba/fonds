@@ -264,6 +264,19 @@ export function decimalToMinor(decimal: string, currency: string): number {
   return toSafeNumber(BigInt(digits) * (sign === "-" ? -1n : 1n));
 }
 
+/** An exact total as minor units; totals beyond the safe range are refused. */
+export function toSafeMinor(total: bigint): number {
+  return toSafeNumber(total);
+}
+
+/** A stored minor-unit amount as an exact integer for summing. */
+export function toBigMinor(amount: number): bigint {
+  if (!Number.isSafeInteger(amount)) {
+    throw new TypeError("Minor-unit amounts must be safe integers");
+  }
+  return BigInt(amount);
+}
+
 /** Sum one currency/basis only; callers own that grouping. */
 export function sumMinor(amounts: Iterable<number>): number {
   let total = 0n;

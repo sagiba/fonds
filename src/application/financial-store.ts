@@ -14,7 +14,7 @@ import type {
 } from "../domain/plans/lifecycle.js";
 import type { RunInput, SyncResult } from "../domain/plans/sync.js";
 import type {
-  calculateTotals,
+  totalsFromParts,
   TransactionListView,
   TransactionView,
 } from "../domain/read-model.js";
@@ -28,6 +28,7 @@ import type { SourceAdapter } from "../domain/source-adapter.js";
 import type {
   CatalogPageInput,
   EventPageInput,
+  TotalsGrouping,
   TransactionFilters,
   TransactionPageInput,
 } from "./query-inputs.js";
@@ -88,9 +89,82 @@ export interface SyncRun {
   refreshId: string | null;
 }
 
+/** The facts a summary list item presents, with the owner's category. */
+export type TransactionSummary = Pick<
+  Transaction,
+  | "id"
+  | "transactionDate"
+  | "bookingDate"
+  | "billingDate"
+  | "merchantName"
+  | "counterpartyName"
+  | "merchantCategoryCode"
+  | "amountMinor"
+  | "currency"
+  | "amountBasis"
+  | "kind"
+  | "status"
+  | "presence"
+> & { category: string | null };
+
+export interface TransactionSummaryPage {
+  transactions: TransactionSummary[];
+  hasMore: boolean;
+}
+
 export interface TransactionPage {
   transactions: TransactionListView[];
   hasMore: boolean;
+}
+
+/** Newest months a coverage read reports; older ones are omitted. */
+export const COVERAGE_MAX_MONTHS = 240;
+
+export type BackfillOutcome =
+  "failed" | "in_progress" | "partial" | "completed";
+
+/** One connection's retained history and the months collection asked for. */
+export interface ConnectionCoverage {
+  connectionId: string;
+  transactionCount: number;
+  undatedCount: number;
+  earliestDate: string | null;
+  latestDate: string | null;
+  /** Newest first, at most `COVERAGE_MAX_MONTHS + 1` months holding transactions. */
+  transactionMonths: { month: string; count: number }[];
+  /** Newest first, at most `COVERAGE_MAX_MONTHS + 1` requested months. */
+  backfillMonths: {
+    month: string;
+    outcome: BackfillOutcome;
+    completedAt: string | null;
+  }[];
+  recentCompletedAt: string | null;
+  /** The last finished refresh, which carries the attention block. */
+  lastFinished: Pick<Refresh, "requiresAttention" | "failureCodes"> | null;
+}
+
+/** One money group of included rows within a totals group. */
+export interface GroupedMoney {
+  currency: string;
+  /** Null in `billing`, which groups per currency only. */
+  amountBasis: Transaction["amountBasis"] | null;
+  count: number;
+  amountMinor: number;
+  minMinor: number;
+  maxMinor: number;
+}
+
+export interface TotalsGroup {
+  key: string | null;
+  includedCount: number;
+  totals: GroupedMoney[];
+}
+
+export interface GroupedTotals {
+  /** Most included rows first, then by key with null last. */
+  groups: TotalsGroup[];
+  /** More groups existed than were returned. */
+  truncated: boolean;
 }
 
 export interface UndoAnnotationInput {
@@ -108,11 +182,41 @@ export interface FinancialStore {
   getAccount(id: string): Promise<Account | undefined>;
   getConnection(id: string): Promise<PublicConnection | undefined>;
   listTransactionPage(input?: TransactionPageInput): Promise<TransactionPage>;
+  /** The same page, projected to summary items. */
+  listTransactionSummaryPage(
+    input?: TransactionPageInput,
+  ): Promise<TransactionSummaryPage>;
   getTransaction(id: string): Promise<TransactionView | undefined>;
+  /** Reads by ID return the records that exist, in no particular order. */
+  getTransactionViews(ids: readonly string[]): Promise<TransactionView[]>;
+  getTransactionListViews(
+    ids: readonly string[],
+  ): Promise<TransactionListView[]>;
+  getTransactionSummaries(
+    ids: readonly string[],
+  ): Promise<TransactionSummary[]>;
+  /** Undefined for an unknown connection. */
+  getCoverage(connectionId: string): Promise<ConnectionCoverage | undefined>;
   getTotals(
     input?: TransactionFilters,
-  ): Promise<ReturnType<typeof calculateTotals>>;
+  ): Promise<ReturnType<typeof totalsFromParts>>;
+  /** Totals of included rows per group, at most `limit` groups. */
+  getGroupedTotals(
+    input: TransactionFilters,
+    groupBy: TotalsGrouping,
+    limit: number,
+  ): Promise<GroupedTotals>;
+  /**
+   * Highest event ID in the ledger, or only in one connection's feed. Any
+   * ledger mutation advances the unscoped value.
+   */
+  latestEventId(connectionId?: string): Promise<number>;
   listEvents(input?: EventPageInput): Promise<LedgerEvent[]>;
+  /**
+   * The feed for public items: stored documents only on the event types
+   * whose public summary reads them, null on every other event.
+   */
+  listWireEvents(input?: EventPageInput): Promise<LedgerEvent[]>;
   listSyncRuns(
     connectionId: string,
     page: SyncRunPageInput,
@@ -170,11 +274,6 @@ export interface InternalStore
     id: string,
     change: (config: ConnectionConfig) => ConnectionConfig,
   ): Promise<ConnectionConfig>;
-  /**
-   * Highest event ID in the ledger, or only in one connection's feed. Any
-   * ledger mutation advances the unscoped value.
-   */
-  latestEventId(connectionId?: string): Promise<number>;
   /**
    * Cheap ledger revision for a connection: the latest event ID plus its
    * transaction count, so recorded mutations and out-of-band row deletion

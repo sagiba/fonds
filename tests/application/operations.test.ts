@@ -992,16 +992,21 @@ describe("asynchronous application storage contract", () => {
   it("preserves fixed output errors for compact and detailed read schemas", async () => {
     const row = (await db.listTransactions())[0]!;
     for (const query of ["", "?detail=false", "?includeEvidence=true"]) {
+      // Compact reads use the list projection; detailed reads the full record.
       store.getTransaction = async () => ({
         ...row,
         description: "x".repeat(4097),
       });
+      store.getTransactionListViews = async () => [
+        { ...row, description: "x".repeat(4097) },
+      ];
       const oversized = await request(`/v1/transactions/${row.id}${query}`);
       expect(oversized.status).toBe(413);
       expect(await oversized.json()).toMatchObject({
         error: { code: "output_too_large" },
       });
       store.getTransaction = async () => ({ ...row, version: -1 });
+      store.getTransactionListViews = async () => [{ ...row, version: -1 }];
       const invalid = await request(`/v1/transactions/${row.id}${query}`);
       expect(invalid.status).toBe(500);
       expect(await invalid.json()).toEqual({

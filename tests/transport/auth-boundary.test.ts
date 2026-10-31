@@ -32,6 +32,7 @@ const token = "synthetic-local-token-00000000000000000000";
 const expectedScopes = {
   list_connections: "financial:read",
   get_connection: "financial:read",
+  get_connection_coverage: "financial:read",
   list_cards: "financial:read",
   get_card: "financial:read",
   list_accounts: "financial:read",
@@ -39,6 +40,7 @@ const expectedScopes = {
   list_transactions: "financial:read",
   get_transaction: "financial:read",
   get_transaction_totals: "financial:read",
+  get_transactions: "financial:read",
   list_events: "financial:read",
   list_sync_runs: "financial:read",
   update_annotation: "financial:write",
@@ -53,6 +55,7 @@ const expectedScopes = {
 const routes = [
   ["list_connections", "GET", "/v1/connections"],
   ["get_connection", "GET", "/v1/connections/synthetic"],
+  ["get_connection_coverage", "GET", "/v1/connections/synthetic/coverage"],
   ["list_accounts", "GET", "/v1/accounts"],
   ["get_account", "GET", "/v1/accounts/synthetic"],
   ["list_cards", "GET", "/v1/cards"],
@@ -60,6 +63,7 @@ const routes = [
   ["list_transactions", "GET", "/v1/transactions"],
   ["get_transaction", "GET", "/v1/transactions/synthetic"],
   ["get_transaction_totals", "GET", "/v1/transactions/totals"],
+  ["get_transactions", "POST", "/v1/transactions/batch"],
   ["list_events", "GET", "/v1/events"],
   ["list_sync_runs", "GET", "/v1/connections/synthetic/sync-runs"],
   ["update_annotation", "PATCH", "/v1/transactions/synthetic/annotation"],

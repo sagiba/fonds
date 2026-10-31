@@ -19,6 +19,7 @@ import {
   PROVIDER_STOP_REASONS,
   type Refresh,
   REFRESH_MAX_AGE_MS,
+  type RefreshEstimate,
   type RefreshStartResult,
   type RefreshTrigger,
   skippedRefresh,
@@ -759,6 +760,54 @@ export function createRefreshService(options: RefreshServiceOptions) {
       return result;
     },
 
+    /**
+     * What a refresh of one connection, or of every collectable one, would
+     * request, from the stored catalog; nothing is recorded or collected.
+     */
+    async estimate(
+      connectionId: string | undefined,
+      range?: CollectionRange,
+    ): Promise<RefreshEstimate[]> {
+      if (range) {
+        validateRefreshRange(range);
+      }
+      const { targets, failures } = await discover();
+      const chosen = targets.filter(
+        (target) =>
+          connectionId === undefined || target.connectionId === connectionId,
+      );
+      if (connectionId !== undefined && chosen.length === 0) {
+        throw failures
+          ? new Error("Refresh targets could not be discovered")
+          : new NotFoundError("Refresh connection not found");
+      }
+      const windows = range ? monthWindows(range).length : null;
+      const estimates: RefreshEstimate[] = [];
+      for (const target of chosen) {
+        const cards = await discoveredCount(
+          store,
+          "cards",
+          target.connectionId,
+        );
+        const accounts = await discoveredCount(
+          store,
+          "accounts",
+          target.connectionId,
+        );
+        estimates.push({
+          connectionId: target.connectionId,
+          range: range ?? null,
+          windows: windows ?? 1,
+          cards,
+          providerCalls:
+            target.estimateRequests && cards > 0
+              ? target.estimateRequests({ windows, cards, accounts })
+              : null,
+        });
+      }
+      return estimates;
+    },
+
     /** One refresh per collectable connection, executed in turn. */
     async startAll(input: RefreshStart) {
       if (input.range) {
@@ -862,6 +911,36 @@ export function createRefreshService(options: RefreshServiceOptions) {
 
 export type RefreshService = ReturnType<typeof createRefreshService>;
 
+/**
+ * How many cards or accounts discovery has recorded for a connection. A card
+ * known only from transactions was never discovered (`lastSeenAt` null), so it
+ * says nothing about what a refresh would request.
+ */
+async function discoveredCount(
+  store: RefreshDatabase,
+  kind: "cards" | "accounts",
+  connectionId: string,
+) {
+  let size = 0;
+  let after: { createdAt: string; id: string } | undefined;
+  for (;;) {
+    const page =
+      kind === "cards"
+        ? await store
+            .listCards({ connectionId, limit: 200, after })
+            .then(({ cards, hasMore }) => ({ rows: cards, hasMore }))
+        : await store
+            .listAccounts({ connectionId, limit: 200, after })
+            .then(({ accounts, hasMore }) => ({ rows: accounts, hasMore }));
+    size += page.rows.filter((row) => row.lastSeenAt !== null).length;
+    const last = page.rows.at(-1);
+    if (!page.hasMore || !last) {
+      return size;
+    }
+    after = { createdAt: last.createdAt, id: last.id };
+  }
+}
+
 /** Owner and model starts: they return what finished within `waitMs`. */
 export function ownerRefreshes(service: RefreshService, waitMs = 10_000) {
   return {
@@ -878,6 +957,8 @@ export function ownerRefreshes(service: RefreshService, waitMs = 10_000) {
         waitMs,
       ),
     recover: (refresh: Refresh) => service.recover(refresh),
+    estimate: (connectionId: string | undefined, range?: CollectionRange) =>
+      service.estimate(connectionId, range),
   };
 }
 

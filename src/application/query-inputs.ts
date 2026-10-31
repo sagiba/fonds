@@ -14,7 +14,11 @@ import {
   transactionStatusSchema,
   walletSchema,
 } from "../domain/model.js";
+import { decimalToMinor } from "../domain/money.js";
 import { PERSPECTIVES } from "../domain/read-model.js";
+
+/** A signed decimal amount in major units, as money is written on the wire. */
+const amountBoundSchema = z.string().regex(/^-?\d{1,20}(?:\.\d{1,20})?$/);
 
 export const filtersSchema = z
   .object({
@@ -28,7 +32,16 @@ export const filtersSchema = z
       .default("current"),
     includeSuperseded: z.boolean().default(false),
     merchantName: z.string().min(1).max(CANONICAL_TEXT_MAX_LENGTH).optional(),
+    /** Case-insensitive substring of merchantName or counterpartyName. */
+    merchantContains: z
+      .string()
+      .min(1)
+      .max(CANONICAL_TEXT_MAX_LENGTH)
+      .optional(),
     merchantCategoryCode: merchantCategoryCodeSchema.optional(),
+    /** Inclusive bounds on the signed primary amount, in `currency`. */
+    amountMin: amountBoundSchema.optional(),
+    amountMax: amountBoundSchema.optional(),
     dateRole: z.enum(["transaction", "booking", "billing"]).optional(),
     from: calendarDateSchema.optional(),
     to: calendarDateSchema.optional(),
@@ -52,6 +65,10 @@ export const filtersSchema = z
     (input) =>
       input.purchaseId === undefined || input.perspective !== "spending",
     "A purchaseId filter requires the billing or all perspective",
+  )
+  .refine(
+    validateAmountFilters,
+    "Amount bounds require a currency, its precision and an ordered range",
   );
 
 const pageLimitSchema = z.number().int().min(1).max(200).default(50);
@@ -84,9 +101,13 @@ export type TransactionPageInput = z.input<typeof pageSchema>;
 export type TransactionQuery = z.output<typeof filtersSchema> &
   Partial<Pick<z.output<typeof pageSchema>, "limit" | "after">>;
 
+/** `compact` list records, or `summary` items projected for analysis. */
+export const TRANSACTION_LIST_VIEWS = ["compact", "summary"] as const;
+
 export const transactionListSchema = filtersSchema.safeExtend({
   limit: pageLimitSchema,
   cursor: listCursorSchema.optional(),
+  view: z.enum(TRANSACTION_LIST_VIEWS).default("compact"),
 });
 
 type CursorKind = "event";
@@ -220,6 +241,58 @@ export type EventQuery = z.output<typeof cursorSchema>;
 export const totalsSchema = filtersSchema.safeExtend({
   perspective: z.enum(PERSPECTIVES).exclude(["all"]).default("spending"),
 });
+
+/** What grouped totals can group included rows by. */
+export const TOTALS_GROUPINGS = [
+  "merchant",
+  "month",
+  "year",
+  "category",
+  "status",
+  "kind",
+  "card",
+] as const;
+
+export type TotalsGrouping = (typeof TOTALS_GROUPINGS)[number];
+
+/** Most groups one grouped totals result returns. */
+export const TOTALS_MAX_GROUPS = 500;
+
+export const totalsInputSchema = totalsSchema.safeExtend({
+  groupBy: z.enum(TOTALS_GROUPINGS).optional(),
+});
+
+/** An amount bound in the filter currency's minor units. */
+export function amountBoundMinor(bound: string, currency: string): number {
+  return decimalToMinor(bound, currency);
+}
+
+/** Amount bounds are exact in the filter's currency and never compared across currencies. */
+function validateAmountFilters(input: {
+  currency?: string | undefined;
+  amountMin?: string | undefined;
+  amountMax?: string | undefined;
+}): boolean {
+  if (input.amountMin === undefined && input.amountMax === undefined) {
+    return true;
+  }
+  if (input.currency === undefined) {
+    return false;
+  }
+  try {
+    const min =
+      input.amountMin === undefined
+        ? undefined
+        : amountBoundMinor(input.amountMin, input.currency);
+    const max =
+      input.amountMax === undefined
+        ? undefined
+        : amountBoundMinor(input.amountMax, input.currency);
+    return min === undefined || max === undefined || min <= max;
+  } catch {
+    return false;
+  }
+}
 
 /** Date bounds are inclusive and must name the financial date they constrain. */
 export function validateDateFilters(input: {

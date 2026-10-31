@@ -1,4 +1,4 @@
-import { sumMinor } from "./money.js";
+import { toBigMinor, toSafeMinor } from "./money.js";
 import { compareStrings } from "./observations.js";
 import {
   annotationStaleness,
@@ -210,24 +210,81 @@ function converted(row: TotalRow): boolean {
   );
 }
 
+/** Where a selected row lands in totals: one exclusion bucket, or included. */
+export const TOTALS_BUCKETS = [
+  "retiredOrRemoved",
+  "sourceAbsent",
+  "pending",
+  "transferOrIncome",
+  "authorization",
+  "unresolved",
+  "included",
+] as const;
+
+export type TotalsBucket = (typeof TOTALS_BUCKETS)[number];
+
 /**
- * Exact totals over one perspective's selected rows. `spending` groups by
- * currency and amount basis; `billing` has one group per currency. Groups
- * are never added together. FX fees follow the same eligibility.
+ * The first applicable bucket, in `TOTALS_BUCKETS` order. Storage compiles the
+ * same precedence into SQL (`totalsBucket` in storage/sql.ts).
  */
-export function calculateTotals(
-  rows: readonly TotalRow[],
-  perspective: Exclude<Perspective, "all"> = "spending",
-) {
+export function totalsBucket(row: TotalRow): TotalsBucket {
+  if (row.supersededById || row.presence === "removed") {
+    return "retiredOrRemoved";
+  }
+  if (row.sourceAbsence != null) {
+    return "sourceAbsent";
+  }
+  if (row.status === "pending") {
+    return "pending";
+  }
+  if (row.kind === "transfer" || row.kind === "income") {
+    return "transferOrIncome";
+  }
+  if (row.amountBasis === "authorization") {
+    return "authorization";
+  }
+  if (
+    row.amountMinor === null ||
+    row.currency === null ||
+    (row.amountBasis !== "booked_entry" &&
+      row.amountBasis !== "purchase_commitment") ||
+    row.kind === "unknown" ||
+    row.identityStrength === "ambiguous"
+  ) {
+    return "unresolved";
+  }
+  return "included";
+}
+
+/**
+ * Partial totals of rows sharing a bucket and, for included rows, a money
+ * group and FX fee currency. Sums are exact integers of any size.
+ */
+export interface TotalsPart {
+  bucket: TotalsBucket;
+  /** Null unless included. */
+  currency: string | null;
+  /** Null unless included in `spending`. */
+  amountBasis: Transaction["amountBasis"] | null;
+  /** The published fee currency of included rows, otherwise null. */
+  fxFeeCurrency: string | null;
+  count: number;
+  amountMinor: bigint;
+  fxFeeMinor: bigint;
+  fxFeeUnknownCount: number;
+}
+
+/** Totals from partial sums; the same result `calculateTotals` gives the rows. */
+export function totalsFromParts(parts: readonly TotalsPart[]) {
   const groups = new Map<
     string,
     {
       currency: string;
       amountBasis: Transaction["amountBasis"] | null;
-      amounts: number[];
+      amountMinor: bigint;
     }
   >();
-  const fxFees = new Map<string, number[]>();
+  const fxFees = new Map<string, bigint>();
   let fxFeeUnknownCount = 0;
   const excluded = {
     pending: 0,
@@ -238,73 +295,40 @@ export function calculateTotals(
     unresolved: 0,
   };
   let includedCount = 0;
-  for (const row of rows) {
-    if (row.supersededById || row.presence === "removed") {
-      excluded.retiredOrRemoved++;
+  for (const part of parts) {
+    if (part.bucket !== "included") {
+      excluded[part.bucket] += part.count;
       continue;
     }
-    if (row.sourceAbsence != null) {
-      excluded.sourceAbsent++;
-      continue;
-    }
-    if (row.status === "pending") {
-      excluded.pending++;
-      continue;
-    }
-    if (row.kind === "transfer" || row.kind === "income") {
-      excluded.transferOrIncome++;
-      continue;
-    }
-    if (row.amountBasis === "authorization") {
-      excluded.authorization++;
-      continue;
-    }
-    if (
-      row.amountMinor === null ||
-      row.currency === null ||
-      (row.amountBasis !== "booked_entry" &&
-        row.amountBasis !== "purchase_commitment") ||
-      row.kind === "unknown" ||
-      row.identityStrength === "ambiguous"
-    ) {
-      excluded.unresolved++;
-      continue;
-    }
-    const amountBasis = perspective === "billing" ? null : row.amountBasis;
-    const key = `${amountBasis ?? ""}:${row.currency}`;
+    includedCount += part.count;
+    const key = `${part.amountBasis ?? ""}:${part.currency}`;
     const group = groups.get(key) ?? {
-      currency: row.currency,
-      amountBasis,
-      amounts: [],
+      currency: part.currency!,
+      amountBasis: part.amountBasis,
+      amountMinor: 0n,
     };
-    group.amounts.push(row.amountMinor);
+    group.amountMinor += part.amountMinor;
     groups.set(key, group);
-    includedCount++;
-    if (row.fxFeeMinor !== null && row.fxFeeCurrency !== null) {
-      const fees = fxFees.get(row.fxFeeCurrency) ?? [];
-      fees.push(row.fxFeeMinor);
-      fxFees.set(row.fxFeeCurrency, fees);
-    } else if (converted(row)) {
-      // An unpublished fee is unknown, never zero.
-      fxFeeUnknownCount++;
+    if (part.fxFeeCurrency !== null) {
+      fxFees.set(
+        part.fxFeeCurrency,
+        (fxFees.get(part.fxFeeCurrency) ?? 0n) + part.fxFeeMinor,
+      );
     }
+    fxFeeUnknownCount += part.fxFeeUnknownCount;
   }
   return {
-    totals: [...groups.values()]
-      .map(({ amounts, ...group }) => ({
-        ...group,
-        amountMinor: sumMinor(amounts),
-      }))
-      .sort((left, right) =>
-        compareStrings(
-          `${left.amountBasis ?? ""}:${left.currency}`,
-          `${right.amountBasis ?? ""}:${right.currency}`,
-        ),
-      ),
+    totals: [...groups.entries()]
+      .sort(([left], [right]) => compareStrings(left, right))
+      .map(([, group]) => ({
+        currency: group.currency,
+        amountBasis: group.amountBasis,
+        amountMinor: toSafeMinor(group.amountMinor),
+      })),
     fxFees: [...fxFees]
-      .map(([currency, amounts]) => ({
+      .map(([currency, total]) => ({
         currency,
-        amountMinor: sumMinor(amounts),
+        amountMinor: toSafeMinor(total),
       }))
       .sort((left, right) => compareStrings(left.currency, right.currency)),
     fxFeeUnknownCount,
@@ -315,4 +339,35 @@ export function calculateTotals(
     ),
     excluded,
   };
+}
+
+/**
+ * Exact totals over one perspective's selected rows. `spending` groups by
+ * currency and amount basis; `billing` has one group per currency. Groups
+ * are never added together. FX fees follow the same eligibility.
+ */
+export function calculateTotals(
+  rows: readonly TotalRow[],
+  perspective: Exclude<Perspective, "all"> = "spending",
+) {
+  return totalsFromParts(
+    rows.map((row) => {
+      const bucket = totalsBucket(row);
+      const included = bucket === "included";
+      const published =
+        included && row.fxFeeMinor !== null && row.fxFeeCurrency !== null;
+      return {
+        bucket,
+        currency: included ? row.currency : null,
+        amountBasis:
+          included && perspective === "spending" ? row.amountBasis : null,
+        fxFeeCurrency: published ? row.fxFeeCurrency : null,
+        count: 1,
+        amountMinor: included ? toBigMinor(row.amountMinor!) : 0n,
+        fxFeeMinor: published ? toBigMinor(row.fxFeeMinor!) : 0n,
+        // An unpublished fee is unknown, never zero.
+        fxFeeUnknownCount: included && !published && converted(row) ? 1 : 0,
+      };
+    }),
+  );
 }

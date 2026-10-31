@@ -122,7 +122,7 @@ Candidate IDs and source references inside JSON are references, not foreign keys
   remains independently of debug-body expiry.
 
 Perspectives are filters over `transactions`, not views or tables, and totals are
-summed exactly in application code with no stored total column
+exact SQL integer sums with no stored total column
 ([perspectives](api.md#perspectives)).
 
 ## Dialect differences and their reasons

@@ -6,6 +6,7 @@ import type { RefreshStartResult } from "../application/refreshes.js";
 import { presentRefreshStart } from "../application/wire-output.js";
 import type {
   ProviderCollector,
+  ProviderDefinition,
   SourceAdapter,
 } from "../domain/source-adapter.js";
 import { hostedOrigin } from "../transport/auth.js";
@@ -72,6 +73,8 @@ async function readBoundedJson(request: Request): Promise<unknown> {
 export interface CollectionTarget {
   connectionId: string;
   adapter: SourceAdapter;
+  /** The provider's request estimate, when it offers one. */
+  estimateRequests?: ProviderDefinition["estimateRequests"];
   /** Built for each run, so stored credentials are read only when needed. */
   collector(): Promise<ProviderCollector>;
 }

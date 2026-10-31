@@ -16,6 +16,10 @@ export const calProvider: ProviderDefinition = {
     parse: (value) => usernamePasswordCredentialsSchema.parse(value),
     fields: { username: "Provider username", password: "Provider password" },
   },
+  // One login per refresh; each unit initializes, rereads every account's
+  // recent window and, for a month, requests each card's month.
+  estimateRequests: ({ windows, cards, accounts }) =>
+    1 + (windows ?? 1) * (1 + accounts + (windows === null ? 0 : cards)),
   validateCollectionOptions({ callBudget, maxDetails }) {
     if (callBudget !== undefined) {
       throw new ProviderConfigurationError(

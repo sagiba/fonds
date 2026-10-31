@@ -39,6 +39,7 @@ import {
   operationViews,
   refreshView,
   type View,
+  viewApplies,
 } from "./cli-views.js";
 import { collectionControls } from "./collection-controls.js";
 import type {
@@ -1135,7 +1136,9 @@ function runOperation(
       const view = operationViews[definition.name] as View<unknown> | undefined;
       // A remote result is unvalidated; one that fails its schema stays JSON.
       const shown =
-        view && definition.outputSchema.safeParse(output).success
+        view &&
+        viewApplies(input) &&
+        definition.outputSchema.safeParse(output).success
           ? view
           : undefined;
       return present(

@@ -10,6 +10,7 @@ import {
   isNull,
   lt,
   max,
+  type SQL,
   sql,
   type Table,
 } from "drizzle-orm";
@@ -19,6 +20,7 @@ import type { SyncRunPageInput } from "../../application/financial-store.js";
 import type {
   CatalogQuery,
   EventQuery,
+  TotalsGrouping,
   TransactionQuery,
 } from "../../application/query-inputs.js";
 import type { RefreshPageInput } from "../../application/refreshes.js";
@@ -27,18 +29,22 @@ import type { FinancialPlan } from "../../domain/plans/state.js";
 import type { Connection, ConnectionConfig } from "../../domain/records.js";
 import type { RetainedRun } from "../run-evidence.js";
 import {
+  backfillOutcomeRank,
   chunks,
   connectionColumns,
+  currentRows,
   eventFilter,
   excludedSet,
+  groupedMoneyColumns,
   keysetSeek,
   listColumns,
   planCondition,
   type PlanScope,
-  totalsColumns,
+  totalsPartColumns,
   transactionFilter,
   transactionOrder,
   transactionSeek,
+  wireEventColumns,
 } from "../sql.js";
 import type { DeferredEvidenceWrite } from "../statements.js";
 import {
@@ -175,6 +181,11 @@ export const transaction = async (db: Executor, id: string) =>
     )
   ).map(({ row }) => row);
 
+export const transactionsWithAnnotation = (db: Executor, ids: string[]) =>
+  decodedRows(
+    joinedTransactions(db).where(inArray(schema.transactions.id, ids)),
+  );
+
 export const transactionWithAnnotation = (db: Executor, id: string) =>
   decodedRows(joinedTransactions(db).where(eq(schema.transactions.id, id)));
 
@@ -194,8 +205,8 @@ export function transactionPage(db: Executor, input: TransactionQuery) {
 }
 
 /** List pages read only what `TransactionListFacts` presents. */
-export function transactionListQuery(db: Executor, input: TransactionQuery) {
-  const query = db
+function listQuery(db: Executor) {
+  return db
     .select({
       row: listColumns(schema.transactions),
       reconciliation: {
@@ -216,11 +227,26 @@ export function transactionListQuery(db: Executor, input: TransactionQuery) {
       schema.annotations,
       eq(schema.annotations.transactionId, schema.transactions.id),
     )
-    .where(pageCondition(input))
-    .orderBy(...transactionOrder(schema.transactions))
     .$dynamic();
+}
+
+export function transactionListQuery(db: Executor, input: TransactionQuery) {
+  const query = listQuery(db)
+    .where(pageCondition(input))
+    .orderBy(...transactionOrder(schema.transactions));
   return input.limit === undefined ? query : query.limit(input.limit);
 }
+
+/** The list projection of these IDs, for compact reads by ID. */
+export function transactionListByIdQuery(db: Executor, ids: string[]) {
+  return listQuery(db).where(inArray(schema.transactions.id, ids));
+}
+
+export const transactionListById = async (db: Executor, ids: string[]) =>
+  (await transactionListByIdQuery(db, ids)).map((listed) => ({
+    row: decodeTransactionListFacts(listed),
+    annotation: listed.annotation,
+  }));
 
 export const transactionListPage = async (
   db: Executor,
@@ -231,11 +257,179 @@ export const transactionListPage = async (
     annotation: listed.annotation,
   }));
 
-export const totals = (db: Executor, input: TransactionQuery) =>
-  db
-    .select(totalsColumns(schema.transactions))
+/**
+ * The annotation category as text. Annotation documents stay exact, NUL
+ * included, but PostgreSQL cannot parse a document holding an escaped NUL, so
+ * such a document is never parsed and its category reads as null on both
+ * dialects. The check also matches an escaped backslash before "u0000",
+ * which errs to null too.
+ */
+const annotationCategory = sql<
+  string | null
+>`case when instr(${schema.annotations.data}, char(92) || 'u0000') > 0 then null else json_extract(${schema.annotations.data}, '$.category') end`;
+
+/** Summary items read only their own columns and the annotation category. */
+function summaryQuery(db: Executor) {
+  const table = schema.transactions;
+  return db
+    .select({
+      id: table.id,
+      transactionDate: table.transactionDate,
+      bookingDate: table.bookingDate,
+      billingDate: table.billingDate,
+      merchantName: table.merchantName,
+      counterpartyName: table.counterpartyName,
+      merchantCategoryCode: table.merchantCategoryCode,
+      amountMinor: table.amountMinor,
+      currency: table.currency,
+      amountBasis: table.amountBasis,
+      kind: table.kind,
+      status: table.status,
+      presence: table.presence,
+      category: annotationCategory,
+    })
+    .from(table)
+    .leftJoin(
+      schema.annotations,
+      eq(schema.annotations.transactionId, table.id),
+    )
+    .$dynamic();
+}
+
+export const transactionSummariesById = (db: Executor, ids: string[]) =>
+  summaryQuery(db).where(inArray(schema.transactions.id, ids));
+
+export function transactionSummaryPage(db: Executor, input: TransactionQuery) {
+  const query = summaryQuery(db)
+    .where(pageCondition(input))
+    .orderBy(...transactionOrder(schema.transactions));
+  return input.limit === undefined ? query : query.limit(input.limit);
+}
+
+const dateColumns = {
+  transaction: schema.transactions.transactionDate,
+  booking: schema.transactions.bookingDate,
+  billing: schema.transactions.billingDate,
+} as const;
+
+function groupKey(input: TransactionQuery, groupBy: TotalsGrouping): SQL {
+  const table = schema.transactions;
+  const date = dateColumns[input.dateRole ?? "transaction"];
+  switch (groupBy) {
+    case "merchant":
+      return sql`${table.merchantName}`;
+    case "month":
+      return sql`substr(${date}, 1, 7)`;
+    case "year":
+      return sql`substr(${date}, 1, 4)`;
+    case "category":
+      return annotationCategory;
+    case "status":
+      return sql`${table.status}`;
+    case "kind":
+      return sql`${table.kind}`;
+    case "card":
+      return sql`${table.cardId}`;
+  }
+}
+
+/**
+ * Ranks groups by included rows, then by the key's text bytewise, with window functions over the
+ * aggregated money rows, so only the first `limit` groups leave the database.
+ */
+export function groupedTotals(
+  db: Executor,
+  input: TransactionQuery & { perspective: "spending" | "billing" },
+  groupBy: TotalsGrouping,
+  limit: number,
+) {
+  const money = groupedMoneyColumns(
+    schema.transactions,
+    input.perspective,
+    groupKey(input, groupBy),
+  );
+  const rows = db
+    .select(money.columns)
     .from(schema.transactions)
-    .where(transactionFilter(schema.transactions, input, schema.cards));
+    .leftJoin(
+      schema.annotations,
+      eq(schema.annotations.transactionId, schema.transactions.id),
+    )
+    .where(
+      and(
+        transactionFilter(schema.transactions, input, schema.cards),
+        money.where,
+      ),
+    )
+    .groupBy(...money.groups)
+    .as("grouped_money");
+  const counted = db
+    .select({
+      groupKey: rows.groupKey,
+      currency: rows.currency,
+      amountBasis: rows.amountBasis,
+      count: rows.count,
+      amountMinor: rows.amountMinor,
+      minMinor: rows.minMinor,
+      maxMinor: rows.maxMinor,
+      groupRows:
+        sql<number>`sum(${rows.count}) over (partition by ${rows.groupKey})`.as(
+          "group_rows",
+        ),
+    })
+    .from(rows)
+    .as("counted_groups");
+  const ranked = db
+    .select({
+      groupKey: counted.groupKey,
+      currency: counted.currency,
+      amountBasis: counted.amountBasis,
+      count: counted.count,
+      amountMinor: counted.amountMinor,
+      minMinor: counted.minMinor,
+      maxMinor: counted.maxMinor,
+      groupRank:
+        sql<unknown>`dense_rank() over (order by ${counted.groupRows} desc, ${counted.groupKey} asc nulls last)`.as(
+          "group_rank",
+        ),
+    })
+    .from(counted)
+    .as("ranked_groups");
+  return db
+    .select({
+      groupKey: ranked.groupKey,
+      groupRank: ranked.groupRank,
+      currency: ranked.currency,
+      amountBasis: ranked.amountBasis,
+      count: sql<number>`${ranked.count}`.mapWith(Number),
+      amountMinor: ranked.amountMinor,
+      minMinor: ranked.minMinor,
+      maxMinor: ranked.maxMinor,
+    })
+    .from(ranked)
+    .where(sql`${ranked.groupRank} <= ${limit}`)
+    .orderBy(
+      sql`${ranked.groupRank}`,
+      sql`${ranked.currency}`,
+      sql`${ranked.amountBasis}`,
+    );
+}
+
+export function totalsParts(
+  db: Executor,
+  input: TransactionQuery & { perspective: "spending" | "billing" },
+) {
+  const { keys, columns } = totalsPartColumns(
+    schema.transactions,
+    input.perspective,
+  );
+  return db
+    .select(columns)
+    .from(schema.transactions)
+    .where(transactionFilter(schema.transactions, input, schema.cards))
+    .groupBy(...Object.values(keys));
+}
+
 export const events = (db: Executor, input: EventQuery) =>
   db
     .select()
@@ -243,6 +437,88 @@ export const events = (db: Executor, input: EventQuery) =>
     .where(eventFilter(schema.events, input))
     .orderBy(asc(schema.events.id))
     .limit(input.limit);
+
+export const wireEvents = (db: Executor, input: EventQuery) =>
+  db
+    .select(wireEventColumns(schema.events))
+    .from(schema.events)
+    .where(eventFilter(schema.events, input))
+    .orderBy(asc(schema.events.id))
+    .limit(input.limit);
+
+/** A transaction's `YYYY-MM` month, or null when undated. */
+const transactionMonth = sql<
+  string | null
+>`substr(${schema.transactions.transactionDate}, 1, 7)`;
+
+export const transactionMonths = (
+  db: Executor,
+  connectionId: string,
+  limit: number,
+) =>
+  db
+    .select({
+      month: transactionMonth,
+      count: sql<number>`count(*)`.mapWith(Number),
+      total: sql<number>`sum(count(*)) over ()`.mapWith(Number),
+      earliest: sql<
+        string | null
+      >`min(min(${schema.transactions.transactionDate})) over ()`,
+      latest: sql<
+        string | null
+      >`max(max(${schema.transactions.transactionDate})) over ()`,
+    })
+    .from(schema.transactions)
+    .where(
+      transactionFilter(
+        schema.transactions,
+        currentRows(connectionId),
+        schema.cards,
+      ),
+    )
+    .groupBy(transactionMonth)
+    .orderBy(sql`${transactionMonth} desc nulls first`)
+    .limit(limit);
+
+export const backfillMonths = (
+  db: Executor,
+  connectionId: string,
+  limit: number,
+) => {
+  const month = sql<string>`substr(${schema.refreshWindows.rangeFrom}, 1, 7)`;
+  return db
+    .select({
+      month,
+      rank: sql<number>`max(${backfillOutcomeRank(
+        schema.refreshWindows,
+        schema.refreshes,
+      )})`.mapWith(Number),
+      completedAt: sql<string | null>`max(case when ${
+        schema.refreshWindows.status
+      } = 'completed' then ${schema.refreshes.finishedAt} end)`,
+    })
+    .from(schema.refreshWindows)
+    .innerJoin(
+      schema.refreshes,
+      eq(schema.refreshes.id, schema.refreshWindows.refreshId),
+    )
+    .where(eq(schema.refreshes.connectionId, connectionId))
+    .groupBy(month)
+    .orderBy(sql`${month} desc`)
+    .limit(limit);
+};
+
+export const recentCompletion = (db: Executor, connectionId: string) =>
+  db
+    .select({ finishedAt: max(schema.refreshes.finishedAt) })
+    .from(schema.refreshes)
+    .where(
+      and(
+        eq(schema.refreshes.connectionId, connectionId),
+        isNull(schema.refreshes.rangeFrom),
+        eq(schema.refreshes.status, "completed"),
+      ),
+    );
 
 export const transactionCount = (db: Executor, connectionId: string) =>
   db

@@ -20,6 +20,7 @@ const issuer = `${publicOrigin}/api/auth`;
 const ROUTES = [
   ["get", "/v1/connections", "list_connections"],
   ["get", "/v1/connections/{connectionId}", "get_connection"],
+  ["get", "/v1/connections/{connectionId}/coverage", "get_connection_coverage"],
   ["get", "/v1/cards", "list_cards"],
   ["get", "/v1/cards/{cardId}", "get_card"],
   ["get", "/v1/accounts", "list_accounts"],
@@ -27,6 +28,7 @@ const ROUTES = [
   ["get", "/v1/transactions", "list_transactions"],
   ["get", "/v1/transactions/{transactionId}", "get_transaction"],
   ["get", "/v1/transactions/totals", "get_transaction_totals"],
+  ["post", "/v1/transactions/batch", "get_transactions"],
   ["get", "/v1/events", "list_events"],
   ["get", "/v1/connections/{connectionId}/sync-runs", "list_sync_runs"],
   ["patch", "/v1/transactions/{transactionId}/annotation", "update_annotation"],
@@ -410,7 +412,11 @@ describe("OpenAPI document", () => {
     expect(refreshAll.parameters).toBeUndefined();
     const refreshBody =
       refreshAll.requestBody!.content["application/json"].schema;
-    expect(Object.keys(refreshBody.properties)).toEqual(["from", "to"]);
+    expect(Object.keys(refreshBody.properties)).toEqual([
+      "from",
+      "to",
+      "estimate",
+    ]);
     expect(refreshBody.required).toBeUndefined();
     expect(Object.keys(refreshAll.responses)).toEqual([
       "200",
