@@ -94,6 +94,51 @@ const started = (value: Refresh): RefreshStartResult => ({
   refresh: value,
 });
 
+const encoder = new TextEncoder();
+let endlessCancelled = false;
+/** Unauthenticated synthetic responses whose body shape the request log must measure. */
+const syntheticBodies: Record<string, () => Response> = {
+  "/synthetic-body/fixed": () =>
+    new Response("fixed-body", { headers: { "Content-Length": "10" } }),
+  "/synthetic-body/stream": () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode("first"));
+          controller.enqueue(encoder.encode("-second"));
+          controller.close();
+        },
+      }),
+    ),
+  "/synthetic-body/endless": () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode("tick"));
+        },
+        cancel() {
+          endlessCancelled = true;
+        },
+      }),
+      { headers: { "Content-Type": "text/event-stream" } },
+    ),
+  "/synthetic-body/broken": () => {
+    let sent = false;
+    return new Response(
+      new ReadableStream({
+        pull(controller) {
+          if (sent) {
+            controller.error(new Error("synthetic-stream-failure"));
+            return;
+          }
+          sent = true;
+          controller.enqueue(encoder.encode("part"));
+        },
+      }),
+    );
+  },
+};
+
 describe("optional owner refresh interfaces and request diagnostics", () => {
   let db: Database;
   const services: ReturnType<typeof createHttpService>[] = [];
@@ -148,10 +193,13 @@ describe("optional owner refresh interfaces and request diagnostics", () => {
         },
       },
       ...(onRequest ? { onRequest } : {}),
-      publicRoutes: async (request) =>
-        new URL(request.url).pathname.startsWith("/synthetic-login/")
-          ? new Response("Synthetic", { status: 400 })
-          : null,
+      publicRoutes: async (request) => {
+        const path = new URL(request.url).pathname;
+        if (path.startsWith("/synthetic-login/")) {
+          return new Response("Synthetic", { status: 400 });
+        }
+        return syntheticBodies[path]?.() ?? null;
+      },
     });
     services.push(service);
     const request = (path: string, bearer: string, input?: unknown) =>
@@ -402,7 +450,7 @@ describe("optional owner refresh interfaces and request diagnostics", () => {
 
   it("logs only registered route patterns and fixed request metadata, including error status", async () => {
     const entries: HttpRequestLog[] = [];
-    const { request } = setup(
+    const { request: setupRequest } = setup(
       {
         refreshes: {
           start: async () => {
@@ -415,20 +463,27 @@ describe("optional owner refresh interfaces and request diagnostics", () => {
         entries.push(entry);
       },
     );
-    expect(
-      (
-        await request(
-          `/v1/connections/${connectionId}/refreshes?secret=private-query`,
-          "write",
-          {},
-        )
-      ).status,
-    ).toBe(500);
+    // A JSON body declares no length; its entry is emitted once it is read.
+    const request = async (...input: Parameters<typeof setupRequest>) => {
+      const response = await setupRequest(...input);
+      await response.arrayBuffer();
+      return response;
+    };
+    const failed = await setupRequest(
+      `/v1/connections/${connectionId}/refreshes?secret=private-query`,
+      "write",
+      {},
+    );
+    expect(failed.status).toBe(500);
+    expect(await failed.text()).toBe(
+      '{"error":{"code":"internal_error","message":"Operation failed."}}',
+    );
     expect(entries.at(-1)).toMatchObject({
       method: "POST",
       route: "/v1/connections/:connectionId/refreshes",
       status: 500,
       durationMs: expect.any(Number),
+      responseBytes: 65,
     });
     expect(
       (
@@ -470,6 +525,7 @@ describe("optional owner refresh interfaces and request diagnostics", () => {
       expect(Object.keys(entry).sort()).toEqual([
         "durationMs",
         "method",
+        "responseBytes",
         "route",
         "status",
       ]);
@@ -489,8 +545,8 @@ describe("optional owner refresh interfaces and request diagnostics", () => {
     const { service } = setup({}, (entry) => {
       entries.push(entry);
     });
-    const request = async (path: string, headers: Record<string, string>) =>
-      service.app.request(`${origin}${path}`, {
+    const request = async (path: string, headers: Record<string, string>) => {
+      const response = await service.app.request(`${origin}${path}`, {
         method: "POST",
         headers: {
           Authorization: "Bearer deliberately-untrusted-secret",
@@ -499,6 +555,9 @@ describe("optional owner refresh interfaces and request diagnostics", () => {
         },
         body: '{"method":"private-body-method","token":"private-body-token"}',
       });
+      await response.arrayBuffer();
+      return response;
+    };
     // Rejection before MCP dispatch proves the logger does not need to parse a body.
     expect(
       (
@@ -556,6 +615,95 @@ describe("optional owner refresh interfaces and request diagnostics", () => {
       "deliberately-untrusted-secret",
     ]) {
       expect(encoded).not.toContain(value);
+    }
+  });
+
+  it("logs declared request and response lengths without waiting for the body", async () => {
+    const entries: HttpRequestLog[] = [];
+    const { service } = setup({}, (entry) => {
+      entries.push(entry);
+    });
+    const fixed = await service.app.request(`${origin}/synthetic-body/fixed`, {
+      headers: { "Content-Length": "0012" },
+    });
+    expect(entries.at(-1)).toMatchObject({
+      method: "GET",
+      route: "/*",
+      status: 200,
+      requestBytes: 12,
+      responseBytes: 10,
+    });
+    expect(await fixed.text()).toBe("fixed-body");
+    expect(entries).toHaveLength(1);
+    await service.app.request(`${origin}/synthetic-body/fixed`, {
+      headers: { "Content-Length": "99999999999999999999" },
+    });
+    expect(entries.at(-1)?.requestBytes).toBe(Number.MAX_SAFE_INTEGER);
+    await service.app.request(`${origin}/synthetic-body/fixed`, {
+      headers: { "Content-Length": "12; private-header-value" },
+    });
+    expect(entries.at(-1)).not.toHaveProperty("requestBytes");
+    await service.app.request(`${origin}/synthetic-body/fixed`, {
+      method: "HEAD",
+    });
+    expect(entries.at(-1)).toMatchObject({ method: "HEAD", responseBytes: 0 });
+    expect(JSON.stringify(entries)).not.toContain("private-header-value");
+  });
+
+  it("counts a streamed body and logs it when the body ends, is cancelled or fails", async () => {
+    const entries: HttpRequestLog[] = [];
+    const { service } = setup({}, (entry) => {
+      entries.push(entry);
+    });
+    const streamed = await service.app.request(
+      `${origin}/synthetic-body/stream`,
+    );
+    expect(entries).toHaveLength(0);
+    expect(await streamed.text()).toBe("first-second");
+    expect(entries).toEqual([
+      expect.objectContaining({
+        method: "GET",
+        route: "/*",
+        status: 200,
+        responseBytes: 12,
+      }),
+    ]);
+
+    endlessCancelled = false;
+    const endless = await service.app.request(
+      `${origin}/synthetic-body/endless`,
+    );
+    expect(endless.headers.get("Content-Type")).toBe("text/event-stream");
+    const reader = endless.body!.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe("tick");
+    expect(entries).toHaveLength(1);
+    await reader.cancel();
+    expect(endlessCancelled).toBe(true);
+    expect(entries.at(-1)).toMatchObject({ status: 200, responseBytes: 4 });
+
+    const broken = await service.app.request(`${origin}/synthetic-body/broken`);
+    await expect(broken.text()).rejects.toThrow("synthetic-stream-failure");
+    expect(entries.at(-1)).toMatchObject({ status: 200, responseBytes: 4 });
+    expect(entries).toHaveLength(3);
+  });
+
+  it("preserves streamed responses when a request logger throws or rejects", async () => {
+    for (const logger of [
+      () => {
+        throw new Error("synthetic-log-failure");
+      },
+      async () => {
+        throw new Error("synthetic-log-failure");
+      },
+    ]) {
+      const { service } = setup({}, logger);
+      const streamed = await service.app.request(
+        `${origin}/synthetic-body/stream`,
+      );
+      expect(streamed.status).toBe(200);
+      expect(await streamed.text()).toBe("first-second");
+      const fixed = await service.app.request(`${origin}/synthetic-body/fixed`);
+      expect(await fixed.text()).toBe("fixed-body");
     }
   });
 });

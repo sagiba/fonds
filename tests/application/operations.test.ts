@@ -6,6 +6,7 @@ import type { FinancialStore } from "../../src/application/financial-store.js";
 import {
   createApplication,
   inProcessInvoker,
+  type OperationLog,
 } from "../../src/application/operations.js";
 import { decodeKeyset } from "../../src/application/query-inputs.js";
 import { annotationSchema } from "../../src/domain/model.js";
@@ -1351,5 +1352,86 @@ describe("follow-up after owner writes", () => {
         annotation: { version: 1, notes: "Synthetic committed note" },
       },
     });
+  });
+});
+
+describe("operation diagnostics", () => {
+  let db: Database;
+  beforeEach(async () => {
+    db = await openDatabase(":memory:");
+    await db.ensureConnection({ id: "private-first", provider: "cal" });
+    await db.ensureConnection({ id: "private-second", provider: "cal" });
+  });
+  afterEach(async () => {
+    await db.close();
+  });
+
+  it("reports each call's outcome and output volume without inputs or identifiers", async () => {
+    const entries: OperationLog[] = [];
+    const { invoke } = inProcessInvoker(
+      createApplication(db, {
+        onOperation: (entry) => {
+          entries.push(entry);
+        },
+      }),
+    );
+    const page = await invoke("list_connections", {});
+    const detail = await invoke("get_connection", {
+      connectionId: "private-first",
+    });
+    await expect(
+      invoke("get_transaction", { transactionId: "private-missing" }),
+    ).rejects.toThrow();
+    await expect(
+      invoke("list_events", { connectionId: "private-first", limit: -1 }),
+    ).rejects.toThrow();
+    expect(
+      entries.map(({ operation, outcome }) => [operation, outcome]),
+    ).toEqual([
+      ["list_connections", "ok"],
+      ["get_connection", "ok"],
+      ["get_transaction", "not_found"],
+      ["list_events", "invalid_input"],
+    ]);
+    expect(entries[0]).toMatchObject({
+      outputBytes: Buffer.byteLength(JSON.stringify(page)),
+      rowsReturned: 2,
+    });
+    expect(entries[1]).toMatchObject({
+      outputBytes: Buffer.byteLength(JSON.stringify(detail)),
+    });
+    expect(entries[1]).not.toHaveProperty("rowsReturned");
+    for (const failed of entries.slice(2)) {
+      expect(Object.keys(failed).sort()).toEqual([
+        "durationMs",
+        "operation",
+        "outcome",
+      ]);
+    }
+    for (const entry of entries) {
+      expect(entry.durationMs).toBeGreaterThanOrEqual(0);
+    }
+    expect(JSON.stringify(entries)).not.toContain("private-");
+  });
+
+  it("returns results and errors unchanged when the logger fails", async () => {
+    for (const onOperation of [
+      () => {
+        throw new Error("synthetic-log-failure");
+      },
+      async () => {
+        throw new Error("synthetic-log-failure");
+      },
+    ]) {
+      const { invoke } = inProcessInvoker(
+        createApplication(db, { onOperation }),
+      );
+      expect(await invoke("list_connections", {})).toMatchObject({
+        data: [{ id: "private-first" }, { id: "private-second" }],
+      });
+      await expect(
+        invoke("get_transaction", { transactionId: "private-missing" }),
+      ).rejects.toThrow("not_found");
+    }
   });
 });

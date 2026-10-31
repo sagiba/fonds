@@ -63,11 +63,21 @@ const failure = (code: string, message: string) => ({
   error: { code, message },
 });
 
+/**
+ * One request's diagnostics. A body without a declared length is counted as it
+ * is sent, and its entry is emitted when the body ends or its reader cancels
+ * it: a long-lived MCP stream logs when it closes.
+ */
 export interface HttpRequestLog {
   method: (typeof LOG_HTTP_METHODS)[number] | "OTHER";
   route: string;
   status: number;
+  /** Time until the response headers were ready; a streamed body may end later. */
   durationMs: number;
+  /** The request's declared Content-Length, when it declared a valid one. */
+  requestBytes?: number;
+  /** Response body bytes sent; absent when no response was produced. */
+  responseBytes?: number;
   /** Untrusted request-header classifications, never parsed request-body values. */
   mcpMethod?: (typeof LOG_MCP_METHODS)[number] | "other" | "unspecified";
   /** A date-shaped protocol version, or a fixed class for anything else. */
@@ -117,6 +127,73 @@ function classifyMcpMethod(value: string | undefined) {
   return LOG_MCP_METHODS.find((allowed) => allowed === value) ?? "other";
 }
 
+/** A Content-Length header value as a safe integer; undefined unless decimal digits. */
+function declaredLength(value: string | null | undefined) {
+  if (value === null || value === undefined || !/^\d+$/.test(value.trim())) {
+    return undefined;
+  }
+  return Math.min(Number(value.trim()), Number.MAX_SAFE_INTEGER);
+}
+
+/** Body bytes a response sends without reading it, when they are known up front. */
+function fixedBodyBytes(response: Response, method: string) {
+  if (
+    method === "HEAD" ||
+    response.body === null ||
+    [204, 205, 304].includes(response.status)
+  ) {
+    return 0;
+  }
+  return declaredLength(response.headers.get("Content-Length"));
+}
+
+/** Passes a body through unchanged, reporting its byte count once it ends. */
+function countedBody(
+  body: ReadableStream<Uint8Array>,
+  report: (bytes: number) => void,
+) {
+  // Locked at the first read, so a response that is never built stays readable.
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let bytes = 0;
+  let reported = false;
+  const finish = () => {
+    if (!reported) {
+      reported = true;
+      try {
+        report(bytes);
+      } catch {
+        // Counting is diagnostic; the body continues unchanged.
+      }
+    }
+  };
+  return new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        let chunk: ReadableStreamReadResult<Uint8Array>;
+        try {
+          chunk = await (reader ??= body.getReader()).read();
+        } catch (error) {
+          finish();
+          controller.error(error);
+          return;
+        }
+        if (chunk.done) {
+          finish();
+          controller.close();
+          return;
+        }
+        bytes += chunk.value.byteLength;
+        controller.enqueue(chunk.value);
+      },
+      async cancel(reason) {
+        finish();
+        await (reader ?? body).cancel(reason);
+      },
+    },
+    { highWaterMark: 0 },
+  );
+}
+
 function setSecurityHeaders(context: Context) {
   context.header("Cache-Control", "no-store");
   context.header("X-Content-Type-Options", "nosniff");
@@ -164,29 +241,54 @@ export function createHttpService(
   const app = new Hono<{ Variables: { identity: TrustedIdentity } }>();
   const { onRequest } = options;
   if (onRequest) {
+    const report = async (entry: HttpRequestLog) => {
+      try {
+        await onRequest(entry);
+      } catch {
+        // A logger failure is not the request's failure.
+      }
+    };
     app.use("*", async (context, next) => {
       const startedAt = performance.now();
-      let status = 500;
+      const method = context.req.method;
+      // Read before the body guard drops the declared length from the request.
+      const requestBytes = declaredLength(context.req.header("Content-Length"));
+      let response: Response | undefined;
       try {
         await next();
-        status = context.res.status;
+        response = context.res;
       } finally {
-        const method = context.req.method;
-        const isMcp = new URL(context.req.url).pathname === "/mcp";
         try {
-          await onRequest({
+          const isMcp = new URL(context.req.url).pathname === "/mcp";
+          const entry: HttpRequestLog = {
             method:
               LOG_HTTP_METHODS.find((allowed) => allowed === method) ?? "OTHER",
             route: routePath(context) || "*",
-            status,
+            status: response?.status ?? 500,
             durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+            ...(requestBytes !== undefined && { requestBytes }),
             ...(isMcp && {
               mcpMethod: classifyMcpMethod(context.req.header("Mcp-Method")),
               mcpProtocol: classifyMcpProtocol(
                 context.req.header("MCP-Protocol-Version"),
               ),
             }),
-          });
+          };
+          const body = response?.body;
+          const fixed = response && fixedBodyBytes(response, method);
+          if (!body || fixed !== undefined) {
+            await report({
+              ...entry,
+              ...(fixed !== undefined && { responseBytes: fixed }),
+            });
+          } else {
+            context.res = new Response(
+              countedBody(body, (responseBytes) => {
+                void report({ ...entry, responseBytes });
+              }),
+              response,
+            );
+          }
         } catch {
           // Diagnostics must never alter a response or expose request details.
         }

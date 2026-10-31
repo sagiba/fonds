@@ -70,6 +70,10 @@ export const syncDiagnosticSchema = z.object({
       unchanged: count.optional(),
       failures: count.optional(),
       recoveredRuns: count.optional(),
+      /** Snapshot volume a reconciliation loaded: ledger rows, applied runs and removals. */
+      ledgerRows: count.optional(),
+      priorRuns: count.optional(),
+      removals: count.optional(),
     })
     .optional(),
   failureCategory: z

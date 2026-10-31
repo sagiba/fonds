@@ -14,6 +14,8 @@ import type {
   ProviderCollector,
   SourceAdapter,
 } from "../../src/domain/source-adapter.js";
+import { openDatabase } from "../../src/storage/sqlite/database.js";
+import { row, synthetic } from "../helpers/storage-harness.js";
 
 const refreshId = "58882f68-1baf-46ce-bf0e-efef201f0913";
 const diagnostic: SyncDiagnostic = {
@@ -235,6 +237,51 @@ describe("structured sync diagnostics", () => {
       ]),
     );
     expect(JSON.stringify(report.report())).not.toContain("private-");
+  });
+
+  it("reports the ledger, prior-run and removal volume each reconciliation loaded", async () => {
+    const db = await openDatabase(":memory:");
+    try {
+      await db.ensureConnection({ id: "synthetic-volume", provider: "cal" });
+      const reconcile = async (keys: string[], capturedAt: string) => {
+        const report = createSyncDiagnosticReport();
+        await db.ingestRun(
+          {
+            runId: crypto.randomUUID(),
+            connectionId: "synthetic-volume",
+            responses: [
+              {
+                accountKey: "account",
+                endpoint: "synthetic",
+                capturedAt,
+                responseText: JSON.stringify(keys.map((key) => row(key))),
+              },
+            ],
+          },
+          synthetic,
+          report.log,
+        );
+        return report
+          .report()
+          .entries.filter((entry) => entry.stage === "reconciliation")
+          .map(({ outcome, counts }) => [
+            outcome,
+            counts?.ledgerRows,
+            counts?.priorRuns,
+            counts?.removals,
+          ]);
+      };
+      expect(await reconcile(["a", "b"], "2040-07-02T00:00:00Z")).toEqual([
+        ["started", 0, 0, 0],
+        ["completed", 0, 0, 0],
+      ]);
+      expect(await reconcile(["a", "b", "c"], "2040-07-03T00:00:00Z")).toEqual([
+        ["started", 2, 1, 0],
+        ["completed", 2, 1, 0],
+      ]);
+    } finally {
+      await db.close();
+    }
   });
 
   it("swallows sync and async operational log failures", async () => {
