@@ -149,6 +149,14 @@ export const syncRuns = pgTable("sync_runs", {
   }),
 });
 
+/** One derived summary of a connection's applied runs; see run-history.ts. */
+export const syncRunHistory = pgTable("sync_run_history", {
+  connectionId: text("connection_id")
+    .primaryKey()
+    .references(() => connections.id),
+  document: jsonText<unknown>()("document_json").notNull(),
+});
+
 export const syncRunBodies = pgTable("sync_run_bodies", {
   runId: text("run_id")
     .primaryKey()

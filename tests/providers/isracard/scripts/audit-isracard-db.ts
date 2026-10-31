@@ -305,6 +305,7 @@ const KNOWN_TABLES = new Set([
   "sqlite_sequence",
   "sync_runs",
   "sync_run_bodies",
+  "sync_run_history",
   "deferred_evidence",
   "transaction_observations",
   "transaction_reconciliation",

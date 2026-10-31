@@ -1,3 +1,5 @@
+import "../helpers/run-history-differential.js";
+
 import { randomUUID } from "node:crypto";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

@@ -8,20 +8,20 @@ recovery. The [API reference](api.md) owns what clients see.
 
 ## Ownership and physical layout
 
-| Area                 | Tables                                                                                                                        | Owner                                                  |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| Financial data       | `connections`, `accounts`, `cards`, `sync_runs`, `transactions`, `annotations`, `events`                                      | Application migrations and shared financial store      |
-| Evidence and state   | `sync_run_bodies`, `deferred_evidence`, `transaction_observations`, `transaction_reconciliation`, `transaction_posting_links` | Application migrations and shared financial store      |
-| Events delivery      | `event_subscriptions` (SQLite/libSQL), `operations.event_subscriptions` (PostgreSQL)                                          | Application Events store                               |
-| Scheduled collection | `scheduled_collections`, `settings`                                                                                           | Scheduled collection contract in every store           |
-| Provider credentials | `provider_credentials` (SQLite/libSQL), `operations.provider_credentials` (PostgreSQL)                                        | Credential vault; encrypted rows only                  |
-| Installation binding | `settings` row `installation` (SQLite), `operations.installation` (PostgreSQL)                                                | [State directory binding](#state-directory-and-backup) |
-| Refreshes            | `refreshes`, `refresh_windows`                                                                                                | Refresh service; lease-fenced while running            |
-| Collection leases    | `collection_leases`                                                                                                           | Collection lock on every backend                       |
-| Hosted Google bridge | `identity.fonds_neon_login`, `identity.fonds_neon_identity`                                                                   | Application authentication bridge                      |
-| Hosted identity      | 14 Better Auth tables listed in the [identity inventory](internals/auth-storage.md)                                           | Pinned Better Auth 1.7.10 and configured plugins       |
-| Migration version    | `PRAGMA user_version` (SQLite/libSQL), `schema_migrations` (PostgreSQL)                                                       | [Migrations](#migrations)                              |
-| D1 concurrency       | Additional `connections.revision` column                                                                                      | Experimental D1 migration and adapter                  |
+| Area                 | Tables                                                                                                                                            | Owner                                                  |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| Financial data       | `connections`, `accounts`, `cards`, `sync_runs`, `transactions`, `annotations`, `events`                                                          | Application migrations and shared financial store      |
+| Evidence and state   | `sync_run_bodies`, `sync_run_history`, `deferred_evidence`, `transaction_observations`, `transaction_reconciliation`, `transaction_posting_links` | Application migrations and shared financial store      |
+| Events delivery      | `event_subscriptions` (SQLite/libSQL), `operations.event_subscriptions` (PostgreSQL)                                                              | Application Events store                               |
+| Scheduled collection | `scheduled_collections`, `settings`                                                                                                               | Scheduled collection contract in every store           |
+| Provider credentials | `provider_credentials` (SQLite/libSQL), `operations.provider_credentials` (PostgreSQL)                                                            | Credential vault; encrypted rows only                  |
+| Installation binding | `settings` row `installation` (SQLite), `operations.installation` (PostgreSQL)                                                                    | [State directory binding](#state-directory-and-backup) |
+| Refreshes            | `refreshes`, `refresh_windows`                                                                                                                    | Refresh service; lease-fenced while running            |
+| Collection leases    | `collection_leases`                                                                                                                               | Collection lock on every backend                       |
+| Hosted Google bridge | `identity.fonds_neon_login`, `identity.fonds_neon_identity`                                                                                       | Application authentication bridge                      |
+| Hosted identity      | 14 Better Auth tables listed in the [identity inventory](internals/auth-storage.md)                                                               | Pinned Better Auth 1.7.10 and configured plugins       |
+| Migration version    | `PRAGMA user_version` (SQLite/libSQL), `schema_migrations` (PostgreSQL)                                                                           | [Migrations](#migrations)                              |
+| D1 concurrency       | Additional `connections.revision` column                                                                                                          | Experimental D1 migration and adapter                  |
 
 PostgreSQL puts the financial tables in `financial`, which every pool selects
 through `search_path`, and operational state in `operations`; a Fonds database
@@ -90,6 +90,8 @@ Candidate IDs and source references inside JSON are references, not foreign keys
   digest and applied marker.
   **`sync_run_bodies`** holds recovery staging and expiring opt-in debug bodies.
   Later ingestion prunes expired debug bodies; unfinished recovery is preserved.
+  **`sync_run_history`** caches each connection's fold of applied runs, rebuilt
+  from `sync_runs` when stale.
 - **`transactions`** hold current transactions, private identity, lifecycle and
   canonical money/basis. Source identity is not unique. Mapped scalars have named
   columns; explanatory text, FX steps and source issues have typed JSON columns.

@@ -68,6 +68,13 @@ import {
 } from "./lifecycle.js";
 import { postingOverlapPairs } from "./posting-overlap.js";
 import {
+  acceptCollectionHealth,
+  partitionKey,
+  type PriorRun,
+  type RunHistorySummary,
+  summarizeRunHistory,
+} from "./run-history.js";
+import {
   implausiblyEmpty,
   type ResponseAbsence,
   responseAbsence,
@@ -193,6 +200,7 @@ export const runSchema = z
 export type RunInput = z.input<typeof runSchema>;
 
 export type { SourceAdapter } from "../source-adapter.js";
+export type { PriorRun } from "./run-history.js";
 
 export interface SyncResult {
   runId: string;
@@ -516,117 +524,6 @@ function recordPaymentContextConflicts(
         };
 }
 
-/** Recovery is scoped: success for account A cannot clear a still-failed account B. */
-export interface PriorRun {
-  id: string;
-  status: Run["status"];
-  startedAt: string;
-  coverage: Run["coverage"];
-  snapshot: {
-    responses: Omit<FinancialResponse, "responseText">[];
-    failures?: CollectionFailure[];
-  };
-}
-
-function trackCollectionHealth(adapter: SourceAdapter) {
-  const failed = new Map<string, number>();
-  const successful = new Map<string, number>();
-  const fail = (key: string, time: number) => {
-    // Import order cannot let an older failure replace newer successful evidence.
-    if (time < (successful.get(key) ?? -Infinity)) {
-      return;
-    }
-    failed.set(key, Math.max(failed.get(key) ?? -Infinity, time));
-  };
-  const recover = (key: string, time: number) => {
-    successful.set(key, Math.max(successful.get(key) ?? -Infinity, time));
-    const failureTime = failed.get(key);
-    if (failureTime !== undefined && time >= failureTime) {
-      failed.delete(key);
-    }
-  };
-  const accept = (
-    run: Pick<PriorRun, "coverage" | "snapshot" | "startedAt">,
-  ) => {
-    // The archive's collection time survives replay; application completion does not.
-    const started = Date.parse(run.startedAt);
-    const attemptTime = Number.isFinite(started) ? started : Infinity;
-    // A run can hold failures met before or after its responses.
-    const failureTime = (failure: CollectionFailure) => {
-      const failed = failure.failedAt ? Date.parse(failure.failedAt) : NaN;
-      return Number.isFinite(failed) ? failed : attemptTime;
-    };
-    /** A partition's failures can repeat within a run; the latest one stands. */
-    const latestFailureTime = (part: (typeof run.coverage)[number]) => {
-      const times = (run.snapshot.failures ?? [])
-        .filter(
-          (failure) =>
-            failure.affectsCoverage !== false &&
-            failure.accountKey === part.accountKey &&
-            resourceKey(adapter, failure.endpoint) ===
-              resourceKey(adapter, part.resource) &&
-            scopeKey(adapter, failure.scope) === scopeKey(adapter, part.scope),
-        )
-        .map(failureTime);
-      return times.length > 0 ? Math.max(...times) : attemptTime;
-    };
-    for (const part of run.coverage) {
-      // An unscoped legacy archive cannot establish recovery of a live collection.
-      if (part.success && !part.comparable && !part.scope) {
-        continue;
-      }
-      const response = run.snapshot.responses.find(
-        (response) =>
-          response.accountKey === part.accountKey &&
-          resourceKey(adapter, response.endpoint) ===
-            resourceKey(adapter, part.resource) &&
-          scopeKey(adapter, response.scope) === scopeKey(adapter, part.scope),
-      );
-      const evidenceTime = response
-        ? Date.parse(response.capturedAt)
-        : latestFailureTime(part);
-      if (part.success && response) {
-        recover(`collection:${scopeKey(adapter, part.scope)}`, evidenceTime);
-      }
-      const key = JSON.stringify([
-        part.accountKey,
-        resourceKey(adapter, part.resource),
-        part.status,
-        scopeKey(adapter, part.scope),
-      ]);
-      if (part.success && response) {
-        recover(key, evidenceTime);
-      } else if (!part.success) {
-        fail(key, evidenceTime);
-      }
-    }
-    for (const failure of run.snapshot.failures ?? []) {
-      if (failure.affectsCoverage !== false && failure.accountKey === null) {
-        fail(
-          `collection:${scopeKey(adapter, failure.scope)}`,
-          failureTime(failure),
-        );
-      }
-    }
-  };
-  return { accept, failedScopes: () => new Set(failed.keys()) };
-}
-
-function partitionKey(
-  adapter: SourceAdapter,
-  accountKey: string,
-  endpoint: string,
-  scope: CollectionScope | undefined,
-  status: "posted" | "pending",
-): string {
-  return JSON.stringify([
-    accountKey,
-    resourceKey(adapter, endpoint),
-    scopeKey(adapter, scope),
-    status,
-  ]);
-}
-
 function insideRecentHorizon(
   row: Transaction,
   cutoff: string | undefined,
@@ -638,8 +535,17 @@ function insideRecentHorizon(
   return date !== null && date >= cutoff;
 }
 
-/** Index retained metadata once; raw financial bodies stay in the database. */
-function indexRunHistory(runs: PriorRun[], adapter: SourceAdapter) {
+/**
+ * Index retained metadata once; raw financial bodies stay in the database.
+ * `runs` are the loaded prior runs: per-run lookups (responses, historical
+ * partitions and coverage) see only them, while folds over every applied run
+ * come from `summary`.
+ */
+function indexRunHistory(
+  runs: PriorRun[],
+  summary: RunHistorySummary,
+  adapter: SourceAdapter,
+) {
   const responsesByRun = new Map(
     runs.map((run) => [
       run.id,
@@ -655,9 +561,6 @@ function indexRunHistory(runs: PriorRun[], adapter: SourceAdapter) {
     runId: string;
     coverage: NonNullable<ReturnType<typeof sourceCoverage>>;
   }[] = [];
-  const knownAccounts = new Set<string>();
-  const latestComparable = new Map<string, string>();
-  const latestSuccessful = new Map<string, string>();
   const historicalPartitions = new Map<string, Set<string>>();
   for (const run of runs) {
     const historical = new Set<string>();
@@ -677,26 +580,6 @@ function indexRunHistory(runs: PriorRun[], adapter: SourceAdapter) {
       if (coverage) {
         coverages.push({ runId: run.id, coverage });
       }
-      const key = partitionKey(
-        adapter,
-        part.accountKey,
-        part.resource,
-        response.scope,
-        part.status,
-      );
-      if (
-        response.scope?.kind !== "history" &&
-        response.capturedAt > (latestSuccessful.get(key) ?? "")
-      ) {
-        latestSuccessful.set(key, response.capturedAt);
-      }
-      if (!part.comparable) {
-        continue;
-      }
-      knownAccounts.add(part.accountKey);
-      if (response.capturedAt > (latestComparable.get(key) ?? "")) {
-        latestComparable.set(key, response.capturedAt);
-      }
     }
   }
   return {
@@ -705,9 +588,9 @@ function indexRunHistory(runs: PriorRun[], adapter: SourceAdapter) {
         b.coverage.capturedAt.localeCompare(a.coverage.capturedAt) ||
         a.runId.localeCompare(b.runId),
     ),
-    knownAccounts,
-    latestComparable,
-    latestSuccessful,
+    knownAccounts: summary.knownAccounts,
+    latestComparable: summary.latestComparable,
+    latestSuccessful: summary.latestSuccessful,
     response(runId: string, accountKey: string) {
       return responsesByRun.get(runId)?.get(accountKey);
     },
@@ -1822,8 +1705,11 @@ export function planRun(
     });
   };
   const priorRuns = plan.snapshot.priorRuns;
+  // Without a supplied summary the loaded runs are the complete history.
+  const runHistory =
+    plan.snapshot.runHistory ?? summarizeRunHistory(priorRuns, adapter);
   const beforeRows = plan.orderedRows();
-  const history = indexRunHistory(priorRuns, adapter);
+  const history = indexRunHistory(priorRuns, runHistory, adapter);
   const cardKeys = new Map(
     (plan.snapshot.catalog?.cards ?? []).map((card) => [
       card.id,
@@ -2787,17 +2673,17 @@ export function planRun(
       { status, coverage, warnings },
     );
   }
-  const health = trackCollectionHealth(adapter);
-  for (const prior of priorRuns) {
-    health.accept(prior);
-  }
-  const previouslyFailed = health.failedScopes();
-  health.accept({
-    coverage,
-    snapshot: run.snapshot,
-    startedAt: run.startedAt,
-  });
-  const stillFailed = health.failedScopes();
+  const previouslyFailed = new Set(runHistory.failed.keys());
+  const health = {
+    failed: new Map(runHistory.failed),
+    successful: new Map(runHistory.successful),
+  };
+  acceptCollectionHealth(
+    health,
+    { coverage, snapshot: run.snapshot, startedAt: run.startedAt },
+    adapter,
+  );
+  const stillFailed = new Set(health.failed.keys());
   const recoveredScopes = [...previouslyFailed]
     .filter((scope) => !stillFailed.has(scope))
     .sort();

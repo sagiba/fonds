@@ -22,6 +22,7 @@ import type {
   TransactionQuery,
 } from "../../application/query-inputs.js";
 import type { RefreshPageInput } from "../../application/refreshes.js";
+import type { RunHistoryDocument } from "../../domain/plans/run-history.js";
 import type { FinancialPlan } from "../../domain/plans/state.js";
 import type { Connection, ConnectionConfig } from "../../domain/records.js";
 import type { RetainedRun } from "../run-evidence.js";
@@ -359,23 +360,68 @@ export const planRows = (db: Executor, id: string, scope?: PlanScope) =>
       .where(planCondition(schema.transactions, id, scope))
       .orderBy(asc(sql`transactions.rowid`)),
   );
+const priorRunColumns = {
+  id: schema.syncRuns.id,
+  status: schema.syncRuns.status,
+  startedAt: schema.syncRuns.startedAt,
+  coverage: schema.syncRuns.coverage,
+  snapshot: schema.syncRuns.snapshot,
+};
+const applied = (id: string) =>
+  and(
+    eq(schema.syncRuns.connectionId, id),
+    isNotNull(schema.syncRuns.appliedAt),
+  );
 export const priorRuns = (db: Executor, id: string) =>
   db
+    .select(priorRunColumns)
+    .from(schema.syncRuns)
+    .where(applied(id))
+    .orderBy(asc(schema.syncRuns.appliedAt), asc(sql`sync_runs.rowid`));
+export const runHistory = (db: Executor, id: string) =>
+  db
     .select({
-      id: schema.syncRuns.id,
-      status: schema.syncRuns.status,
-      startedAt: schema.syncRuns.startedAt,
-      coverage: schema.syncRuns.coverage,
-      snapshot: schema.syncRuns.snapshot,
+      ...priorRunColumns,
+      appliedAt: sql<string>`${schema.syncRuns.appliedAt}`,
+      ingestionOrder: sql<number>`sync_runs.rowid`,
+      // The window counts every applied run before the limit applies.
+      appliedRuns: sql<number>`count(*) over ()`.mapWith(Number),
+      document: schema.syncRunHistory.document,
+    })
+    .from(schema.syncRuns)
+    .leftJoin(
+      schema.syncRunHistory,
+      eq(schema.syncRunHistory.connectionId, schema.syncRuns.connectionId),
+    )
+    .where(applied(id))
+    .orderBy(desc(schema.syncRuns.appliedAt), desc(sql`sync_runs.rowid`))
+    .limit(1);
+export const runsById = (db: Executor, id: string, ids: string[]) =>
+  db
+    .select({
+      ...priorRunColumns,
+      appliedAt: schema.syncRuns.appliedAt,
+      ingestionOrder: sql<number>`sync_runs.rowid`,
     })
     .from(schema.syncRuns)
     .where(
       and(
         eq(schema.syncRuns.connectionId, id),
-        isNotNull(schema.syncRuns.appliedAt),
+        inArray(schema.syncRuns.id, ids),
       ),
-    )
-    .orderBy(asc(schema.syncRuns.appliedAt), asc(sql`sync_runs.rowid`));
+    );
+export const saveRunHistory = (
+  db: Executor,
+  id: string,
+  document: RunHistoryDocument,
+) =>
+  db
+    .insert(schema.syncRunHistory)
+    .values({ connectionId: id, document })
+    .onConflictDoUpdate({
+      target: schema.syncRunHistory.connectionId,
+      set: { document },
+    });
 export const removals = (db: Executor, id: string) =>
   db
     .select({

@@ -132,6 +132,11 @@ export const schemaManifest = [
   },
   {
     "type": "table",
+    "name": "sync_run_history",
+    "sql": "CREATE TABLE sync_run_history (\n  connection_id TEXT PRIMARY KEY NOT NULL REFERENCES connections(id),\n  document_json TEXT NOT NULL CHECK (json_valid(document_json))\n) STRICT"
+  },
+  {
+    "type": "table",
     "name": "sync_runs",
     "sql": "CREATE TABLE sync_runs (\n  id TEXT PRIMARY KEY NOT NULL,\n  connection_id TEXT NOT NULL REFERENCES connections(id),\n  started_at TEXT NOT NULL,\n  completed_at TEXT,\n  status TEXT NOT NULL CHECK (status IN ('started','completed','partial','failed')),\n  collector_version TEXT NOT NULL,\n  parser_version TEXT NOT NULL,\n  coverage_json TEXT NOT NULL CHECK (json_valid(coverage_json)),\n  warnings_json TEXT NOT NULL CHECK (json_valid(warnings_json)),\n  applied_at TEXT,\n  refresh_id TEXT REFERENCES refreshes(id) ON DELETE SET NULL,\n  evidence_digest TEXT NOT NULL,\n  metadata_json TEXT NOT NULL CHECK (json_valid(metadata_json))\n) STRICT"
   },
