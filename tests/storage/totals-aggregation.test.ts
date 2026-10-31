@@ -1,3 +1,4 @@
+import { getTableColumns } from "drizzle-orm";
 import { drizzle as libsqlDrizzle } from "drizzle-orm/libsql";
 import { drizzle as postgresDrizzle } from "drizzle-orm/node-postgres";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -440,6 +441,79 @@ for (const backend of backends) {
         [a, 2],
         [b, 1],
       ]);
+    });
+
+    it("sums exactly when an intermediate total passes 64 bits before rows cancel", async () => {
+      await insertTransactionFixture(db, [
+        row("template", { merchantName: "Cancelling", presence: "removed" }),
+      ]);
+      // 1,025 maximal outflows' worth of inflows, then as many outflows,
+      // inserted in that order: a 64-bit running sum overflows midway.
+      const schema =
+        db.driver.kind === "postgres" ? postgresSchema : sqliteSchema;
+      const columns = Object.values(getTableColumns(schema.transactions))
+        .map((column) => column.name)
+        .filter((name) => name !== "ingestion_order");
+      const value = (name: string) =>
+        ({
+          id: "'cancel-' || n.i",
+          source_key: "'cancel-' || n.i",
+          presence: "'seen'",
+          amount_minor: `case when n.i <= 1025 then ${Number.MAX_SAFE_INTEGER} else -${Number.MAX_SAFE_INTEGER} end`,
+        })[name] ?? `t."${name}"`;
+      await db.raw(
+        `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2050)
+         INSERT INTO transactions (${columns.map((name) => `"${name}"`).join(", ")})
+         SELECT ${columns.map(value).join(", ")}
+         FROM transactions t CROSS JOIN n WHERE t.id = 'template'`,
+      );
+      const filters = { merchantName: "Cancelling" };
+      expect(await invoke("get_transaction_totals", filters)).toEqual({
+        totals: [
+          {
+            currency: "ILS",
+            amount: "0.00",
+            amountBasis: "purchase_commitment",
+          },
+        ],
+        fxFees: [],
+        fxFeeUnknownCount: 0,
+        includedCount: 2050,
+        excludedCount: 0,
+        excluded: {
+          pending: 0,
+          transferOrIncome: 0,
+          retiredOrRemoved: 0,
+          sourceAbsent: 0,
+          unresolved: 0,
+          authorization: 0,
+        },
+      });
+      expect(
+        await invoke("get_transaction_totals", {
+          ...filters,
+          groupBy: "merchant",
+        }),
+      ).toEqual({
+        groupBy: "merchant",
+        groups: [
+          {
+            key: "Cancelling",
+            includedCount: 2050,
+            totals: [
+              {
+                currency: "ILS",
+                amount: "0.00",
+                amountBasis: "purchase_commitment",
+                count: 2050,
+                min: "-90071992547409.91",
+                max: "90071992547409.91",
+              },
+            ],
+          },
+        ],
+        truncated: false,
+      });
     });
 
     it("bounds the groups and reports truncation", async () => {

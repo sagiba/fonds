@@ -117,6 +117,7 @@ import {
   BACKFILL_OUTCOMES,
   chunks,
   exactInteger,
+  exactSumValue,
   type PlanScope,
 } from "./sql.js";
 import type {
@@ -1707,8 +1708,8 @@ function buildStore<Db>(
       return totalsFromParts(
         rows.map((row) => ({
           ...row,
-          amountMinor: exactInteger(row.amountMinor),
-          fxFeeMinor: exactInteger(row.fxFeeMinor),
+          amountMinor: exactSumValue(row.amountMinor),
+          fxFeeMinor: exactSumValue(row.fxFeeMinor),
         })),
       );
     },
@@ -1745,7 +1746,7 @@ function buildStore<Db>(
           currency: row.currency,
           amountBasis: row.amountBasis,
           count: row.count,
-          amountMinor: toSafeMinor(exactInteger(row.amountMinor)),
+          amountMinor: toSafeMinor(exactSumValue(row.amountMinor)),
           minMinor: toSafeMinor(exactInteger(row.minMinor)),
           maxMinor: toSafeMinor(exactInteger(row.maxMinor)),
         });

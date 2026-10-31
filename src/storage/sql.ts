@@ -311,9 +311,8 @@ export function totalsBucket(table: TransactionColumns) {
 /**
  * The grouping and exact aggregates of `TotalsPart`: one row per bucket and,
  * for included rows, per money group and published fee currency. The caller
- * groups by every key. Integer sums are exact in both dialects (SQLite fails
- * on 64-bit overflow, PostgreSQL sums bigint as numeric) and travel as decimal
- * text, so no driver rounds a total beyond the safe range.
+ * groups by every key. Sums are `exactSum`s, so no intermediate total
+ * overflows and no driver rounds one.
  */
 export function totalsPartColumns(
   table: TransactionColumns,
@@ -345,8 +344,12 @@ export function totalsPartColumns(
       ...keys,
       amountBasis: amountBasis ?? sql<Transaction["amountBasis"] | null>`null`,
       count: sql<number>`count(*)`.mapWith(Number),
-      amountMinor: sql<unknown>`cast(sum(case when ${included} then ${table.amountMinor} else 0 end) as text)`,
-      fxFeeMinor: sql<unknown>`cast(sum(case when ${published} then ${table.fxFeeMinor} else 0 end) as text)`,
+      amountMinor: exactSum(
+        sql`case when ${included} then ${table.amountMinor} else 0 end`,
+      ),
+      fxFeeMinor: exactSum(
+        sql`case when ${published} then ${table.fxFeeMinor} else 0 end`,
+      ),
       fxFeeUnknownCount: sql<number>`sum(case when ${included}
         and not (${published})
         and ${table.originalCurrency} is not null and ${table.currency} is not null
@@ -382,9 +385,7 @@ export function groupedMoneyColumns(
         Transaction["amountBasis"] | null
       >,
       count: sql<number>`count(*)`.as("row_count"),
-      amountMinor: sql<unknown>`cast(sum(${table.amountMinor}) as text)`.as(
-        "amount_minor",
-      ),
+      amountMinor: exactSum(sql`${table.amountMinor}`).as("amount_minor"),
       minMinor: sql<unknown>`cast(min(${table.amountMinor}) as text)`.as(
         "min_minor",
       ),
@@ -393,6 +394,35 @@ export function groupedMoneyColumns(
       ),
     },
   };
+}
+
+/** 2^32: amounts split into this many units and a remainder below it. */
+const SPLIT = 4294967296;
+
+/**
+ * An exact sum of safe-integer amounts as `high:low` decimal text, where the
+ * total is high × 2^32 + low. SQLite sums integers in 64 bits and fails on an
+ * intermediate overflow even when later rows cancel it; each part stays far
+ * inside 64 bits (|high| ≤ 2^21 and |low| < 2^32 per row), and PostgreSQL
+ * computes the same parts. `%` truncates toward zero in both dialects.
+ */
+export function exactSum(value: SQL) {
+  return sql<
+    string | null
+  >`cast(sum((${value} - ${value} % ${sql.raw(String(SPLIT))}) / ${sql.raw(String(SPLIT))}) as text) || ':' || cast(sum(${value} % ${sql.raw(String(SPLIT))}) as text)`;
+}
+
+/** The total an `exactSum` describes; null (no rows) is zero. */
+export function exactSumValue(value: unknown): bigint {
+  if (value === null) {
+    return 0n;
+  }
+  const parts =
+    typeof value === "string" ? /^(-?\d+):(-?\d+)$/.exec(value) : null;
+  if (!parts) {
+    throw new TypeError("Aggregate is not an exact sum");
+  }
+  return BigInt(parts[1]!) * BigInt(SPLIT) + BigInt(parts[2]!);
 }
 
 /** An exact integer aggregate as a driver returns it: number, bigint or decimal text. */
