@@ -2009,6 +2009,17 @@ describe("provider sessions across a backfill", () => {
     });
   });
 
+  it("stops a backfill softly when CAL refuses the login without a body", async () => {
+    const cal = refusingCal(() => new Response(null, { status: 400 }));
+    const refresh = await backfill(calCollector());
+    expect(cal).toEqual({ logins: 1, other: 0 });
+    expect(refresh).toMatchObject({
+      status: "failed",
+      providerStopReason: "rate_limited",
+      requiresAttention: false,
+    });
+  });
+
   it("hard stops a backfill when CAL rejects the credentials in JSON", async () => {
     const cal = refusingCal(() =>
       Response.json(
@@ -2151,15 +2162,28 @@ describe("soft provider stops, attention retries and login pacing", () => {
     return result!;
   }
 
-  /** Moves every recorded refresh and sync run back by `minutes`. */
+  /** Moves every recorded refresh, sync run and login attempt back by `minutes`. */
   async function age(minutes: number) {
-    const shift = (column: string) =>
-      `${column} = strftime('%Y-%m-%dT%H:%M:%fZ', ${column}, '-${minutes} minutes')`;
+    const earlier = (value: string) =>
+      `strftime('%Y-%m-%dT%H:%M:%fZ', ${value}, '-${minutes} minutes')`;
+    const shift = (column: string) => `${column} = ${earlier(column)}`;
     await db.client.execute(
       `UPDATE refreshes SET ${["created_at", "started_at", "finished_at"].map(shift).join(", ")}`,
     );
     await db.client.execute(`UPDATE sync_runs SET ${shift("started_at")}`);
+    const attempt = "'$.providerLoginAttemptAt'";
+    await db.client.execute(
+      `UPDATE connections SET config_json = json_set(config_json, ${attempt}, ${earlier(`json_extract(config_json, ${attempt})`)}) WHERE json_extract(config_json, ${attempt}) IS NOT NULL`,
+    );
   }
+
+  const loginAttemptAt = async () =>
+    Date.parse(
+      String(
+        (await db.getStoredConnection(connectionId))!.config
+          .providerLoginAttemptAt,
+      ),
+    );
 
   it("cools down after a soft stop, retries once after six hours, then needs attention", async () => {
     const { refreshes, executions } = scripted(() => stop("rate_limited"));
@@ -2302,9 +2326,8 @@ describe("soft provider stops, attention retries and login pacing", () => {
       range,
     });
     await first.settled();
-    const [run] = await db.listSyncRuns(connectionId, { limit: 1 });
     expect(continuedAt).toBeGreaterThanOrEqual(
-      Date.parse(run!.startedAt) + loginIntervalMs,
+      (await loginAttemptAt()) + loginIntervalMs,
     );
     expect(sessions.count).toBe(1);
     // A continuation arriving at once, under the default interval, does not log in.
@@ -2334,5 +2357,176 @@ describe("soft provider stops, attention retries and login pacing", () => {
     expect(await db.getRefresh(started.refresh!.id)).toMatchObject({
       status: "completed",
     });
+  });
+
+  it("admits one manual retry past an attention block across services, whatever their interleaving", async () => {
+    const { refreshes: blocker } = scripted(() =>
+      stop("authentication_failed"),
+    );
+    expect((await scheduled(blocker)).refresh?.requiresAttention).toBe(true);
+    await age(120);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let admitLate!: () => void;
+    const late = new Promise<void>((resolve) => {
+      admitLate = resolve;
+    });
+    const sessions = { count: 0 };
+    const gated = (store: RefreshServiceOptions["store"]) =>
+      createRefreshService({
+        store,
+        targets: async () => ({
+          targets: [
+            {
+              connectionId,
+              adapter: synthetic,
+              collector: async () =>
+                source(async function* () {
+                  sessions.count++;
+                  await gate;
+                  yield stop("network_error");
+                }),
+            },
+          ],
+          failures: 0,
+        }),
+        log: () => {},
+        retryDelaysMs: [],
+      });
+    // The second service's admission reaches storage only after the first
+    // refresh finished, however early its request arrived.
+    const delayedStore = new Proxy(db, {
+      get(target, property) {
+        if (property === "admitRefresh") {
+          return async (...input: Parameters<Database["admitRefresh"]>) => {
+            await late;
+            return target.admitRefresh(...input);
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const [first, second] = [gated(db), gated(delayedStore)];
+    const delayed = second.start(connectionId, { trigger: "manual" });
+    const admitted = await first.start(connectionId, { trigger: "manual" });
+    expect(admitted.reason).toBeNull();
+    expect(
+      (await gated(db).start(connectionId, { trigger: "manual" })).reason,
+    ).toBe("busy");
+    release();
+    await first.settled();
+    admitLate();
+    expect((await delayed).reason).toBe("requires_attention");
+    await second.settled();
+    expect(sessions.count).toBe(1);
+    expect(await db.getRefresh(admitted.refresh!.id)).toMatchObject({
+      status: "failed",
+      requiresAttention: true,
+    });
+  });
+
+  it("commits a finished refresh's status and attention in one write", async () => {
+    const outcomes = [stop("authentication_failed"), stop("network_error")];
+    const { refreshes } = scripted(() => outcomes.shift()!);
+    await scheduled(refreshes);
+    await age(120);
+    // Any write adding attention after the finish fails, as a crash there would.
+    await db.client.execute(
+      "CREATE TRIGGER refuse_late_attention BEFORE UPDATE ON refreshes WHEN OLD.status IN ('completed', 'partial', 'failed') AND NEW.requires_attention = 1 AND OLD.requires_attention = 0 BEGIN SELECT RAISE(ABORT, 'synthetic-late-attention'); END",
+    );
+    const retry = await refreshes.start(connectionId, { trigger: "manual" });
+    await refreshes.settled();
+    expect(await db.getRefresh(retry.refresh!.id)).toMatchObject({
+      status: "failed",
+      finishedAt: expect.any(String),
+      requiresAttention: true,
+    });
+  });
+
+  it("finds the previous executed refresh past more than fifty skips", async () => {
+    const outcomes = [
+      stop("authentication_failed"),
+      capture("after-skips"),
+      stop("rate_limited"),
+      stop("rate_limited"),
+    ];
+    const { refreshes, executions } = scripted(() => outcomes.shift()!);
+    await scheduled(refreshes);
+    await age(120);
+    for (let skip = 0; skip < 55; skip++) {
+      expect((await scheduled(refreshes)).reason).toBe("requires_attention");
+    }
+    const [manual] = await refreshes.wait([
+      await refreshes.start(connectionId, { trigger: "manual" }),
+    ]);
+    await refreshes.settled();
+    expect(manual).toMatchObject({
+      reason: null,
+      refresh: { status: "completed", requiresAttention: false },
+    });
+    await age(7 * 60);
+    expect((await scheduled(refreshes)).refresh?.requiresAttention).toBe(false);
+    await age(5);
+    for (let skip = 0; skip < 55; skip++) {
+      expect((await scheduled(refreshes)).reason).toBe("cooldown");
+    }
+    await age(7 * 60);
+    expect((await scheduled(refreshes)).refresh).toMatchObject({
+      providerStopReason: "rate_limited",
+      requiresAttention: true,
+    });
+    expect(executions.count).toBe(4);
+  });
+
+  it("paces a continuation after an execution that died before its first capture", async () => {
+    const shutdown = new AbortController();
+    const sessions = { count: 0 };
+    const collector = async () =>
+      source(async function* (options) {
+        sessions.count++;
+        // Logged in; the invocation ends before any event.
+        await new Promise((resolve) =>
+          options.signal?.addEventListener("abort", resolve, { once: true }),
+        );
+        yield capture("never-recorded");
+      });
+    const targets = async () => ({
+      targets: [{ connectionId, adapter: synthetic, collector }],
+      failures: 0,
+    });
+    const dying = createRefreshService({
+      store: db,
+      targets,
+      log: () => {},
+      retryDelaysMs: [],
+      signal: shutdown.signal,
+    });
+    const started = await dying.start(connectionId, {
+      trigger: "manual",
+      range,
+    });
+    await vi.waitFor(() => expect(sessions.count).toBe(1));
+    shutdown.abort();
+    await dying.settled();
+    // As if no event were recorded: whatever the run trail shows is old.
+    await db.client.execute(
+      "UPDATE sync_runs SET started_at = '2000-01-01T00:00:00.000Z'",
+    );
+    expect(await db.getRefresh(started.refresh!.id)).toMatchObject({
+      status: "running",
+    });
+    const continuation = createRefreshService({
+      store: db,
+      targets,
+      log: () => {},
+      retryDelaysMs: [],
+      budgetMs: 2 * UNIT_DEADLINE_MS,
+    });
+    await continuation.resumeStalled();
+    await continuation.settled();
+    expect(sessions.count).toBe(1);
   });
 });

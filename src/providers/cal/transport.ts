@@ -260,7 +260,7 @@ function parsesAsJson(text: string): boolean {
 
 /**
  * A login CAL refused without an explicit challenge or credential rejection:
- * an error status (other than 401/403) or a body that is not JSON. CAL has
+ * an error status (other than 401/403) or a missing or non-JSON body. CAL has
  * answered repeated logins this way while the same credentials stayed valid,
  * so it stops the refresh as a rate limit, never as a credential failure.
  * See cal.login in the source notes.
@@ -439,6 +439,10 @@ export function createCalTransport(options: CalTransportOptions = {}) {
       }
       stage = "response_body";
       if (!response.body) {
+        if (login) {
+          stage = response.ok ? "response_body" : "http_status";
+          throw loginRefused();
+        }
         throw new CalTransportError("invalid_response");
       }
       const reader = response.body.getReader();

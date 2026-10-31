@@ -41,6 +41,12 @@ describe("safe CAL transport diagnostics", () => {
       "json",
     ],
     [
+      new Response(null, { status: 400 }),
+      "rate_limited",
+      "http_status",
+      "other",
+    ],
+    [
       new Response("private-unavailable", { status: 503 }),
       "rate_limited",
       "http_status",

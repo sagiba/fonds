@@ -463,9 +463,12 @@ describe.each(backends)("operations parity on %s", (backend) => {
         }),
         operator,
       );
-      expect(await db.admitRefresh(refresh("refused"), ordinary)).toMatchObject(
-        { reason: "requires_attention", met: { id: "blocked" } },
-      );
+      expect(
+        await db.admitRefresh(
+          refresh("refused", { trigger: "scheduled" }),
+          ordinary,
+        ),
+      ).toMatchObject({ reason: "requires_attention", met: { id: "blocked" } });
       expect(await db.admitRefresh(refresh("retry"), operator)).toMatchObject({
         reason: null,
         created: { id: "retry" },

@@ -13,11 +13,8 @@ import {
 } from "../application/collection-lock.js";
 import type { InternalStore } from "../application/financial-store.js";
 import {
-  ATTENTION_RETRY_INTERVAL_MS,
   emptyCounts,
   isActive,
-  isExecuted,
-  isSoftStop,
   monthWindows,
   PROVIDER_STOP_REASONS,
   type Refresh,
@@ -25,7 +22,6 @@ import {
   type RefreshStartResult,
   type RefreshTrigger,
   skippedRefresh,
-  SOFT_STOP_COOLDOWN_MS,
   validateRefreshRange,
   type WindowStatus,
 } from "../application/refreshes.js";
@@ -58,14 +54,14 @@ export const UNIT_DEADLINE_MS = 600_000;
 /**
  * Each execution logs in to the provider again; provider sessions are never
  * stored. A budgeted execution resuming a refresh waits this long after its
- * connection's latest sync run, so continuation slices do not log in back to
- * back. No longer than a unit: a yielding invocation, which started its last
+ * connection's last login attempt, so continuation slices do not log in back
+ * to back. No longer than a unit: a yielding invocation, which started its last
  * unit with a unit's time left, can always wait it out before continuing.
  */
 export const LOGIN_INTERVAL_MS = 600_000;
 
-/** Recent refreshes read to find the latest one that executed. */
-const HISTORY_SCAN = 50;
+/** Connection config key: when an execution last began provider access. */
+const LOGIN_ATTEMPT_KEY = "providerLoginAttemptAt";
 
 /** Waits before retrying a held lease or a failed execution: past a lease's minute. */
 const RETRY_DELAYS_MS = [2_000, 4_000, 8_000, 16_000, 32_000];
@@ -200,88 +196,15 @@ export function createRefreshService(options: RefreshServiceOptions) {
     };
   }
 
-  /** The connection's newest executed refresh, unless one is active. */
-  async function latestExecuted(connectionId: string) {
-    for (const refresh of await store.listRefreshes(connectionId, {
-      limit: HISTORY_SCAN,
-    })) {
-      if (isActive(refresh)) {
-        return undefined;
-      }
-      if (isExecuted(refresh)) {
-        return refresh;
-      }
-    }
-    return undefined;
-  }
-
-  /** The executed refresh before this one on its connection. */
-  async function previousExecuted(refresh: Refresh) {
-    return (
-      await store.listRefreshes(refresh.connectionId, {
-        limit: HISTORY_SCAN,
-        after: { createdAt: refresh.createdAt, id: refresh.id },
-      })
-    ).find(isExecuted);
-  }
-
-  /**
-   * Admission beyond the store's rules, from the connection's latest executed
-   * refresh: a scheduled refresh within SOFT_STOP_COOLDOWN_MS of a soft stop
-   * skips as `cooldown`, and an owner's manual start passes an attention block,
-   * unless a manual refresh already met it within ATTENTION_RETRY_INTERVAL_MS.
-   */
-  async function admissionPolicy(connectionId: string, input: RefreshStart) {
-    if (input.operator) {
-      return { operator: true, softCooldown: false };
-    }
-    const latest = await latestExecuted(connectionId);
-    if (!latest) {
-      return { operator: false, softCooldown: false };
-    }
-    const since =
-      Date.now() - Date.parse(latest.finishedAt ?? latest.createdAt);
-    if (latest.requiresAttention) {
-      return {
-        operator:
-          input.trigger === "manual" &&
-          !input.occurrence &&
-          !(latest.trigger === "manual" && since < ATTENTION_RETRY_INTERVAL_MS),
-        softCooldown: false,
-      };
-    }
-    return {
-      operator: false,
-      softCooldown:
-        input.trigger === "scheduled" &&
-        isSoftStop(latest) &&
-        since < SOFT_STOP_COOLDOWN_MS,
-    };
-  }
-
   /** Records a refresh, or why none started; a scheduled occurrence records its skip. */
   async function admit(
     connectionId: string,
     input: RefreshStart,
   ): Promise<{ result: RefreshStartResult; launch: string[] }> {
-    const policy = await admissionPolicy(connectionId, input);
-    const candidate = record(connectionId, input);
-    const admission = await store.admitRefresh(
-      policy.softCooldown
-        ? skippedRefresh(candidate, "cooldown", Date.now())
-        : candidate,
-      { operator: policy.operator, now: Date.now() },
-    );
-    if (admission.reason === null && policy.softCooldown) {
-      return {
-        result: {
-          connectionId,
-          refresh: admission.created,
-          reason: "cooldown",
-        },
-        launch: [],
-      };
-    }
+    const admission = await store.admitRefresh(record(connectionId, input), {
+      operator: Boolean(input.operator),
+      now: Date.now(),
+    });
     if (admission.reason === null) {
       return {
         result: { connectionId, refresh: admission.created, reason: null },
@@ -309,15 +232,16 @@ export function createRefreshService(options: RefreshServiceOptions) {
     };
   }
 
-  /** When a resumed refresh may log in again: the login interval after its connection's latest sync run. */
+  /** When a resumed refresh may log in again: the login interval after its connection's last login attempt. */
   async function loginAllowedAt(refresh: Refresh) {
     if (refresh.startedAt === null) {
       return 0;
     }
-    const [latest] = await store.listSyncRuns(refresh.connectionId, {
-      limit: 1,
-    });
-    return latest ? Date.parse(latest.startedAt) + loginIntervalMs : 0;
+    const attempted = (await store.getStoredConnection(refresh.connectionId))
+      ?.config[LOGIN_ATTEMPT_KEY];
+    return typeof attempted === "string"
+      ? Date.parse(attempted) + loginIntervalMs
+      : 0;
   }
 
   /** A budgeted continuation that arrived too soon after the last login. */
@@ -346,31 +270,6 @@ export function createRefreshService(options: RefreshServiceOptions) {
       }
     } catch {
       // The continuation's own check paces it instead.
-    }
-  }
-
-  /**
-   * Attention a finished refresh needs beyond its own failures: a soft stop
-   * right after another soft stop, or any unfinished work after a refresh that
-   * required attention, so only a completed retry clears the block.
-   */
-  async function settleAttention(locked: LockedCollectionStore, id: string) {
-    const refresh = await locked.getRefresh(id);
-    if (
-      !refresh ||
-      !isExecuted(refresh) ||
-      refresh.status === "completed" ||
-      refresh.requiresAttention
-    ) {
-      return;
-    }
-    const previous = await previousExecuted(refresh);
-    if (
-      previous &&
-      (previous.requiresAttention ||
-        (isSoftStop(refresh) && isSoftStop(previous)))
-    ) {
-      await locked.updateRefresh(id, { requiresAttention: true });
     }
   }
 
@@ -516,6 +415,12 @@ export function createRefreshService(options: RefreshServiceOptions) {
         });
         return "done";
       }
+      // Recorded before any provider access, so a continuation after an
+      // execution that died mid-login still waits for the login interval.
+      await locked.updateConfig(current.connectionId, (config) => ({
+        ...config,
+        [LOGIN_ATTEMPT_KEY]: new Date().toISOString(),
+      }));
       // Credentials are read only once this execution holds the lease.
       const collector = await target.collector();
       if (collector.provider !== target.adapter.provider) {
@@ -666,19 +571,14 @@ export function createRefreshService(options: RefreshServiceOptions) {
     );
     const attempt = await store.withCollectionLock(
       refresh.connectionId,
-      async (locked, lockSignal) => {
-        const outcome = await run(
+      (locked, lockSignal) =>
+        run(
           locked,
           AbortSignal.any([shutdown, lockSignal]),
           id,
           target,
           deadline,
-        );
-        if (outcome === "done") {
-          await settleAttention(locked, id);
-        }
-        return outcome;
-      },
+        ),
     );
     const outcome = attempt.acquired ? attempt.result : "busy";
     if (outcome === "done") {

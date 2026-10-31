@@ -23,10 +23,12 @@ import {
 } from "../application/query-inputs.js";
 import {
   type Admission,
+  admissionHold,
+  finalAttention,
   isActive,
+  isExecuted,
   type NotStartedReason,
   type Refresh,
-  REFRESH_COOLDOWN_MS,
   refreshHealthEvents,
   type RefreshStore,
   type RefreshWriter,
@@ -174,23 +176,6 @@ function refreshRow(refresh: Refresh): RefreshRow {
     missedThrough: refresh.missed?.through ?? null,
     missedCount: refresh.missed?.count ?? null,
   };
-}
-
-/** Why the last executed refresh holds back a new one, if it does. */
-function heldBackBy(
-  last: RefreshRow | undefined,
-  now: number,
-): NotStartedReason | null {
-  if (last?.requiresAttention) {
-    return "requires_attention";
-  }
-  if (
-    last?.finishedAt &&
-    now - Date.parse(last.finishedAt) < REFRESH_COOLDOWN_MS
-  ) {
-    return "cooldown";
-  }
-  return null;
 }
 
 function presentConnection(connection: Connection, latest?: RefreshRow) {
@@ -422,7 +407,7 @@ function buildStore<Db>(
             met = (
               await statements.lastExecutedRefresh(tx, refresh.connectionId)
             )[0];
-            reason = heldBackBy(met, rules.now);
+            reason = admissionHold(met, refresh, rules.now);
           }
         }
         const metRefresh = reason && met && (await withWindows(tx, met));
@@ -481,6 +466,19 @@ function buildStore<Db>(
           throw new NotFoundError("Refresh not found");
         }
         const { window, counts, ...fields } = progress;
+        // A refresh's terminal status and its final attention commit together.
+        const { status } = fields;
+        if (status && isExecuted({ status }) && isActive(row)) {
+          fields.requiresAttention = finalAttention(
+            {
+              status,
+              requiresAttention:
+                fields.requiresAttention ?? row.requiresAttention,
+              providerStopReason: row.providerStopReason,
+            },
+            (await statements.lastExecutedRefresh(tx, row.connectionId))[0],
+          );
+        }
         const cumulative = counts && { ...counts };
         if (cumulative) {
           for (const key of Object.keys(
