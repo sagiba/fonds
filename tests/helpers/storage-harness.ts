@@ -81,6 +81,16 @@ export type Harness = InternalStore &
     close(): Promise<void>;
   };
 
+/** List items carry no source identity; tests name them through the full read. */
+export async function sourceKeysOf(
+  db: InternalStore,
+  rows: readonly { id: string }[],
+): Promise<string[]> {
+  return Promise.all(
+    rows.map(async ({ id }) => (await db.getTransaction(id))!.sourceKey),
+  );
+}
+
 /** Inserts synthetic ledger fixtures; update mode replaces the same four stored records. */
 export async function insertTransactionFixture(
   db: Harness,

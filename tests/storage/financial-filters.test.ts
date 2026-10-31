@@ -6,6 +6,7 @@ import {
   type Harness,
   open,
   row,
+  sourceKeysOf,
   synthetic,
 } from "../helpers/storage-harness.js";
 
@@ -113,15 +114,19 @@ for (const backend of backends) {
         to: "2040-07-04",
       };
       expect(
-        (await db.listTransactionPage(filters)).transactions.map(
-          (transaction) => transaction.sourceKey,
+        await sourceKeysOf(
+          db,
+          (await db.listTransactionPage(filters)).transactions,
         ),
       ).toEqual(["selected"]);
       const { cardId: _cardId, ...accountScope } = filters;
       expect(
-        (await db.listTransactionPage(accountScope)).transactions
-          .map((transaction) => transaction.sourceKey)
-          .sort(),
+        (
+          await sourceKeysOf(
+            db,
+            (await db.listTransactionPage(accountScope)).transactions,
+          )
+        ).sort(),
       ).toEqual(["other-card", "selected"]);
       expect(await db.getTotals(filters)).toMatchObject({
         totals: [
@@ -214,10 +219,16 @@ for (const backend of backends) {
       );
       const keys = async (filters: TransactionFilters) =>
         (
-          await db.listTransactionPage({ connectionId: "context", ...filters })
-        ).transactions
-          .map((transaction) => transaction.sourceKey)
-          .sort();
+          await sourceKeysOf(
+            db,
+            (
+              await db.listTransactionPage({
+                connectionId: "context",
+                ...filters,
+              })
+            ).transactions,
+          )
+        ).sort();
       expect(await keys({})).toEqual(["base", "online", "tap"]);
       expect(await keys({ merchantCategoryCode: "5812" })).toEqual(["tap"]);
       expect(await keys({ merchantCategoryCode: "5411" })).toEqual([

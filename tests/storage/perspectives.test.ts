@@ -16,6 +16,7 @@ import {
   type Harness,
   open,
   row,
+  sourceKeysOf,
   synthetic,
 } from "../helpers/storage-harness.js";
 
@@ -170,7 +171,7 @@ describe.each(backends)("%s continuation and perspectives", (backend) => {
         perspective,
         limit: 200,
       });
-      expect(page.transactions.map((item) => item.sourceKey).sort()).toEqual(
+      expect((await sourceKeysOf(db, page.transactions)).sort()).toEqual(
         every
           .filter((item) =>
             inPerspective(
@@ -185,10 +186,12 @@ describe.each(backends)("%s continuation and perspectives", (backend) => {
     }
     expect(
       (
-        await db.listTransactionPage({ perspective: "billing", limit: 200 })
-      ).transactions
-        .map((item) => item.sourceKey)
-        .sort(),
+        await sourceKeysOf(
+          db,
+          (await db.listTransactionPage({ perspective: "billing", limit: 200 }))
+            .transactions,
+        )
+      ).sort(),
     ).toEqual([
       "plan:line:1",
       "plan:line:2",

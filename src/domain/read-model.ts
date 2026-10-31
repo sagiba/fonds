@@ -22,13 +22,49 @@ interface ReviewView {
 export interface TransactionView extends Transaction, ReviewView {}
 
 /**
- * The facts a list item presents. List reads omit retained provider evidence,
- * source references, reconciliation evidence, posting links and detail-only
- * prose; a full transaction also satisfies this shape.
+ * The transaction facts a list item presents. Source identity, observation
+ * history, retained evidence and detail-only prose are not among them.
  */
-export type TransactionListFacts = Omit<
+export const LIST_FACT_FIELDS = [
+  "id",
+  "connectionId",
+  "cardId",
+  "status",
+  "presence",
+  "sourceAbsence",
+  "kind",
+  "amountBasis",
+  "amountMinor",
+  "currency",
+  "originalAmountMinor",
+  "originalCurrency",
+  "description",
+  "counterpartyName",
+  "merchantName",
+  "merchantProviderId",
+  "merchantCategoryCode",
+  "transactionDate",
+  "bookingDate",
+  "billingDate",
+  "cardPresent",
+  "authorizationMethod",
+  "wallet",
+  "threeDSecureUsed",
+  "recurring",
+  "fxFeeMinor",
+  "fxFeeCurrency",
+  "providerTransactionCode",
+  "installmentCount",
+  "installmentNumber",
+  "purchaseId",
+  "supersededById",
+  "version",
+] as const satisfies readonly (keyof Transaction)[];
+
+/** A list item's facts; a full transaction also satisfies this shape. */
+export type TransactionListFacts = Pick<
   Transaction,
-  "details" | "sourceEvidence" | "lastSeenAt" | "lastSeenRunId"
+  (typeof LIST_FACT_FIELDS)[number]
 > & {
   details: Pick<
     Transaction["details"],

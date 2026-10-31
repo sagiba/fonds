@@ -20,7 +20,11 @@ import type {
   EventQuery,
   TransactionQuery,
 } from "../application/query-inputs.js";
-import { type Perspective, perspectiveRule } from "../domain/read-model.js";
+import {
+  LIST_FACT_FIELDS,
+  type Perspective,
+  perspectiveRule,
+} from "../domain/read-model.js";
 import type { Connection, Transaction } from "../domain/records.js";
 
 export type PlanScope = { transactionId: string } | { accountOf: string };
@@ -238,6 +242,31 @@ export function totalsColumns<T extends TransactionColumns>(
     fxFeeMinor: table.fxFeeMinor,
     fxFeeCurrency: table.fxFeeCurrency,
   };
+}
+
+/** Canonical-row columns that hold the details a list item presents. */
+const listDetailColumns = [
+  "transactionDateTime",
+  "merchantAddressLine",
+  "merchantPhone",
+  "merchantCity",
+  "merchantCountryCode",
+  "currencyExchange",
+  "sourceIssues",
+] as const;
+
+export type ListColumn =
+  (typeof LIST_FACT_FIELDS)[number] | (typeof listDetailColumns)[number];
+
+/** The canonical-row columns a list page reads, and no others. */
+export function listColumns<T extends Record<ListColumn, AnyColumn>>(
+  table: T,
+): Pick<T, ListColumn> {
+  const columns: Partial<Pick<T, ListColumn>> = {};
+  for (const key of [...LIST_FACT_FIELDS, ...listDetailColumns]) {
+    columns[key] = table[key];
+  }
+  return columns as Pick<T, ListColumn>;
 }
 
 export function planCondition(

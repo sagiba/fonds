@@ -24,6 +24,7 @@ import {
   type Harness,
   open,
   row,
+  sourceKeysOf,
   synthetic,
 } from "../helpers/storage-harness.js";
 
@@ -55,12 +56,14 @@ for (const backend of backends) {
         },
         adapter,
       );
-    const all = async () =>
-      (await db.listTransactionPage({
+    // Tests name rows by source identity, which only the full read carries.
+    const all = () =>
+      db.listTransactions({
         connectionId,
         includeSuperseded: true,
-        limit: 200,
-      }))!.transactions;
+        perspective: "spending",
+        presence: "current",
+      });
     /** Cards are addressed by service ID; tests find them by provider key. */
     const cardByKey = async (providerKey: string) =>
       (await db.listCards({ connectionId, limit: 200 })).cards.find(
@@ -361,7 +364,7 @@ for (const backend of backends) {
         billingAccountId: account.id,
         limit: 50,
       });
-      expect(billed.transactions.map((row) => row.sourceKey).sort()).toEqual([
+      expect((await sourceKeysOf(db, billed.transactions)).sort()).toEqual([
         "first",
         "second",
       ]);
@@ -370,14 +373,17 @@ for (const backend of backends) {
           .includedCount,
       ).toBe(2);
       expect(
-        (
-          await db.listTransactionPage({
-            connectionId,
-            cardId: card.id,
-            billingAccountId: account.id,
-            limit: 50,
-          })
-        ).transactions.map((row) => row.sourceKey),
+        await sourceKeysOf(
+          db,
+          (
+            await db.listTransactionPage({
+              connectionId,
+              cardId: card.id,
+              billingAccountId: account.id,
+              limit: 50,
+            })
+          ).transactions,
+        ),
       ).toEqual(["first"]);
       const other = `${connectionId}-other`;
       await db.ensureConnection({ id: other, provider: "cal" });
@@ -539,14 +545,17 @@ for (const backend of backends) {
         const last = page.transactions.at(-1)!;
         after = { transactionDate: last.transactionDate, id: last.id };
       }
-      expect(paged.map((t) => [t.sourceKey, t.transactionDate])).toEqual([
+      const pagedKeys = await sourceKeysOf(db, paged);
+      expect(
+        paged.map((t, index) => [pagedKeys[index], t.transactionDate]),
+      ).toEqual([
         ["last", "9999-12-31"],
         ["leap", "2040-02-29"],
         ["early", "0999-12-31"],
         ["first", "0001-01-01"],
         ["undated", null],
       ]);
-      const first = paged.find((t) => t.sourceKey === "first")!;
+      const first = paged[pagedKeys.indexOf("first")]!;
       expect([first.bookingDate, first.billingDate]).toEqual([
         "0001-01-01",
         "9999-12-31",
@@ -556,13 +565,16 @@ for (const backend of backends) {
         from: string,
         to: string,
       ) =>
-        (await db.listTransactionPage({
-          connectionId,
-          limit: 200,
-          dateRole,
-          from,
-          to,
-        }))!.transactions.map((t) => t.sourceKey);
+        sourceKeysOf(
+          db,
+          (await db.listTransactionPage({
+            connectionId,
+            limit: 200,
+            dateRole,
+            from,
+            to,
+          }))!.transactions,
+        );
       expect(await keys("transaction", "0001-01-01", "0999-12-31")).toEqual([
         "early",
         "first",

@@ -31,6 +31,7 @@ import {
   eventFilter,
   excludedSet,
   keysetSeek,
+  listColumns,
   planCondition,
   type PlanScope,
   totalsColumns,
@@ -191,17 +192,11 @@ export function transactionPage(db: Executor, input: TransactionQuery) {
   );
 }
 
-const {
-  provider: _provider,
-  additionalInformation: _additionalInformation,
-  ...transactionListColumns
-} = transactionColumns;
-
 /** List pages read only what `TransactionListFacts` presents. */
 export function transactionListQuery(db: Executor, input: TransactionQuery) {
   const query = db
     .select({
-      row: transactionListColumns,
+      row: listColumns(schema.transactions),
       reconciliation: {
         pendingPostingCandidates:
           schema.transactionReconciliation.pendingPostingCandidates,

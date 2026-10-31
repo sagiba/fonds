@@ -10,6 +10,7 @@ import type { FinancialPlan } from "../domain/plans/state.js";
 import { sortedEvidence } from "../domain/provider-evidence.js";
 import type { TransactionListFacts } from "../domain/read-model.js";
 import type { Transaction } from "../domain/records.js";
+import type { ListColumn } from "./sql.js";
 
 export { decodeScalarText, encodeScalarText } from "./scalar-text.js";
 
@@ -263,7 +264,7 @@ const listDetailsSchema = detailsSchema.pick({
   pendingPostingCandidates: true,
 });
 
-type StoredListRow = Omit<StoredRow, "provider" | "additionalInformation">;
+type StoredListRow = Pick<StoredRow, ListColumn>;
 
 /** Decodes only what a list item presents; omitted evidence stays absent. */
 export function decodeTransactionListFacts(input: {

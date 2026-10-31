@@ -33,6 +33,7 @@ import {
   open,
   type Peer,
   row,
+  sourceKeysOf,
   synthetic,
 } from "../helpers/storage-harness.js";
 
@@ -1047,8 +1048,9 @@ describe.each(backends)("collection lease on %s", (backend) => {
       result: [expect.objectContaining({ replayed: false, created: 1 })],
     });
     expect(
-      (await db.listTransactionPage({ connectionId })).transactions.map(
-        (transaction) => transaction.sourceKey,
+      await sourceKeysOf(
+        db,
+        (await db.listTransactionPage({ connectionId })).transactions,
       ),
     ).toEqual([expect.stringContaining("staged-native")]);
   });

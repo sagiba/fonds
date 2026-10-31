@@ -24,6 +24,11 @@ import {
 
 /** Columns no list item presents; list reads must not transfer them. */
 const unlistedColumns = [
+  "source_scope",
+  "source_key",
+  "source_aliases_json",
+  "identity_strength",
+  "first_seen_at",
   "provider_json",
   "additional_information_json",
   "source_refs_json",
@@ -365,7 +370,16 @@ for (const backend of backends) {
         limit: 200,
       });
       const rich = transactions.find((item) => item.id === "rich")!;
-      for (const omitted of ["lastSeenAt", "lastSeenRunId", "sourceEvidence"]) {
+      for (const omitted of [
+        "sourceScope",
+        "sourceKey",
+        "sourceAliases",
+        "identityStrength",
+        "firstSeenAt",
+        "lastSeenAt",
+        "lastSeenRunId",
+        "sourceEvidence",
+      ]) {
         expect(rich).not.toHaveProperty(omitted);
       }
       expect(Object.keys(rich.details).sort()).toEqual([
