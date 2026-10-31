@@ -66,6 +66,8 @@ export interface CollectCalOptions extends CalTransportOptions {
   searchFilters?: CalSearchFilters;
   /** Explicit provider request tuning; no automatic recursive/adaptive retries. */
   searchWindowMonths?: 1 | 3 | 6 | 12;
+  /** Awaited before each login request, including a renewal. */
+  beforeLogin?: () => Promise<void>;
 }
 
 function lastDayOfMonth(date: string): string {
@@ -428,6 +430,7 @@ export async function* collectCal(
       }
       session.logins = (session.logins ?? 0) + 1;
       endpoint = CAL_ENDPOINTS.login;
+      await options.beforeLogin?.();
       const login = await transport.post(endpoint, {
         username: options.credentials.username,
         password: options.credentials.password,

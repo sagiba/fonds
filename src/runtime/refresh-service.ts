@@ -60,7 +60,7 @@ export const UNIT_DEADLINE_MS = 600_000;
  */
 export const LOGIN_INTERVAL_MS = 600_000;
 
-/** Connection config key: when an execution last began provider access. */
+/** Connection config key: when the connection last attempted a provider login. */
 const LOGIN_ATTEMPT_KEY = "providerLoginAttemptAt";
 
 /** Waits before retrying a held lease or a failed execution: past a lease's minute. */
@@ -121,15 +121,22 @@ function rangeStatus(statuses: readonly WindowStatus[]) {
     : ("failed" as const);
 }
 
-/** Reports each failure the collector emits, passing every event through. */
+/**
+ * Reports each failure the collector emits, passing every event through, and
+ * runs `beforeLogin` before each provider login it attempts.
+ */
 function watched(
   collector: ProviderCollector,
   onFailure: (code: CollectionFailure["code"]) => void,
+  beforeLogin: () => Promise<void>,
 ): ProviderCollector {
   return {
     ...collector,
     async *collect(options) {
-      for await (const event of collector.collect(options)) {
+      for await (const event of collector.collect({
+        ...options,
+        beforeLogin,
+      })) {
         if (event.type === "failure") {
           onFailure(event.failure.code);
         }
@@ -415,12 +422,17 @@ export function createRefreshService(options: RefreshServiceOptions) {
         });
         return "done";
       }
-      // Recorded before any provider access, so a continuation after an
-      // execution that died mid-login still waits for the login interval.
-      await locked.updateConfig(current.connectionId, (config) => ({
-        ...config,
-        [LOGIN_ATTEMPT_KEY]: new Date().toISOString(),
-      }));
+      // Recorded before provider access, so a continuation after an execution
+      // that died mid-login still waits for the login interval: once here,
+      // for a collector that reports no logins, then before each login the
+      // collector attempts, renewals included.
+      const recordLoginAttempt = async () => {
+        await locked.updateConfig(current.connectionId, (config) => ({
+          ...config,
+          [LOGIN_ATTEMPT_KEY]: new Date().toISOString(),
+        }));
+      };
+      await recordLoginAttempt();
       // Credentials are read only once this execution holds the lease.
       const collector = await target.collector();
       if (collector.provider !== target.adapter.provider) {
@@ -462,9 +474,13 @@ export function createRefreshService(options: RefreshServiceOptions) {
             ]),
             ...(window && { range: { from: window.from, to: window.to } }),
           },
-          watched(collector, (code) => {
-            stop ||= STOPPING_CODES.has(code);
-          }),
+          watched(
+            collector,
+            (code) => {
+              stop ||= STOPPING_CODES.has(code);
+            },
+            recordLoginAttempt,
+          ),
           target.adapter,
         );
         await reloadProgress();

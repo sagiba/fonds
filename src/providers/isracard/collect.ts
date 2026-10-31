@@ -81,6 +81,8 @@ export interface CollectIsracardOptions extends IsracardTransportOptions {
   /** Test clock/pacing injection. Production callers should use the default abortable wait. */
   sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
   now?: () => number;
+  /** Awaited before each login request, including a renewal. */
+  beforeLogin?: () => Promise<void>;
 }
 
 interface DiscoveredCard {
@@ -428,6 +430,7 @@ export async function* collectIsracard(
         }
         session.logins = (session.logins ?? 0) + 1;
       }
+      await options.beforeLogin?.();
       await send(ISRACARD_ENDPOINTS.login, {
         KodMishtamesh: "",
         MisparZihuy: options.credentials.username,

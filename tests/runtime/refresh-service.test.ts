@@ -2054,6 +2054,91 @@ describe("provider sessions across a backfill", () => {
     });
   });
 
+  it("paces a continuation from a session renewal inside the slice, not its first login", async () => {
+    const start = Date.parse("2040-06-01T08:00:00.000Z");
+    vi.useFakeTimers({ toFake: ["Date", "performance"], now: start });
+    try {
+      const cal = syntheticCal();
+      let months = 0;
+      // Each execution builds its own collector, so it starts a new session.
+      const collector = (): ProviderCollector => {
+        const inner = calProvider.createCollector({
+          username: "SYNTHETIC-USER",
+          password: "SYNTHETIC-PASSWORD",
+        });
+        return {
+          ...inner,
+          async *collect(options) {
+            if (++months === 2) {
+              // Three minutes on, CAL rejects the session: a second login.
+              vi.advanceTimersByTime(3 * 60_000);
+              cal.expire();
+            }
+            yield* inner.collect(options);
+            if (months === 2) {
+              // Too little budget remains for the third month.
+              vi.advanceTimersByTime(3 * 60_000);
+            }
+          },
+        };
+      };
+      const targets = async () => ({
+        targets: [
+          {
+            connectionId: calConnection,
+            adapter: calProvider.adapter,
+            collector: async () => collector(),
+          },
+        ],
+        failures: 0,
+      });
+      const slice = (budgetMs: number) =>
+        createRefreshService({
+          store: db,
+          targets,
+          log: () => {},
+          retryDelaysMs: [],
+          budgetMs,
+        });
+      const first = slice(UNIT_DEADLINE_MS + 5 * 60_000);
+      const started = await first.start(calConnection, {
+        trigger: "manual",
+        range: { from: "2040-01-01", to: "2040-03-31" },
+      });
+      await first.settled();
+      expect(cal.calls.logins).toBe(2);
+      expect(
+        (await db.getStoredConnection(calConnection))!.config
+          .providerLoginAttemptAt,
+      ).toBe("2040-06-01T08:03:00.000Z");
+      expect(await db.getRefresh(started.refresh!.id)).toMatchObject({
+        status: "running",
+        windows: [
+          { status: "completed" },
+          { status: "completed" },
+          { status: "pending" },
+        ],
+      });
+      // Twelve minutes after the first login, nine after the renewal.
+      vi.setSystemTime(start + 12 * 60_000);
+      const early = slice(2 * UNIT_DEADLINE_MS);
+      await early.resumeStalled();
+      await early.settled();
+      expect(cal.calls.logins).toBe(2);
+      // Ten minutes after the renewal.
+      vi.setSystemTime(start + 13 * 60_000);
+      const due = slice(2 * UNIT_DEADLINE_MS);
+      await due.resumeStalled();
+      await due.settled();
+      expect(cal.calls.logins).toBe(3);
+      expect(await db.getRefresh(started.refresh!.id)).toMatchObject({
+        status: "completed",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("refuses a later month's response that echoes the reused token", async () => {
     syntheticCal((search) => (search === 2 ? "SYNTHETIC-TOKEN-1" : undefined));
     const refresh = await backfill(
