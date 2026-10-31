@@ -271,6 +271,17 @@ const annotationCategory = sql<
   string | null
 >`nullif((${schema.annotations.data}::json -> 'category')::text, 'null')`;
 
+/**
+ * The decoded category that orders category groups bytewise, with any NUL
+ * removed: PostgreSQL text cannot hold NUL and decoding its escape fails. The
+ * escape is dropped from the JSON text first, with escaped backslashes parked
+ * on U+0001 (which JSON text always escapes) so a literal backslash-u0000 is
+ * kept. `annotationCategory` stays the group's key and transport.
+ */
+const categoryOrder = sql<
+  string | null
+>`(replace(replace(replace((${schema.annotations.data}::json -> 'category')::text, '\\\\', chr(1)), '\\u0000', ''), chr(1), '\\\\')::json #>> '{}')`;
+
 /** Summary items read only their own columns and the annotation category. */
 function summaryQuery(db: Executor) {
   const table = schema.transactions;
@@ -315,29 +326,36 @@ const dateColumns = {
   billing: schema.transactions.billingDate,
 } as const;
 
-function groupKey(input: TransactionQuery, groupBy: TotalsGrouping): SQL {
+/** A key whose own text orders groups with equal counts. */
+const ordered = (key: SQL) => ({ key, order: key });
+
+/** A group's key, and the text that orders groups with equal counts. */
+function groupKey(
+  input: TransactionQuery,
+  groupBy: TotalsGrouping,
+): { key: SQL; order: SQL } {
   const table = schema.transactions;
   const date = dateColumns[input.dateRole ?? "transaction"];
   switch (groupBy) {
     case "merchant":
-      return sql`${table.merchantName}`;
+      return ordered(sql`${table.merchantName}`);
     case "month":
-      return sql`to_char(${date}, 'YYYY-MM')`;
+      return ordered(sql`to_char(${date}, 'YYYY-MM')`);
     case "year":
-      return sql`to_char(${date}, 'YYYY')`;
+      return ordered(sql`to_char(${date}, 'YYYY')`);
     case "category":
-      return annotationCategory;
+      return { key: annotationCategory, order: categoryOrder };
     case "status":
-      return sql`${table.status}`;
+      return ordered(sql`${table.status}`);
     case "kind":
-      return sql`${table.kind}`;
+      return ordered(sql`${table.kind}`);
     case "card":
-      return sql`${table.cardId}`;
+      return ordered(sql`${table.cardId}`);
   }
 }
 
 /**
- * Ranks groups by included rows, then key, with window functions over the
+ * Ranks groups by included rows, then by the key's text bytewise, with window functions over the
  * aggregated money rows, so only the first `limit` groups leave the database.
  */
 export function groupedTotals(
@@ -346,10 +364,12 @@ export function groupedTotals(
   groupBy: TotalsGrouping,
   limit: number,
 ) {
+  const { key, order } = groupKey(input, groupBy);
   const money = groupedMoneyColumns(
     schema.transactions,
     input.perspective,
-    groupKey(input, groupBy),
+    key,
+    order,
   );
   const rows = db
     .select(money.columns)
@@ -369,6 +389,7 @@ export function groupedTotals(
   const counted = db
     .select({
       groupKey: rows.groupKey,
+      groupOrder: rows.groupOrder,
       currency: rows.currency,
       amountBasis: rows.amountBasis,
       count: rows.count,
@@ -392,7 +413,7 @@ export function groupedTotals(
       minMinor: counted.minMinor,
       maxMinor: counted.maxMinor,
       groupRank:
-        sql<unknown>`dense_rank() over (order by ${counted.groupRows} desc, ${counted.groupKey} asc nulls last)`.as(
+        sql<unknown>`dense_rank() over (order by ${counted.groupRows} desc, ${counted.groupOrder} collate "C" asc nulls last, ${counted.groupKey} collate "C" asc nulls last)`.as(
           "group_rank",
         ),
     })

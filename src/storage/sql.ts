@@ -368,6 +368,8 @@ export function groupedMoneyColumns(
   table: TransactionColumns,
   perspective: Exclude<Perspective, "all">,
   key: SQL,
+  // The key's ordering text; one value per key.
+  order: SQL,
 ) {
   const amountBasis =
     perspective === "spending" ? sql`${table.amountBasis}` : undefined;
@@ -380,6 +382,7 @@ export function groupedMoneyColumns(
     ],
     columns: {
       groupKey: sql<string | null>`${key}`.as("group_key"),
+      groupOrder: sql<string | null>`min(${order})`.as("group_order"),
       currency: sql<string>`${table.currency}`.as("currency"),
       amountBasis: (amountBasis ?? sql`null`).as("amount_basis") as SQL.Aliased<
         Transaction["amountBasis"] | null

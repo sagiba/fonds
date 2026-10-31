@@ -443,6 +443,44 @@ for (const backend of backends) {
       ]);
     });
 
+    it("orders tied categories by their text bytewise, not by its JSON form", async () => {
+      // Equal counts: the decoded text decides. Its JSON encoding would
+      // order these differently (an escaped quote or newline is a backslash).
+      const categories = ['"Quoted', "A", "a\nb", "a b", "x\u0000y"];
+      await insertTransactionFixture(
+        db,
+        categories.map((_category, index) =>
+          row(`tie-${index}`, { merchantName: "Tied" }),
+        ),
+      );
+      for (const [index, category] of categories.entries()) {
+        await db.editAnnotation({
+          transactionId: `tie-${index}`,
+          expectedVersion: 0,
+          category,
+        });
+      }
+      const filters = { merchantName: "Tied" };
+      const result = (await invoke("get_transaction_totals", {
+        ...filters,
+        groupBy: "category",
+      })) as { groups: { key: string; includedCount: number }[] };
+      expect(result.groups.map((group) => group.key)).toEqual([
+        '"Quoted',
+        "A",
+        "a\nb",
+        "a b",
+        "x\u0000y",
+      ]);
+      expect(result.groups.every((group) => group.includedCount === 1)).toBe(
+        true,
+      );
+      // The cutoff keeps the first tied groups in that order.
+      const cut = await db.getGroupedTotals(filters, "category", 2);
+      expect(cut.groups.map((group) => group.key)).toEqual(['"Quoted', "A"]);
+      expect(cut.truncated).toBe(true);
+    });
+
     it("sums exactly when an intermediate total passes 64 bits before rows cancel", async () => {
       await insertTransactionFixture(db, [
         row("template", { merchantName: "Cancelling", presence: "removed" }),
