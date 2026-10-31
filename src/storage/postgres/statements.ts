@@ -40,6 +40,7 @@ import {
 import type { DeferredEvidenceWrite } from "../statements.js";
 import {
   decodeTransaction,
+  decodeTransactionListFacts,
   encodeObservation,
   encodeReconciliation,
   transactionContentWrites,
@@ -181,19 +182,64 @@ export const transaction = async (db: Executor, id: string) =>
 export const transactionWithAnnotation = (db: Executor, id: string) =>
   decodedRows(joinedTransactions(db).where(eq(schema.transactions.id, id)));
 
+const pageCondition = (input: TransactionQuery) =>
+  and(
+    transactionFilter(schema.transactions, input, schema.cards),
+    transactionSeek(schema.transactions, input.after),
+  );
+
 export function transactionPage(db: Executor, input: TransactionQuery) {
   const query = joinedTransactions(db)
-    .where(
-      and(
-        transactionFilter(schema.transactions, input, schema.cards),
-        transactionSeek(schema.transactions, input.after),
-      ),
-    )
+    .where(pageCondition(input))
     .orderBy(...transactionOrder(schema.transactions));
   return decodedRows(
     input.limit === undefined ? query : query.limit(input.limit),
   );
 }
+
+const {
+  provider: _provider,
+  additionalInformation: _additionalInformation,
+  ...transactionListColumns
+} = transactionColumns;
+
+/** List pages read only what `TransactionListFacts` presents. */
+export function transactionListQuery(db: Executor, input: TransactionQuery) {
+  const query = db
+    .select({
+      row: transactionListColumns,
+      reconciliation: {
+        pendingPostingCandidates:
+          schema.transactionReconciliation.pendingPostingCandidates,
+      },
+      annotation: schema.annotations,
+    })
+    .from(schema.transactions)
+    .innerJoin(
+      schema.transactionReconciliation,
+      eq(
+        schema.transactionReconciliation.transactionId,
+        schema.transactions.id,
+      ),
+    )
+    .leftJoin(
+      schema.annotations,
+      eq(schema.annotations.transactionId, schema.transactions.id),
+    )
+    .where(pageCondition(input))
+    .orderBy(...transactionOrder(schema.transactions))
+    .$dynamic();
+  return input.limit === undefined ? query : query.limit(input.limit);
+}
+
+export const transactionListPage = async (
+  db: Executor,
+  input: TransactionQuery,
+) =>
+  (await transactionListQuery(db, input)).map((listed) => ({
+    row: decodeTransactionListFacts(listed),
+    annotation: listed.annotation,
+  }));
 
 export const totals = (db: Executor, input: TransactionQuery) =>
   db

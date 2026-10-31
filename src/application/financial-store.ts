@@ -13,7 +13,11 @@ import type {
   removalSchema,
 } from "../domain/plans/lifecycle.js";
 import type { RunInput, SyncResult } from "../domain/plans/sync.js";
-import type { calculateTotals, TransactionView } from "../domain/read-model.js";
+import type {
+  calculateTotals,
+  TransactionListView,
+  TransactionView,
+} from "../domain/read-model.js";
 import type {
   Annotation,
   LedgerEvent,
@@ -85,7 +89,7 @@ export interface SyncRun {
 }
 
 export interface TransactionPage {
-  transactions: TransactionView[];
+  transactions: TransactionListView[];
   hasMore: boolean;
 }
 

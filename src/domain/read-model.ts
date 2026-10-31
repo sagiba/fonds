@@ -8,8 +8,7 @@ import {
 } from "./plans/annotation.js";
 import type { Annotation, Transaction } from "./records.js";
 
-/** Enriched internal read view. Public operations project an explicit wire contract. */
-export interface TransactionView extends Transaction {
+interface ReviewView {
   reviewRequired: boolean;
   annotation: Annotation | null;
   reviewStale: boolean;
@@ -19,10 +18,34 @@ export interface TransactionView extends Transaction {
   pendingPostingCandidates: string[];
 }
 
-export function presentTransaction(
-  row: Transaction,
+/** Enriched internal read view. Public operations project an explicit wire contract. */
+export interface TransactionView extends Transaction, ReviewView {}
+
+/**
+ * The facts a list item presents. List reads omit retained provider evidence,
+ * source references, reconciliation evidence, posting links and detail-only
+ * prose; a full transaction also satisfies this shape.
+ */
+export type TransactionListFacts = Omit<
+  Transaction,
+  "details" | "sourceEvidence" | "lastSeenAt" | "lastSeenRunId"
+> & {
+  details: Pick<
+    Transaction["details"],
+    | "transactionDateTime"
+    | "merchant"
+    | "currencyExchange"
+    | "issues"
+    | "pendingPostingCandidates"
+  >;
+};
+
+export type TransactionListView = TransactionListFacts & ReviewView;
+
+export function presentTransaction<Row extends TransactionListFacts>(
+  row: Row,
   annotation: Annotation | null,
-): TransactionView {
+): Row & ReviewView {
   const stale = annotationStaleness(row, annotation?.data);
   const review = reviewState(row, annotation?.data);
   return {

@@ -23,7 +23,21 @@ export function canonicalAnnotation(data: AnnotationData): AnnotationData {
   return { ...data, tags: [...new Set(data.tags)].sort() };
 }
 
-export function reviewBasis(row: Transaction) {
+type ReviewBasisFacts = Pick<
+  Transaction,
+  "amountMinor" | "currency" | "amountBasis" | "kind"
+>;
+
+/** The facts review state reads, so list views can present it. */
+type ReviewFacts = ReviewBasisFacts &
+  Pick<Transaction, "supersededById" | "presence"> & {
+    details: Pick<
+      Transaction["details"],
+      "issues" | "pendingPostingCandidates"
+    >;
+  };
+
+export function reviewBasis(row: ReviewBasisFacts) {
   return {
     amountMinor: row.amountMinor,
     currency: row.currency,
@@ -33,7 +47,7 @@ export function reviewBasis(row: Transaction) {
 }
 
 export function annotationStaleness(
-  row: Transaction,
+  row: ReviewBasisFacts,
   data: AnnotationData | undefined,
 ) {
   return {
@@ -46,7 +60,7 @@ export type ReviewStatus = "unreviewed" | "approved" | "needs_review" | "stale";
 
 /** User review only: stale basis takes precedence; lifecycle and source issues are independent. */
 export function reviewStatus(
-  row: Transaction,
+  row: ReviewBasisFacts,
   data?: AnnotationData,
 ): ReviewStatus {
   if (annotationStaleness(row, data).reviewStale) {
@@ -56,7 +70,7 @@ export function reviewStatus(
 }
 
 /** A small, serializable signal for the app; source facts and user review remain separate. */
-export function reviewState(row: Transaction, data?: AnnotationData) {
+export function reviewState(row: ReviewFacts, data?: AnnotationData) {
   if (row.supersededById || row.presence === "removed") {
     return {
       required: false,

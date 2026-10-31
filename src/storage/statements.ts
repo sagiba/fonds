@@ -19,7 +19,10 @@ import type { Card } from "../domain/cards.js";
 import type { RefreshFailureCode } from "../domain/model.js";
 import type { FinancialPlan } from "../domain/plans/state.js";
 import type { PriorRun } from "../domain/plans/sync.js";
-import type { calculateTotals } from "../domain/read-model.js";
+import type {
+  calculateTotals,
+  TransactionListFacts,
+} from "../domain/read-model.js";
 import type {
   Annotation,
   Connection,
@@ -102,6 +105,12 @@ export interface Statements<Db> {
   transaction(db: Db, id: string): PromiseLike<Transaction[]>;
   transactionWithAnnotation(db: Db, id: string): PromiseLike<PlanRow[]>;
   transactionPage(db: Db, input: TransactionQuery): PromiseLike<PlanRow[]>;
+  transactionListPage(
+    db: Db,
+    input: TransactionQuery,
+  ): PromiseLike<
+    { row: TransactionListFacts; annotation: Annotation | null }[]
+  >;
   totals(
     db: Db,
     input: TransactionQuery,

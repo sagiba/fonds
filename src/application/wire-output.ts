@@ -22,7 +22,11 @@ import {
 } from "../domain/model.js";
 import { minorToDecimal } from "../domain/money.js";
 import { canonicalJson } from "../domain/observations.js";
-import type { calculateTotals, TransactionView } from "../domain/read-model.js";
+import type {
+  calculateTotals,
+  TransactionListView,
+  TransactionView,
+} from "../domain/read-model.js";
 import type {
   Annotation,
   LedgerEvent,
@@ -269,7 +273,7 @@ type DetailedTransaction = z.input<typeof transactionDetailOutputSchema>;
  * this boundary. Compact unless `detail`; list pages are always compact.
  */
 export function presentWireTransaction(
-  row: TransactionView,
+  row: TransactionListView,
 ): CompactTransaction;
 export function presentWireTransaction(
   row: TransactionView,
@@ -278,10 +282,15 @@ export function presentWireTransaction(
 ): CompactTransaction | DetailedTransaction;
 
 export function presentWireTransaction(
-  row: TransactionView,
-  detail = false,
-  includeEvidence = false,
+  ...args:
+    | [row: TransactionListView]
+    | [
+        row: TransactionView,
+        detail: boolean,
+        includeEvidence?: boolean | undefined,
+      ]
 ): CompactTransaction | DetailedTransaction {
+  const [row] = args;
   const source = sourceTextPreview();
   const transaction = {
     id: row.id,
@@ -328,7 +337,7 @@ export function presentWireTransaction(
       stale: row.reviewStale,
     },
   };
-  if (!detail) {
+  if (args.length === 1 || !args[1]) {
     return {
       ...transaction,
       annotation:
@@ -344,15 +353,16 @@ export function presentWireTransaction(
       ...(source.clipped ? { detailsTruncated: true as const } : {}),
     };
   }
+  const [full, , includeEvidence = false] = args;
   // Explanatory prose is detail-only, keeping list pages lean.
-  const information = row.details.additionalInformation ?? [];
+  const information = full.details.additionalInformation ?? [];
   const additionalInformation = information
     .slice(-PREVIEW_MAX_ITEMS)
     .map((item) => source.text(item)!);
-  const candidates = reviewPreview(row.pendingPostingCandidates, idSchema);
-  const reasons = reviewPreview(row.reviewReasons, textSchema);
-  const issues = reviewPreview(row.sourceIssues, textSchema);
-  const link = row.details.postingLink;
+  const candidates = reviewPreview(full.pendingPostingCandidates, idSchema);
+  const reasons = reviewPreview(full.reviewReasons, textSchema);
+  const issues = reviewPreview(full.sourceIssues, textSchema);
+  const link = full.details.postingLink;
   const operational: TransactionDetailOutput = {
     ...transaction,
     additionalInformation,
@@ -366,19 +376,19 @@ export function presentWireTransaction(
       pendingPostingCandidateIds: candidates.items,
       truncated: candidates.truncated || reasons.truncated || issues.truncated,
       counts: {
-        reasons: row.reviewReasons.length,
-        sourceIssues: row.sourceIssues.length,
-        pendingPostingCandidateIds: row.pendingPostingCandidates.length,
+        reasons: full.reviewReasons.length,
+        sourceIssues: full.sourceIssues.length,
+        pendingPostingCandidateIds: full.pendingPostingCandidates.length,
       },
     },
     source: {
-      identityStrength: row.identityStrength,
-      firstSeenAt: row.firstSeenAt,
-      lastSeenAt: row.lastSeenAt,
-      lastSyncRunId: row.lastSeenRunId,
+      identityStrength: full.identityStrength,
+      firstSeenAt: full.firstSeenAt,
+      lastSeenAt: full.lastSeenAt,
+      lastSyncRunId: full.lastSeenRunId,
     },
     annotation:
-      row.annotation === null ? null : presentAnnotation(row.annotation),
+      full.annotation === null ? null : presentAnnotation(full.annotation),
     postingMatch: link
       ? {
           supersededTransactionId: link.postedId,
@@ -397,7 +407,7 @@ export function presentWireTransaction(
   if (!includeEvidence) {
     return operational;
   }
-  return presentDiagnostics(row, operational);
+  return presentDiagnostics(full, operational);
 }
 
 /** Exact actionable IDs/codes remain bounded and explicitly incomplete when omitted. */
