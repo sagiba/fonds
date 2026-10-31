@@ -180,6 +180,14 @@ export interface ApplicationCapabilities {
   afterWrite?(): void;
   /** Told when an operation call ends; a failing logger never changes its result. */
   onOperation?(entry: OperationLog): void | Promise<void>;
+  /**
+   * Runs an operation call, telling `observe` the bytes a network-metered
+   * database sent each store transaction it ran.
+   */
+  meterDbBytes?<T>(
+    work: () => Promise<T>,
+    observe: (bytesRead: number) => void,
+  ): Promise<T>;
 }
 
 /** One operation call's volume, with no input values, identifiers or output content. */
@@ -193,6 +201,8 @@ export interface OperationLog {
   outputBytes?: number;
   /** Items in a returned page. */
   rowsReturned?: number;
+  /** Bytes a network-metered database sent the call's store transactions. */
+  dbBytesRead?: number;
 }
 
 export interface Application {
@@ -599,6 +609,7 @@ function bindOperation(
   execute: (input: never) => unknown,
   afterWrite?: () => void,
   onOperation?: (entry: OperationLog) => void,
+  meterDbBytes?: ApplicationCapabilities["meterDbBytes"],
 ): Operation {
   async function run(input: unknown, measured: { outputBytes?: number }) {
     // Executors are typed against their own definition's schema.
@@ -629,7 +640,7 @@ function bindOperation(
     ...definition,
     execute: async (input) => {
       const started = performance.now();
-      const measured: { outputBytes?: number } = {};
+      const measured: { outputBytes?: number; dbBytesRead?: number } = {};
       const report = (
         outcome: OperationLog["outcome"],
         rowsReturned?: number,
@@ -642,10 +653,20 @@ function bindOperation(
             outputBytes: measured.outputBytes,
           }),
           ...(rowsReturned !== undefined && { rowsReturned }),
+          ...(measured.dbBytesRead !== undefined && {
+            dbBytesRead: measured.dbBytesRead,
+          }),
         });
       let output: unknown;
       try {
-        output = await run(input, measured);
+        output = await (meterDbBytes
+          ? meterDbBytes(
+              () => run(input, measured),
+              (bytesRead) => {
+                measured.dbBytesRead = (measured.dbBytesRead ?? 0) + bytesRead;
+              },
+            )
+          : run(input, measured));
       } catch (error) {
         report(publicError(error).code);
         throw error;
@@ -848,6 +869,7 @@ export function createApplication(
             ? capabilities.afterWrite
             : undefined,
           capabilities.onOperation && safeLog(capabilities.onOperation),
+          capabilities.meterDbBytes,
         ),
       ),
   };

@@ -132,10 +132,10 @@ Refreshes run serially under each connection's
 each month or recent window is bounded at ten minutes.
 
 `fonds_sync` emits refresh/capture IDs, stage/reason codes, durations, failure
-categories and counts (`observed`: accepted identities per capture;
-`extracted`: parser inputs); `fonds_http_request` and `fonds_operation` log
-bytes and rows. Logs exclude source values, credentials and provider
-identifiers; the [operator CLI](local-setup.md#operator-commands) gives bounded
+categories, counts (`observed`: per-capture accepted identities; `extracted`:
+parser inputs; `dbBytesRead`: PostgreSQL transaction bytes, not pooled reads);
+`fonds_http_request`/`fonds_operation` log bytes/rows. Logs exclude source
+values, credentials, provider identifiers; the [operator CLI](local-setup.md#operator-commands) gives bounded
 reports and temporary raw archives.
 
 The [API reference](../api.md#operations) lists the refresh tools and routes and
