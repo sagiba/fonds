@@ -42,11 +42,10 @@ delivery keep their own storage without a second financial model.
 
 ## Collection and evidence
 
-Each collection unit, the recent window or one backfill month, commits its captures
-and their safe collection context before extraction, normally as one run, also when
-interrupted or stopped; a crash first loses only that unit's responses, which its
-resume requests again. A provider that assembles one capture from several
-responses says in its guide what an interrupted unit loses. Financial application
+Each refresh month or recent window commits its captures and safe collection
+context together before extraction, even when interrupted or stopped;
+[resuming](api.md#refreshes) refetches what a crash loses. Provider guides state
+what interrupting a multi-response capture loses. Financial application
 is a separate transaction that commits transactions, events and the run's applied
 marker together, so a failure leaves the evidence for retry. Provider calls never
 run inside financial write transactions.
@@ -154,11 +153,10 @@ Repeated omissions advance receipts quietly. Reappearance must postdate owner
 removal. [API fields](api.md#fields) owns inspectable state and queries.
 
 Adapters may reject an implausibly empty recent capture while covered, eligible
-rows remain. The rejection is applied evidence that cannot be replayed into the
-ledger: a run holding only such captures fails `implausible_empty`; otherwise
-the rest of its run still applies and the run is at most `partial`. Legitimate
-final-population disappearance can also be blocked until completeness is
-established; cancellation reconciliation is not guaranteed.
+rows remain. The capture alone fails `implausible_empty`, as applied evidence
+never replayed into the ledger. Legitimate final-population disappearance can
+also be blocked until completeness is established; cancellation reconciliation
+is not guaranteed.
 
 ## Purchases and billed lines
 
