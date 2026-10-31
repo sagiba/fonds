@@ -59,13 +59,47 @@ export function bytesReadSince(tx: unknown): () => number | undefined {
 
 type BytesObserver = (bytesRead: number) => void;
 
+/**
+ * Attributes each transaction body's received bytes to the observer of the
+ * async context that started it, once, whether the body returns or throws.
+ */
+export function transactionByteMeter() {
+  const observers = new AsyncLocalStorage<BytesObserver>();
+  const readings = new WeakMap<object, () => number | undefined>();
+  return {
+    run: <T>(work: () => Promise<T>, observe: BytesObserver) =>
+      observers.run(observe, work),
+    async measure<Tx extends object, T>(
+      tx: Tx,
+      work: (tx: Tx) => Promise<T>,
+    ): Promise<T> {
+      const reading = bytesReadSince(tx);
+      readings.set(tx, reading);
+      try {
+        return await work(tx);
+      } finally {
+        // Read before the driver commits and releases the client to others.
+        const bytesRead = reading();
+        const observe = observers.getStore();
+        if (observe && bytesRead !== undefined) {
+          try {
+            observe(bytesRead);
+          } catch {
+            // A failing observer never changes the transaction's result.
+          }
+        }
+      }
+    },
+    bytesRead: (tx: object) => readings.get(tx)?.(),
+  };
+}
+
 function postgresDatabase(
   orm: NodePgDatabase<typeof schema>,
   identity: object,
-  observers: AsyncLocalStorage<BytesObserver>,
+  meter: ReturnType<typeof transactionByteMeter>,
   beforeTransaction?: () => void,
 ): StoreDatabase<statements.Executor> {
-  const readings = new WeakMap<object, () => number | undefined>();
   return {
     backend: "postgres",
     identity,
@@ -73,29 +107,11 @@ function postgresDatabase(
     execute: async (statement) => statement,
     transaction: (work) => {
       beforeTransaction?.();
-      return orm.transaction(
-        async (tx) => {
-          const reading = bytesReadSince(tx);
-          readings.set(tx, reading);
-          try {
-            return await work(tx);
-          } finally {
-            // Read before drizzle commits and releases the client to others.
-            const bytesRead = reading();
-            const observe = observers.getStore();
-            if (observe && bytesRead !== undefined) {
-              try {
-                observe(bytesRead);
-              } catch {
-                // A failing observer never changes the transaction's result.
-              }
-            }
-          }
-        },
-        { isolationLevel: "read committed" },
-      );
+      return orm.transaction((tx) => meter.measure(tx, work), {
+        isolationLevel: "read committed",
+      });
     },
-    bytesRead: (tx) => readings.get(tx)?.(),
+    bytesRead: meter.bytesRead,
   };
 }
 
@@ -108,9 +124,9 @@ export function openPostgresDatabase(config: PoolConfig | Pool) {
     pool.on("error", () => console.error("PostgreSQL idle connection failed."));
   }
   const orm = drizzle(pool, { schema });
-  const observers = new AsyncLocalStorage<BytesObserver>();
+  const meter = transactionByteMeter();
 
-  const database = postgresDatabase(orm, orm, observers);
+  const database = postgresDatabase(orm, orm, meter);
 
   /** The same renewed, token-fenced lease as SQLite: no session is held while a provider is called. */
   function withCollectionLock<T>(
@@ -132,7 +148,7 @@ export function openPostgresDatabase(config: PoolConfig | Pool) {
         lockedStore: (holder, signal) =>
           lockedCollectionStore(
             {
-              ...postgresDatabase(orm, { holder }, observers, () =>
+              ...postgresDatabase(orm, { holder }, meter, () =>
                 signal.throwIfAborted(),
               ),
               fence: (tx) => statements.fenceLease(tx, connectionId, holder),
@@ -158,8 +174,7 @@ export function openPostgresDatabase(config: PoolConfig | Pool) {
      * outside a transaction share pooled clients the store never holds, so
      * they are not counted.
      */
-    meterDbBytes: <T>(work: () => Promise<T>, observe: BytesObserver) =>
-      observers.run(observe, work),
+    meterDbBytes: meter.run,
     close: () => pool.end(),
   };
 }
