@@ -131,17 +131,12 @@ Refreshes run serially under each connection's
 [refresh lease](../../src/application/collection-lock.ts), across processes;
 each month or recent window is bounded at ten minutes.
 
-`fonds_sync` emits refresh/capture IDs, stage/reason codes, counts, durations and
-failure categories. `observed` counts accepted identities per capture;
-`extracted` counts parser inputs; reconciliation entries also count the
-`ledgerRows`, `priorRuns` and `removals` they loaded. To trace data volume,
-`fonds_http_request` carries `requestBytes` (declared length) and
-`responseBytes` (body bytes sent; a streamed body logs when it ends, an MCP
-subscription when it closes), and `fonds_operation` carries each call's
-`operation`, `outcome`, `durationMs`, `outputBytes` and page `rowsReturned`.
-Logs exclude source values, credentials and private provider identifiers. For a
-bounded report or temporary raw archives, use the
-[operator CLI](local-setup.md#operator-commands).
+`fonds_sync` emits refresh/capture IDs, stage/reason codes, durations, failure
+categories and counts (`observed`: accepted identities per capture;
+`extracted`: parser inputs); `fonds_http_request` and `fonds_operation` log
+bytes and rows. Logs exclude source values, credentials and private provider
+identifiers; the [operator CLI](local-setup.md#operator-commands) gives bounded
+reports and temporary raw archives.
 
 The [API reference](../api.md#operations) lists the refresh tools and routes and
 their grants. The SQLite server and the PostgreSQL loopback launcher offer the
