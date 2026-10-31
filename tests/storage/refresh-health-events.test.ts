@@ -58,9 +58,13 @@ for (const backend of backends) {
       );
     }
 
-    function finish(id: string, finishedAt: string) {
+    function finish(
+      id: string,
+      finishedAt: string,
+      status: "failed" | "completed" = "failed",
+    ) {
       return db.withCollectionLock(connectionId, (locked) =>
-        locked.updateRefresh(id, { status: "failed", finishedAt }),
+        locked.updateRefresh(id, { status, finishedAt }),
       );
     }
 
@@ -136,7 +140,7 @@ for (const backend of backends) {
       expect(await healthEvents()).toHaveLength(2);
     });
 
-    it("ends the block when a finished refresh no longer needs attention, whatever its status", async () => {
+    it("keeps the block through a retry short of completion and ends it when one completes", async () => {
       await failedRun("blocked", "authentication_failed");
       await finish("blocked", "2040-01-01T10:00:00.000Z");
       await failedRun("network", "network_error");
@@ -146,8 +150,9 @@ for (const backend of backends) {
         trigger: "manual",
         status: "failed",
         failureCodes: ["network_error"],
-        requiresAttention: false,
+        requiresAttention: true,
       };
+      // A failed retry is a failure only: the block neither restarts nor ends.
       expect((await healthEvents()).slice(2)).toMatchObject([
         {
           type: "refresh.failed",
@@ -158,16 +163,28 @@ for (const backend of backends) {
           },
           after: network,
         },
-        {
+      ]);
+      expect(await healthEvents()).toHaveLength(3);
+
+      await failedRun("completed", "network_error");
+      await finish("completed", "2040-01-01T12:00:00.000Z", "completed");
+      expect((await healthEvents()).slice(3)).toEqual([
+        expect.objectContaining({
           type: "refresh.recovered",
-          before: { refreshId: "blocked", requiresAttention: true },
-          after: network,
-        },
+          before: network,
+          after: {
+            refreshId: "completed",
+            trigger: "manual",
+            status: "completed",
+            failureCodes: [],
+            requiresAttention: false,
+          },
+        }),
       ]);
 
       // Another failure without attention is a failure only.
       await failedRun("again", "network_error");
-      await finish("again", "2040-01-01T12:00:00.000Z");
+      await finish("again", "2040-01-01T13:00:00.000Z");
       expect(
         (await healthEvents()).slice(4).map((event) => event.type),
       ).toEqual(["refresh.failed"]);

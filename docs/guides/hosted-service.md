@@ -154,8 +154,8 @@ block and its end. Owners may retry manually once an hour, or POST `{}` to
 `/internal/refresh/recent` on the public origin with
 `Authorization: Bearer <FONDS_REFRESH_SECRET>`, or run
 `fonds refresh --connection …`. That route refreshes every target past the
-block and the cooldown, really calling each provider; the Neon runbook wraps it
-as `neon:smoke --refresh`. A continuation slice logs in again only ten minutes
+block and cooldown, really calling each provider, wrapped by
+`neon:smoke --refresh`. A continuation slice logs in again only ten minutes
 after the previous slice's login attempt. An `implausible_empty` rejection
 ([design](../design.md#identity-corrections-and-absence)) is logged in
 `fonds_refresh` but sets no attention block: the cooldown still applies, and

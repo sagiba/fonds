@@ -612,8 +612,8 @@ values. `summary` appears on `sync.baseline` events as `{transactionCount, histo
 | `transaction.review_required`, `transaction.review_resolved`       | Review state changed.                                                                                                               |
 | `annotation.updated`                                               | The owner changed an annotation, or undid a change.                                                                                 |
 | `refresh.failed`                                                   | A refresh finished `partial` or `failed`.                                                                                           |
-| `refresh.attention_required`                                       | Its connection began needing attention: refreshes wait for an operator retry.                                                       |
-| `refresh.recovered`                                                | A finished refresh no longer needs attention, ending that wait.                                                                     |
+| `refresh.attention_required`                                       | Its connection began needing attention: scheduled refreshes wait for a completed retry.                                             |
+| `refresh.recovered`                                                | A retry completed, ending that wait.                                                                                                |
 
 Events are thin. They identify records to refetch in their current state, and carry
 no object snapshot. Neither `created` nor `imported` proves when spending occurred.

@@ -466,9 +466,13 @@ function buildStore<Db>(
           throw new NotFoundError("Refresh not found");
         }
         const { window, counts, ...fields } = progress;
-        // A refresh's terminal status and its final attention commit together.
         const { status } = fields;
-        if (status && isExecuted({ status }) && isActive(row)) {
+        const finishing = status && isExecuted({ status }) && isActive(row);
+        const previous = finishing
+          ? (await statements.lastExecutedRefresh(tx, row.connectionId))[0]
+          : undefined;
+        // A refresh's terminal status and its final attention commit together.
+        if (finishing) {
           fields.requiresAttention = finalAttention(
             {
               status,
@@ -476,7 +480,7 @@ function buildStore<Db>(
                 fields.requiresAttention ?? row.requiresAttention,
               providerStopReason: row.providerStopReason,
             },
-            (await statements.lastExecutedRefresh(tx, row.connectionId))[0],
+            previous,
           );
         }
         const cumulative = counts && { ...counts };
@@ -501,10 +505,7 @@ function buildStore<Db>(
           priorRuns: [],
           removals: [],
         });
-        if (isActive(row) && set.status && !isActive({ status: set.status })) {
-          const previous = (
-            await statements.lastExecutedRefresh(tx, row.connectionId)
-          )[0];
+        if (finishing) {
           health.events.push(
             ...refreshHealthEvents(
               previous,
