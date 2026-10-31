@@ -194,7 +194,6 @@ or failed execution is retried for about a minute; an active refresh then
 resumes on the next scheduler tick, start or `get_refresh`, and expires a day
 after creation. `completed` means the requested work succeeded, not that history
 is complete; see [refresh behavior](guides/hosted-service.md#refresh-and-scheduling).
-No change event announces completion.
 
 ## Sync run
 
@@ -592,12 +591,12 @@ request-result replay is not implemented.
 
 Each [event feed](#lists-and-cursors) entry is:
 
-`{id, type, connectionId, transactionId, syncRunId, createdAt, actor, changedFields?, summary?}`
+`{id, type, connectionId, transactionId, syncRunId, createdAt, actor, changedFields?, summary?, refreshId?}`
 
 `transactionId` and `syncRunId` are nullable. `changedFields` names the changed
 [versioned fields](#versioned-fields) of a `transaction.updated` event, never their
-values. `summary` appears on `sync.baseline` events as `{transactionCount, historical}`.
-Event IDs are integers, ordered ascending.
+values. `summary` appears on `sync.baseline` events as `{transactionCount, historical}`,
+`refreshId` on `refresh.*` events. Event IDs are integers, ordered ascending.
 
 | Type                                                               | Meaning                                                                                                                             |
 | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
@@ -611,6 +610,9 @@ Event IDs are integers, ordered ascending.
 | `transaction.unlisted`, `transaction.restored`                     | A comparable response omitted or returned the row (presence).                                                                       |
 | `transaction.review_required`, `transaction.review_resolved`       | Review state changed.                                                                                                               |
 | `annotation.updated`                                               | The owner changed an annotation, or undid a change.                                                                                 |
+| `refresh.failed`                                                   | A refresh finished `partial` or `failed`.                                                                                           |
+| `refresh.attention_required`                                       | Its connection began needing attention: refreshes wait for an operator retry.                                                       |
+| `refresh.recovered`                                                | A finished refresh no longer needs attention, ending that wait.                                                                     |
 
 Events are thin. They identify records to refetch in their current state, and carry
 no object snapshot. Neither `created` nor `imported` proves when spending occurred.

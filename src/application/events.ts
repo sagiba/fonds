@@ -186,7 +186,7 @@ export interface EventServiceDependencies {
 const definition = {
   name: "changes.available",
   description:
-    "Committed financial or annotation changes are available, including imports and posting matches. Pass after to list_events as its cursor to read the new events (highWaterMark is the cursor after the last one); this wake-up is not itself a purchase alert.",
+    "Committed financial, annotation or refresh health changes are available, including imports and posting matches. Pass after to list_events as its cursor to read the new events (highWaterMark is the cursor after the last one); this wake-up is not itself a purchase alert.",
   delivery: ["webhook"],
   inputSchema: z.toJSONSchema(argumentsSchema),
   payloadSchema: z.toJSONSchema(

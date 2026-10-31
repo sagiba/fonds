@@ -1,4 +1,9 @@
 import type { RefreshFailureCode } from "../domain/model.js";
+import type {
+  EventType,
+  LedgerEventWrite,
+  RefreshHealthDocument,
+} from "../domain/records.js";
 import {
   FAILURE_REASONS,
   type FailureReason,
@@ -176,6 +181,79 @@ export function skippedRefresh(
     requiresAttention: reason === "requires_attention",
     windows: [],
   };
+}
+
+/** What a refresh health event records of a finished refresh. */
+export type RefreshHealth = Pick<
+  Refresh,
+  | "id"
+  | "connectionId"
+  | "trigger"
+  | "status"
+  | "failureCodes"
+  | "requiresAttention"
+>;
+
+const FINISHED_STATUSES = ["completed", "partial", "failed"] as const;
+
+function finishedStatus(status: RefreshStatus) {
+  return FINISHED_STATUSES.find((finished) => finished === status);
+}
+
+function healthDocument(
+  refresh: RefreshHealth,
+  status: RefreshHealthDocument["status"],
+): RefreshHealthDocument {
+  return {
+    refreshId: refresh.id,
+    trigger: refresh.trigger,
+    status,
+    failureCodes: [...refresh.failureCodes],
+    requiresAttention: refresh.requiresAttention,
+  };
+}
+
+/**
+ * The health events of an active refresh entering a finished state, committed
+ * with that state. `previous` is the connection's last finished refresh, whose
+ * attention flag is the block admission enforces, so attention is announced
+ * when the block starts and when it ends, never per skipped occurrence.
+ */
+export function refreshHealthEvents(
+  previous: RefreshHealth | undefined,
+  refresh: RefreshHealth,
+  createdAt: string,
+): LedgerEventWrite[] {
+  const status = finishedStatus(refresh.status);
+  if (!status) {
+    return [];
+  }
+  const previousStatus = previous && finishedStatus(previous.status);
+  const before =
+    previous && previousStatus
+      ? healthDocument(previous, previousStatus)
+      : null;
+  const after = healthDocument(refresh, status);
+  const blocked = before?.requiresAttention ?? false;
+  const types: EventType[] = [];
+  if (status !== "completed") {
+    types.push("refresh.failed");
+  }
+  if (!blocked && after.requiresAttention) {
+    types.push("refresh.attention_required");
+  } else if (blocked && !after.requiresAttention) {
+    types.push("refresh.recovered");
+  }
+  return types.map((type) => ({
+    type,
+    connectionId: refresh.connectionId,
+    transactionId: null,
+    runId: null,
+    createdAt,
+    actor: "system",
+    before,
+    after,
+  }));
 }
 
 /** Refresh progress; only a collection's lease-fenced store offers it. */

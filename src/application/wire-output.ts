@@ -755,6 +755,8 @@ const baselineSummarySchema = z.object({
   historical: z.boolean().default(false),
 });
 
+const refreshReferenceSchema = z.object({ refreshId: idSchema });
+
 export const eventOutputSchema = z
   .object({
     id: versionSchema,
@@ -769,6 +771,7 @@ export const eventOutputSchema = z
       .max(changedFieldNames.length)
       .optional(),
     summary: baselineSummarySchema.strict().optional(),
+    refreshId: idSchema.optional(),
   })
   .strict();
 
@@ -814,6 +817,10 @@ export function presentWireEvent(row: LedgerEvent) {
     row.type === "sync.baseline"
       ? baselineSummarySchema.safeParse(row.after)
       : undefined;
+  // Thin like every event: a refresh event names only the refresh to refetch.
+  const refresh = row.type.startsWith("refresh.")
+    ? refreshReferenceSchema.safeParse(row.after)
+    : undefined;
   return {
     id: row.id,
     type: row.type,
@@ -824,6 +831,7 @@ export function presentWireEvent(row: LedgerEvent) {
     actor: row.actor,
     ...(changedFields.length > 0 && { changedFields }),
     ...(summary?.success && { summary: summary.data }),
+    ...(refresh?.success && { refreshId: refresh.data.refreshId }),
   };
 }
 

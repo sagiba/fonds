@@ -23,9 +23,11 @@ import {
 } from "../application/query-inputs.js";
 import {
   type Admission,
+  isActive,
   type NotStartedReason,
   type Refresh,
   REFRESH_COOLDOWN_MS,
+  refreshHealthEvents,
   type RefreshStore,
   type RefreshWriter,
   skippedRefresh,
@@ -493,10 +495,31 @@ function buildStore<Db>(
           // Its counts keep retried failures; no failure explains a completed refresh.
           ...(fields.status === "completed" && { failureCodes: [] }),
         };
+        // Health events commit with the finished state they announce.
+        const health = new FinancialPlan({
+          connection,
+          rows: [],
+          annotations: [],
+          priorRuns: [],
+          removals: [],
+        });
+        if (isActive(row) && set.status && !isActive({ status: set.status })) {
+          const previous = (
+            await statements.lastExecutedRefresh(tx, row.connectionId)
+          )[0];
+          health.events.push(
+            ...refreshHealthEvents(
+              previous,
+              { ...row, ...set },
+              set.finishedAt ?? new Date().toISOString(),
+            ),
+          );
+        }
         await commit(tx, connection, [
           ...(Object.keys(set).length
             ? [statements.updateRefresh(tx, id, set)]
             : []),
+          ...(health.events.length ? statements.applyPlan(tx, health) : []),
           ...(window
             ? [
                 statements.updateRefreshWindow(

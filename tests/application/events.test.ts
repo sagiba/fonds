@@ -460,6 +460,65 @@ describe("durable transaction event operations", () => {
     expect(page.nextCursor).toBe(data.highWaterMark);
   });
 
+  it("wakes subscribers for refresh health and lists it by refresh ID only", async () => {
+    const { service, source, changes, sendSignedWebhook } = setup();
+    await service.subscribe(principal, params);
+    const health = {
+      refreshId: "synthetic-refresh",
+      trigger: "manual",
+      status: "partial",
+      failureCodes: ["authentication_failed"],
+      requiresAttention: true,
+    };
+    changes.push(
+      ...(["refresh.failed", "refresh.attention_required"] as const).map(
+        (type, index): LedgerEvent => ({
+          id: index + 1,
+          connectionId: "cal",
+          type,
+          transactionId: null,
+          runId: null,
+          createdAt: "2040-01-01T00:01:00Z",
+          actor: "system",
+          before: null,
+          after: health,
+        }),
+      ),
+    );
+    await service.deliver();
+    expect(sendSignedWebhook).toHaveBeenCalledOnce();
+    const data = sendSignedWebhook.mock.calls[0]![0].body.data as {
+      after: string;
+    };
+    expect(data).toEqual({
+      connectionId: "cal",
+      after: encodeCursor("event", 0),
+      highWaterMark: encodeCursor("event", 2),
+    });
+    const listEvents = createApplication({
+      backend: "sqlite",
+      listEvents: source.listEvents,
+    } as never).operations.find(
+      (operation) => operation.name === "list_events",
+    )!;
+    const page = (await listEvents.execute({
+      connectionId: "cal",
+      cursor: data.after,
+    })) as { data: unknown[] };
+    expect(page.data).toEqual(
+      ["refresh.failed", "refresh.attention_required"].map((type, index) => ({
+        id: index + 1,
+        type,
+        connectionId: "cal",
+        transactionId: null,
+        syncRunId: null,
+        createdAt: "2040-01-01T00:01:00Z",
+        actor: "system",
+        refreshId: "synthetic-refresh",
+      })),
+    );
+  });
+
   it("coalesces imported rows into one wake-up instead of one notification per row", async () => {
     const { service, changes, change, sendSignedWebhook } = setup();
     await service.subscribe(principal, params);

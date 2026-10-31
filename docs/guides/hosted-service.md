@@ -144,12 +144,13 @@ refreshes by itself, apart from resuming refreshes a stopped process left active
 A lost or expired client request is not proof the provider work did not run;
 list the connection's refreshes before retrying.
 
-Authentication failure or challenge marks the refresh `requiresAttention` and
-blocks ordinary and scheduled refreshes until an operator retry succeeds. After
+Authentication failure or challenge sets `requiresAttention`, blocking ordinary
+and scheduled refreshes until an operator retry succeeds;
+[events](../api.md#events) announce the block and its end. After
 resolving it, POST `{}` to `/internal/refresh/recent` on the public origin with
 `Authorization: Bearer <FONDS_REFRESH_SECRET>`, or run
 `fonds refresh --connection …`. The route refreshes every target past
-the block and the cooldown, really calling each provider; the Neon runbook wraps
+the block and cooldown, really calling each provider; the Neon runbook wraps
 it as `neon:smoke --refresh`. An `implausible_empty` rejection
 ([design](../design.md#identity-corrections-and-absence)) is logged in
 `fonds_refresh` but sets no attention block: the cooldown still applies, and
