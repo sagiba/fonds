@@ -12,6 +12,7 @@ import {
   lte,
   ne,
   or,
+  type SQL,
   sql,
   type Table,
 } from "drizzle-orm";
@@ -302,6 +303,44 @@ export function totalsPartColumns(
         and ${table.originalCurrency} is not null and ${table.currency} is not null
         and ${table.originalCurrency} <> ${table.currency} then 1 else 0 end)`.mapWith(
         Number,
+      ),
+    },
+  };
+}
+
+/**
+ * Included rows' money aggregates under one group key, for a grouped totals
+ * statement that groups by `key`, currency and (in `spending`) basis.
+ */
+export function groupedMoneyColumns(
+  table: TransactionColumns,
+  perspective: Exclude<Perspective, "all">,
+  key: SQL,
+) {
+  const amountBasis =
+    perspective === "spending" ? sql`${table.amountBasis}` : undefined;
+  return {
+    where: sql`(${totalsBucket(table)}) = 'included'`,
+    groups: [
+      key,
+      sql`${table.currency}`,
+      ...(amountBasis ? [amountBasis] : []),
+    ],
+    columns: {
+      groupKey: sql<string | null>`${key}`.as("group_key"),
+      currency: sql<string>`${table.currency}`.as("currency"),
+      amountBasis: (amountBasis ?? sql`null`).as("amount_basis") as SQL.Aliased<
+        Transaction["amountBasis"] | null
+      >,
+      count: sql<number>`count(*)`.as("row_count"),
+      amountMinor: sql<unknown>`cast(sum(${table.amountMinor}) as text)`.as(
+        "amount_minor",
+      ),
+      minMinor: sql<unknown>`cast(min(${table.amountMinor}) as text)`.as(
+        "min_minor",
+      ),
+      maxMinor: sql<unknown>`cast(max(${table.amountMinor}) as text)`.as(
+        "max_minor",
       ),
     },
   };

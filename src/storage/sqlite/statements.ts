@@ -10,6 +10,7 @@ import {
   isNull,
   lt,
   max,
+  type SQL,
   sql,
   type Table,
 } from "drizzle-orm";
@@ -19,6 +20,7 @@ import type { SyncRunPageInput } from "../../application/financial-store.js";
 import type {
   CatalogQuery,
   EventQuery,
+  TotalsGrouping,
   TransactionQuery,
 } from "../../application/query-inputs.js";
 import type { RefreshPageInput } from "../../application/refreshes.js";
@@ -33,6 +35,7 @@ import {
   currentRows,
   eventFilter,
   excludedSet,
+  groupedMoneyColumns,
   keysetSeek,
   listColumns,
   planCondition,
@@ -274,6 +277,115 @@ export function transactionSummaryPage(db: Executor, input: TransactionQuery) {
     .where(pageCondition(input))
     .orderBy(...transactionOrder(schema.transactions));
   return input.limit === undefined ? query : query.limit(input.limit);
+}
+
+const dateColumns = {
+  transaction: schema.transactions.transactionDate,
+  booking: schema.transactions.bookingDate,
+  billing: schema.transactions.billingDate,
+} as const;
+
+function groupKey(input: TransactionQuery, groupBy: TotalsGrouping): SQL {
+  const table = schema.transactions;
+  const date = dateColumns[input.dateRole ?? "transaction"];
+  switch (groupBy) {
+    case "merchant":
+      return sql`${table.merchantName}`;
+    case "month":
+      return sql`substr(${date}, 1, 7)`;
+    case "year":
+      return sql`substr(${date}, 1, 4)`;
+    case "category":
+      return annotationCategory;
+    case "status":
+      return sql`${table.status}`;
+    case "kind":
+      return sql`${table.kind}`;
+    case "card":
+      return sql`${table.cardId}`;
+  }
+}
+
+/**
+ * Ranks groups by included rows, then key, with window functions over the
+ * aggregated money rows, so only the first `limit` groups leave the database.
+ */
+export function groupedTotals(
+  db: Executor,
+  input: TransactionQuery & { perspective: "spending" | "billing" },
+  groupBy: TotalsGrouping,
+  limit: number,
+) {
+  const money = groupedMoneyColumns(
+    schema.transactions,
+    input.perspective,
+    groupKey(input, groupBy),
+  );
+  const rows = db
+    .select(money.columns)
+    .from(schema.transactions)
+    .leftJoin(
+      schema.annotations,
+      eq(schema.annotations.transactionId, schema.transactions.id),
+    )
+    .where(
+      and(
+        transactionFilter(schema.transactions, input, schema.cards),
+        money.where,
+      ),
+    )
+    .groupBy(...money.groups)
+    .as("grouped_money");
+  const counted = db
+    .select({
+      groupKey: rows.groupKey,
+      currency: rows.currency,
+      amountBasis: rows.amountBasis,
+      count: rows.count,
+      amountMinor: rows.amountMinor,
+      minMinor: rows.minMinor,
+      maxMinor: rows.maxMinor,
+      groupRows:
+        sql<number>`sum(${rows.count}) over (partition by ${rows.groupKey})`.as(
+          "group_rows",
+        ),
+    })
+    .from(rows)
+    .as("counted_groups");
+  const ranked = db
+    .select({
+      groupKey: counted.groupKey,
+      currency: counted.currency,
+      amountBasis: counted.amountBasis,
+      count: counted.count,
+      amountMinor: counted.amountMinor,
+      minMinor: counted.minMinor,
+      maxMinor: counted.maxMinor,
+      groupRank:
+        sql<unknown>`dense_rank() over (order by ${counted.groupRows} desc, ${counted.groupKey} asc nulls last)`.as(
+          "group_rank",
+        ),
+    })
+    .from(counted)
+    .as("ranked_groups");
+  return db
+    .select({
+      groupKey: ranked.groupKey,
+      groupRank: ranked.groupRank,
+      currency: ranked.currency,
+      amountBasis: ranked.amountBasis,
+      count: sql<number>`${ranked.count}`.mapWith(Number),
+      amountMinor: ranked.amountMinor,
+      minMinor: ranked.minMinor,
+      maxMinor: ranked.maxMinor,
+    })
+    .from(ranked)
+    .where(sql`${ranked.groupRank} <= ${limit}`)
+    .orderBy(
+      sql`${ranked.groupRank}`,
+      sql`${ranked.currency}`,
+      sql`${ranked.amountBasis}`,
+    );
 }
 
 export function totalsParts(

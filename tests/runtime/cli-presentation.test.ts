@@ -11,10 +11,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { z } from "zod";
 
 import {
-  totalsOutputSchema,
   transactionDetailOutputSchema,
   transactionListOutputSchema,
   transactionOutputSchema,
+  ungroupedTotalsOutputSchema,
 } from "../../src/application/wire-output.js";
 import { main } from "../../src/cli.js";
 import { commandLine } from "../../src/runtime/cli-invocation.js";
@@ -748,7 +748,7 @@ describe("connections view", () => {
 
 describe("totals view", () => {
   it("keeps every group separate and names exclusions and fees", () => {
-    const totals = totalsOutputSchema.parse({
+    const totals = ungroupedTotalsOutputSchema.parse({
       totals: [
         {
           currency: "ILS",
@@ -784,7 +784,7 @@ describe("totals view", () => {
 
   it("names every exclusion, including proven source absence", () => {
     const text = totalsView(
-      totalsOutputSchema.parse({
+      ungroupedTotalsOutputSchema.parse({
         totals: [],
         fxFees: [],
         fxFeeUnknownCount: 0,
@@ -809,7 +809,7 @@ describe("totals view", () => {
 
   it("stacks groups that do not fit, keeping each amount whole", () => {
     const text = totalsView(
-      totalsOutputSchema.parse({
+      ungroupedTotalsOutputSchema.parse({
         totals: [
           {
             currency: "ILS",
@@ -843,7 +843,7 @@ describe("totals view", () => {
 
   it("omits the basis for billing groups and never reads empty totals as zero", () => {
     const billing = totalsView(
-      totalsOutputSchema.parse({
+      ungroupedTotalsOutputSchema.parse({
         totals: [{ currency: "ILS", amount: "-250.00" }],
         fxFees: [],
         fxFeeUnknownCount: 0,
@@ -870,7 +870,7 @@ describe("totals view", () => {
       "Each currency and basis is a separate total",
     );
     const empty = totalsView(
-      totalsOutputSchema.parse({
+      ungroupedTotalsOutputSchema.parse({
         totals: [],
         fxFees: [],
         fxFeeUnknownCount: 0,

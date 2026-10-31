@@ -6,6 +6,7 @@ import type {
 import type {
   CatalogQuery,
   EventQuery,
+  TotalsGrouping,
   TransactionQuery,
 } from "../application/query-inputs.js";
 import type {
@@ -107,6 +108,17 @@ export interface DeferredEvidenceWrite {
   lastSeenRunId: string;
 }
 
+export interface GroupedMoneyRow {
+  groupKey: string | null;
+  groupRank: unknown;
+  currency: string;
+  amountBasis: Transaction["amountBasis"] | null;
+  count: number;
+  amountMinor: unknown;
+  minMinor: unknown;
+  maxMinor: unknown;
+}
+
 export type TotalsPartRow = Omit<TotalsPart, "amountMinor" | "fxFeeMinor"> & {
   amountMinor: unknown;
   fxFeeMinor: unknown;
@@ -142,6 +154,17 @@ export interface Statements<Db> {
     db: Db,
     input: TransactionQuery,
   ): PromiseLike<SummaryRow[]>;
+  /**
+   * Included rows' money per group, currency and (in `spending`) basis, for
+   * the first `limit` groups by included rows then key (null last). A
+   * category key is the category's JSON text.
+   */
+  groupedTotals(
+    db: Db,
+    input: TransactionQuery & { perspective: Exclude<Perspective, "all"> },
+    groupBy: TotalsGrouping,
+    limit: number,
+  ): PromiseLike<GroupedMoneyRow[]>;
   /** `TotalsPart` aggregates, with sums as the driver returns them. */
   totalsParts(
     db: Db,

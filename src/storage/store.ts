@@ -13,6 +13,7 @@ import {
   connectionInputSchema,
   COVERAGE_MAX_MONTHS,
   type InternalStore,
+  type TotalsGroup,
   type TransactionSummary,
 } from "../application/financial-store.js";
 import {
@@ -53,6 +54,8 @@ import {
   InvalidInputError,
   NotFoundError,
 } from "../domain/errors.js";
+import { toSafeMinor } from "../domain/money.js";
+import { compareStrings } from "../domain/observations.js";
 import {
   editSchema,
   planAnnotation,
@@ -1681,6 +1684,58 @@ function buildStore<Db>(
           fxFeeMinor: exactInteger(row.fxFeeMinor),
         })),
       );
+    },
+    getGroupedTotals: async (input, groupBy, limit) => {
+      const filters = totalsSchema.parse(input);
+      await checkScope(filters);
+      const rows = await db.execute(
+        statements.groupedTotals(
+          db.root,
+          { ...filters, perspective: filters.perspective },
+          groupBy,
+          limit + 1,
+        ),
+      );
+      await checkEmpty(rows, filters.connectionId);
+      const groups = new Map<unknown, TotalsGroup>();
+      for (const row of rows) {
+        const rank = exactInteger(row.groupRank);
+        let group = groups.get(rank);
+        if (!group) {
+          const key: unknown =
+            groupBy === "category" && row.groupKey !== null
+              ? JSON.parse(row.groupKey)
+              : row.groupKey;
+          group = {
+            key: typeof key === "string" ? key : null,
+            includedCount: 0,
+            totals: [],
+          };
+          groups.set(rank, group);
+        }
+        group.includedCount += row.count;
+        group.totals.push({
+          currency: row.currency,
+          amountBasis: row.amountBasis,
+          count: row.count,
+          amountMinor: toSafeMinor(exactInteger(row.amountMinor)),
+          minMinor: toSafeMinor(exactInteger(row.minMinor)),
+          maxMinor: toSafeMinor(exactInteger(row.maxMinor)),
+        });
+      }
+      const ordered = [...groups.values()];
+      for (const group of ordered) {
+        group.totals.sort((left, right) =>
+          compareStrings(
+            `${left.amountBasis ?? ""}:${left.currency}`,
+            `${right.amountBasis ?? ""}:${right.currency}`,
+          ),
+        );
+      }
+      return {
+        groups: ordered.slice(0, limit),
+        truncated: ordered.length > limit,
+      };
     },
     listEvents: async (input) => {
       const filters = cursorSchema.parse(input ?? {});

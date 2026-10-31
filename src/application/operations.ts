@@ -25,7 +25,8 @@ import {
   encodeCursor,
   encodeKeyset,
   listCursorSchema,
-  totalsSchema,
+  TOTALS_MAX_GROUPS,
+  totalsInputSchema,
   transactionListSchema,
 } from "./query-inputs.js";
 import {
@@ -57,6 +58,7 @@ import {
   presentRefreshDetail,
   presentRefreshStart,
   presentSyncRun,
+  presentTotalsGroup,
   presentTransactionReceipt,
   presentTransactionSummary,
   presentWireEvent,
@@ -360,6 +362,7 @@ const totalsDescription = [
   "all is rejected because it would double-count.",
   "Never add groups together across currencies, bases or perspectives. fxFees sums published FX fees per currency; fxFeeUnknownCount counts included converted rows whose fee is unknown, which is never zero.",
   "Pending, authorization, removed, superseded, unknown, ambiguous, income and transfer rows are excluded. No balances or exchange rates are inferred.",
+  "groupBy (merchant, month, year, category, status, kind or card) returns the included rows' money groups per key instead, each with count, min and max, the busiest groups first; month and year follow dateRole, category is the owner's annotation category, and truncated means more groups existed. Group keys are exact values, never merged; a null key collects rows without one.",
 ].join(" ");
 
 const identifierKeys = [
@@ -485,7 +488,7 @@ const definitions = named({
   ),
   get_transaction_totals: define(
     totalsDescription,
-    totalsSchema,
+    totalsInputSchema,
     totalsOutputSchema,
     "read",
   ),
@@ -788,8 +791,32 @@ export function createApplication(
         includeEvidence,
       ),
     }),
-    get_transaction_totals: async (input) =>
-      presentWireTotals(await store.getTotals(input)),
+    get_transaction_totals: async ({ groupBy, ...filters }) => {
+      if (groupBy === undefined) {
+        return presentWireTotals(await store.getTotals(filters));
+      }
+      const result = await store.getGroupedTotals(
+        filters,
+        groupBy,
+        TOTALS_MAX_GROUPS,
+      );
+      // Long keys can exceed the response budget before the group limit.
+      const output = {
+        groupBy,
+        groups: [] as ReturnType<typeof presentTotalsGroup>[],
+        truncated: false,
+      };
+      for (const group of result.groups) {
+        output.groups.push(presentTotalsGroup(group));
+        if (outputByteLength(output) > OUTPUT_MAX_BYTES) {
+          output.groups.pop();
+          output.truncated = true;
+          return output;
+        }
+      }
+      output.truncated = result.truncated;
+      return output;
+    },
     list_events: async ({ connectionId, cursor, limit }) => {
       const after = cursor === undefined ? 0 : decodeCursor("event", cursor);
       const rows = await store.listEvents({

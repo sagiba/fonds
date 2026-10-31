@@ -28,6 +28,7 @@ import type { SourceAdapter } from "../domain/source-adapter.js";
 import type {
   CatalogPageInput,
   EventPageInput,
+  TotalsGrouping,
   TransactionFilters,
   TransactionPageInput,
 } from "./query-inputs.js";
@@ -142,6 +143,30 @@ export interface ConnectionCoverage {
   lastFinished: Pick<Refresh, "requiresAttention" | "failureCodes"> | null;
 }
 
+/** One money group of included rows within a totals group. */
+export interface GroupedMoney {
+  currency: string;
+  /** Null in `billing`, which groups per currency only. */
+  amountBasis: Transaction["amountBasis"] | null;
+  count: number;
+  amountMinor: number;
+  minMinor: number;
+  maxMinor: number;
+}
+
+export interface TotalsGroup {
+  key: string | null;
+  includedCount: number;
+  totals: GroupedMoney[];
+}
+
+export interface GroupedTotals {
+  /** Most included rows first, then by key with null last. */
+  groups: TotalsGroup[];
+  /** More groups existed than were returned. */
+  truncated: boolean;
+}
+
 export interface UndoAnnotationInput {
   eventId: number;
   expectedVersion: number;
@@ -167,6 +192,12 @@ export interface FinancialStore {
   getTotals(
     input?: TransactionFilters,
   ): Promise<ReturnType<typeof totalsFromParts>>;
+  /** Totals of included rows per group, at most `limit` groups. */
+  getGroupedTotals(
+    input: TransactionFilters,
+    groupBy: TotalsGrouping,
+    limit: number,
+  ): Promise<GroupedTotals>;
   listEvents(input?: EventPageInput): Promise<LedgerEvent[]>;
   listSyncRuns(
     connectionId: string,

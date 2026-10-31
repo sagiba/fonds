@@ -422,6 +422,14 @@ describe("operation commands", () => {
         ["list_events", { connectionId: "synthetic-cli", limit: 3 }],
         ["list_sync_runs", { connectionId: "synthetic-cli", limit: 1 }],
         ["get_connection_coverage", { connectionId: "synthetic-cli" }],
+        [
+          "get_transaction_totals",
+          { connectionId: "synthetic-cli", groupBy: "merchant" },
+        ],
+        [
+          "list_transactions",
+          { connectionId: "synthetic-cli", view: "summary", limit: 3 },
+        ],
       ] as const) {
         await compare(name, input);
       }

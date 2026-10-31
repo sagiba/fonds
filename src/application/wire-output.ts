@@ -38,9 +38,15 @@ import {
   COVERAGE_MAX_MONTHS,
   type PublicConnection,
   type SyncRun,
+  type TotalsGroup,
   type TransactionSummary,
 } from "./financial-store.js";
-import { filtersSchema, listCursorSchema } from "./query-inputs.js";
+import {
+  filtersSchema,
+  listCursorSchema,
+  TOTALS_GROUPINGS,
+  TOTALS_MAX_GROUPS,
+} from "./query-inputs.js";
 import {
   FAILURE_REASONS,
   MAX_REFRESH_MONTHS,
@@ -767,7 +773,7 @@ export const unlinkOutputSchema = z
   })
   .strict();
 
-export const totalsOutputSchema = z
+export const ungroupedTotalsOutputSchema = z
   .object({
     // spending groups carry amountBasis; billing groups are per currency only.
     totals: z
@@ -793,6 +799,65 @@ export const totalsOutputSchema = z
       .strict(),
   })
   .strict();
+
+/** Grouped totals: the same money groups per key, with counts and extremes. */
+const groupedTotalsOutputSchema = z
+  .object({
+    groupBy: z.enum(TOTALS_GROUPINGS),
+    groups: z
+      .array(
+        z
+          .object({
+            key: nullableTextSchema,
+            includedCount: versionSchema,
+            totals: z
+              .array(
+                moneyOutputSchema
+                  .extend({
+                    amountBasis: amountBasisSchema.optional(),
+                    count: versionSchema,
+                    min: moneyOutputSchema.shape.amount,
+                    max: moneyOutputSchema.shape.amount,
+                  })
+                  .strict(),
+              )
+              .max(100),
+          })
+          .strict(),
+      )
+      .max(TOTALS_MAX_GROUPS),
+    truncated: z.boolean(),
+  })
+  .strict();
+
+/** Ungrouped members without groupBy, grouped members with it; never both. */
+export const totalsOutputSchema = ungroupedTotalsOutputSchema
+  .partial()
+  .extend(groupedTotalsOutputSchema.partial().shape)
+  .strict()
+  .refine((output) =>
+    output.groupBy === undefined
+      ? ungroupedTotalsOutputSchema.safeParse(output).success
+      : groupedTotalsOutputSchema.safeParse(output).success,
+  );
+
+export type UngroupedTotalsOutput = z.infer<typeof ungroupedTotalsOutputSchema>;
+
+export function presentTotalsGroup(group: TotalsGroup) {
+  const source = sourceTextPreview();
+  return {
+    key: source.text(group.key),
+    includedCount: group.includedCount,
+    totals: group.totals.map((money) => ({
+      currency: money.currency,
+      amount: minorToDecimal(money.amountMinor, money.currency),
+      ...(money.amountBasis !== null && { amountBasis: money.amountBasis }),
+      count: money.count,
+      min: minorToDecimal(money.minMinor, money.currency),
+      max: minorToDecimal(money.maxMinor, money.currency),
+    })),
+  };
+}
 
 export function presentWireTotals(result: ReturnType<typeof totalsFromParts>) {
   return {

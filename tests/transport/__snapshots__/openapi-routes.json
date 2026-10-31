@@ -282,7 +282,8 @@
       "query threeDSecureUsed",
       "query recurring",
       "query purchaseId",
-      "query perspective"
+      "query perspective",
+      "query groupBy"
     ],
     "responses": [
       "200",

@@ -516,6 +516,15 @@ where `excluded` is
   `not_returned` alone does not exclude valid money. Absence implies no refund or
   cancellation; no offsetting entry is invented. Empty totals prove no completeness.
 
+With `groupBy` (`merchant`, `month`, `year`, `category`, `status`, `kind` or
+`card`), the result is `{groupBy, groups, truncated}` instead. Each group
+`{key, includedCount, totals}` holds the included rows of one exact key: `month`
+and `year` use the `dateRole` date, `category` the annotation's, `card` the card
+ID, and `null` collects rows without one. Its `totals` are the money groups
+above, each adding `count`, `min` and `max`. Groups run from most included rows,
+then by key; at most 500, with `truncated` when more existed. Exclusion counts and
+FX fees appear only ungrouped.
+
 ## Pending-to-posted matching
 
 When a provider supports it, a pending authorization and its later posted row are

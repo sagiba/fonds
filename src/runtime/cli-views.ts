@@ -2,11 +2,11 @@ import type { z } from "zod";
 
 import type {
   connectionListOutputSchema,
-  totalsOutputSchema,
   transactionDetailOutputSchema,
   transactionListOutputSchema,
   transactionOutputSchema,
   transactionReadOutputSchema,
+  UngroupedTotalsOutput,
 } from "../application/wire-output.js";
 import type { SyncResult } from "../domain/plans/sync.js";
 import { option } from "./cli-invocation.js";
@@ -543,7 +543,7 @@ export const transactionView: View<
   ].join("\n");
 };
 
-type Totals = z.infer<typeof totalsOutputSchema>;
+type Totals = UngroupedTotalsOutput;
 
 /** Every exclusion reason; a new one fails to compile until it has a name. */
 const exclusions = {

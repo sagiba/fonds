@@ -242,6 +242,26 @@ export const totalsSchema = filtersSchema.safeExtend({
   perspective: z.enum(PERSPECTIVES).exclude(["all"]).default("spending"),
 });
 
+/** What grouped totals can group included rows by. */
+export const TOTALS_GROUPINGS = [
+  "merchant",
+  "month",
+  "year",
+  "category",
+  "status",
+  "kind",
+  "card",
+] as const;
+
+export type TotalsGrouping = (typeof TOTALS_GROUPINGS)[number];
+
+/** Most groups one grouped totals result returns. */
+export const TOTALS_MAX_GROUPS = 500;
+
+export const totalsInputSchema = totalsSchema.safeExtend({
+  groupBy: z.enum(TOTALS_GROUPINGS).optional(),
+});
+
 /** An amount bound in the filter currency's minor units. */
 export function amountBoundMinor(bound: string, currency: string): number {
   return decimalToMinor(bound, currency);
