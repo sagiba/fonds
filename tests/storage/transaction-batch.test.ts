@@ -138,6 +138,61 @@ for (const backend of backends) {
       expect(detailed.data[0]!.annotation.notes).toBe("Private synthetic note");
     });
 
+    // The libSQL HTTP server refuses PRAGMA, so it cannot store corrupt JSON.
+    it.skipIf(backend === "libsql-http")(
+      "reads compact records without the documents only full records decode",
+      async () => {
+        // Deliberately corrupt only this synthetic database: a full read must fail.
+        const corruption = {
+          sql: "UPDATE transactions SET provider_json = ?, source_aliases_json = ?, additional_information_json = ?",
+          args: ["invalid details", "invalid aliases", "invalid prose"],
+        };
+        if (db.driver.kind === "postgres") {
+          await db.raw(corruption.sql, corruption.args);
+        } else if (db.driver.kind === "libsql") {
+          const tx = await db.driver.client.transaction("write");
+          try {
+            await tx.execute("PRAGMA ignore_check_constraints = ON");
+            await tx.execute(corruption);
+            await tx.execute("PRAGMA ignore_check_constraints = OFF");
+            await tx.commit();
+          } finally {
+            tx.close();
+          }
+        } else {
+          const binding = db.driver.binding;
+          await binding.batch([
+            binding.prepare("PRAGMA ignore_check_constraints = ON"),
+            binding.prepare(corruption.sql).bind(...corruption.args),
+            binding.prepare("PRAGMA ignore_check_constraints = OFF"),
+          ]);
+        }
+        await expect(
+          invoke("get_transaction", { transactionId: "second" }),
+        ).rejects.toThrow();
+        expect(
+          await invoke("get_transaction", {
+            transactionId: "second",
+            detail: false,
+          }),
+        ).toMatchObject({
+          transaction: {
+            id: "second",
+            annotation: { category: "groceries", hasNotes: true },
+          },
+        });
+        expect(
+          await invoke("get_transactions", { ids: ["second", "first"] }),
+        ).toMatchObject({ data: [{ id: "second" }, { id: "first" }] });
+        await expect(
+          invoke("get_transaction", {
+            transactionId: "missing",
+            detail: false,
+          }),
+        ).rejects.toThrow("not_found");
+      },
+    );
+
     it("rejects duplicate, empty and oversized ID lists", async () => {
       for (const ids of [
         ["first", "first"],

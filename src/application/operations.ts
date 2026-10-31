@@ -805,13 +805,23 @@ export function createApplication(
         { filters },
       );
     },
-    get_transaction: async ({ transactionId, detail, includeEvidence }) => ({
-      transaction: presentWireTransaction(
-        await requireTransaction(transactionId),
-        detail,
-        includeEvidence,
-      ),
-    }),
+    get_transaction: async ({ transactionId, detail, includeEvidence }) => {
+      if (!detail) {
+        // A compact record needs only the list projection.
+        const [row] = await store.getTransactionListViews([transactionId]);
+        if (!row) {
+          throw new ApplicationError("not_found");
+        }
+        return { transaction: presentWireTransaction(row) };
+      }
+      return {
+        transaction: presentWireTransaction(
+          await requireTransaction(transactionId),
+          detail,
+          includeEvidence,
+        ),
+      };
+    },
     get_transactions: async ({ ids, view }) => {
       const records = new Map<string, unknown>(
         view === "summary"
