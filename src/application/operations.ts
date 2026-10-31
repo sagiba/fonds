@@ -32,6 +32,7 @@ import {
 import {
   isActive,
   type Refresh,
+  type RefreshEstimate,
   RefreshNotStartedError,
   type RefreshStartResult,
   validateRefreshRange,
@@ -176,6 +177,11 @@ export interface ApplicationCapabilities {
     startAll(range?: CollectionRange): Promise<RefreshStartResult[]>;
     /** Continues an active refresh a read meets, in case its process died. */
     recover?(refresh: Refresh): void;
+    /** What starting would request, without starting anything. */
+    estimate?(
+      connectionId: string | undefined,
+      range?: CollectionRange,
+    ): Promise<RefreshEstimate[]>;
   };
   /**
    * Told when an owner write has committed, so its events can be delivered; a
@@ -538,12 +544,13 @@ const definitions = named({
     "write",
   ),
   refresh_connection: define(
-    "Start a refresh from the financial provider: of connectionId, or of every connection with stored credentials when it is omitted. This calls the external provider and updates stored financial observations. Without from/to it rereads the recent window; inclusive from and to (YYYY-MM-DD, given together, at most 120 months) backfill that range month by month. Returns within about 10 seconds with the refresh (one refreshes entry per connection when none was named): completed, partial or failed, or running when it continues in the background; read it later with get_refresh. A connection already refreshing answers refresh_in_progress (in refreshes, reason busy); one whose provider needs the owner, requires_attention; one refreshed within the last minute returns that refresh (reason cooldown).",
+    "Start a refresh from the financial provider: of connectionId, or of every connection with stored credentials when it is omitted. This calls the external provider and updates stored financial observations. Without from/to it rereads the recent window; inclusive from and to (YYYY-MM-DD, given together, at most 120 months) backfill that range month by month. Returns within about 10 seconds with the refresh (one refreshes entry per connection when none was named): completed, partial or failed, or running when it continues in the background; read it later with get_refresh. A connection already refreshing answers refresh_in_progress (in refreshes, reason busy); one whose provider needs the owner, requires_attention; one refreshed within the last minute returns that refresh (reason cooldown). estimate=true starts nothing and calls no provider: it returns estimates, one per connection, with the collection windows (a backfill's months, or 1), the cards discovery knows and the provider requests expected (null when unknown), so a long backfill can be judged first.",
     z
       .object({
         connectionId: idSchema.optional(),
         from: z.iso.date().optional(),
         to: z.iso.date().optional(),
+        estimate: z.boolean().default(false),
       })
       .strict()
       .superRefine((input, context) => {
@@ -908,8 +915,19 @@ export function createApplication(
         await store.editAnnotation({ ...input, actor: "owner" }),
       ),
     }),
-    refresh_connection: async ({ connectionId, from, to }) => {
+    refresh_connection: async ({ connectionId, from, to, estimate }) => {
       const range = from === undefined ? undefined : { from, to: to! };
+      if (estimate) {
+        if (!capabilities.refreshes!.estimate) {
+          throw new InvalidInputError("Refresh estimates are unavailable");
+        }
+        return {
+          estimates: await capabilities.refreshes!.estimate(
+            connectionId,
+            range,
+          ),
+        };
+      }
       if (connectionId === undefined) {
         return {
           refreshes: (await capabilities.refreshes!.startAll(range)).map(

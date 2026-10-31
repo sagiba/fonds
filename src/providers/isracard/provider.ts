@@ -35,6 +35,11 @@ export function createIsracardProvider(
         cardSuffix: "Card's final six digits (required for Isracard)",
       },
     },
+    // One login per refresh; each unit lists cards, then for each billing
+    // month (one per window; the next and last for a recent refresh) requests
+    // every card and, when a card has one, the shared legacy statement.
+    estimateRequests: ({ windows, cards }) =>
+      1 + (windows ?? 1) * (1 + (windows === null ? 2 : 1) * (cards + 1)),
     validateCollectionOptions({ historyMode, searchWindowMonths }) {
       if (historyMode || searchWindowMonths) {
         throw new ProviderConfigurationError(

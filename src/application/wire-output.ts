@@ -601,11 +601,31 @@ export const refreshStartOutputSchema = z
       )
       .max(1000)
       .optional(),
+    estimates: z
+      .array(
+        z
+          .object({
+            connectionId: idSchema,
+            range: z
+              .object({ from: z.iso.date(), to: z.iso.date() })
+              .strict()
+              .nullable(),
+            windows: versionSchema.positive().max(MAX_REFRESH_MONTHS),
+            cards: versionSchema,
+            providerCalls: versionSchema.nullable(),
+          })
+          .strict(),
+      )
+      .max(1000)
+      .optional(),
   })
   .strict()
+  // Exactly one of a start, starts of every connection, or estimates.
   .refine(
     (output) =>
-      (output.refresh === undefined) !== (output.refreshes === undefined),
+      [output.refresh, output.refreshes, output.estimates].filter(
+        (member) => member !== undefined,
+      ).length === 1,
   );
 
 export const connectionOutputSchema = z

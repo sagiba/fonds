@@ -412,7 +412,11 @@ describe("OpenAPI document", () => {
     expect(refreshAll.parameters).toBeUndefined();
     const refreshBody =
       refreshAll.requestBody!.content["application/json"].schema;
-    expect(Object.keys(refreshBody.properties)).toEqual(["from", "to"]);
+    expect(Object.keys(refreshBody.properties)).toEqual([
+      "from",
+      "to",
+      "estimate",
+    ]);
     expect(refreshBody.required).toBeUndefined();
     expect(Object.keys(refreshAll.responses)).toEqual([
       "200",

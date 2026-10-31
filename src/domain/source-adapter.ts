@@ -188,9 +188,23 @@ export interface ProviderCollectionOptions {
   onDiagnostic?: (diagnostic: object) => void;
 }
 
+/** The collection a refresh estimate describes, from the stored catalog. */
+export interface CollectionWork {
+  /** Month windows of a backfill, or null for one recent-window collection. */
+  windows: number | null;
+  cards: number;
+  accounts: number;
+}
+
 /** Everything the runtime needs from one provider; each provider exports one. */
 export interface ProviderDefinition {
   adapter: SourceAdapter;
+  /**
+   * Provider requests a refresh would make with default collection options:
+   * logins, discovery and financial requests, without retries, renewals or
+   * optional detail requests.
+   */
+  estimateRequests?(work: CollectionWork): number;
   credentials: CredentialInput;
   /** Throws ProviderConfigurationError for options this provider does not support. */
   validateCollectionOptions(options: ProviderCollectionOptions): void;

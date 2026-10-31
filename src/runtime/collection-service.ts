@@ -120,6 +120,9 @@ export function collectionTargets(sources: CollectionTargetSources) {
     return {
       connectionId,
       adapter: provider.adapter,
+      ...(provider.estimateRequests && {
+        estimateRequests: provider.estimateRequests,
+      }),
       async collector() {
         const loaded = await credentials();
         if (!loaded) {

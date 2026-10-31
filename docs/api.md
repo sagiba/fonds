@@ -22,7 +22,7 @@ which runtimes offer refreshes.
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `list_connections`, `get_connection`                     | `GET /v1/connections`, `GET /v1/connections/:id`                                     | Read   | `list_connections` takes no input. A connection carries its [latest refresh](#connection).                                                                                                         |
 | `get_connection_coverage`                                | `GET /v1/connections/:id/coverage`                                                   | Read   | [Coverage](#coverage) by month.                                                                                                                                                                    |
-| `refresh_connection` (optional)                          | `POST /v1/connections/:id/refreshes`, `POST /v1/refreshes`                           | Write  | Body `{}` or `{from, to}`; without a connection, every connection. See [refreshes](#refreshes).                                                                                                    |
+| `refresh_connection` (optional)                          | `POST /v1/connections/:id/refreshes`, `POST /v1/refreshes`                           | Write  | Body `{}` or `{from, to}`, with optional `estimate`; without a connection, every connection. See [refreshes](#refreshes).                                                                          |
 | `get_refresh`, `list_refreshes`                          | `GET /v1/refreshes/:id`, `GET /v1/connections/:id/refreshes`                         | Read   | [Refreshes](#refreshes), newest first.                                                                                                                                                             |
 | `list_sync_runs`                                         | `GET /v1/connections/:id/sync-runs`                                                  | Read   | [Sync runs](#sync-run).                                                                                                                                                                            |
 | `list_accounts`, `get_account`                           | `GET /v1/accounts`, `GET /v1/accounts/:id`                                           | Read   | `list_accounts` requires `connectionId`. [Accounts](#account).                                                                                                                                     |
@@ -211,6 +211,13 @@ returns that one without calling the provider. Without `connectionId` (HTTP
 `POST /v1/refreshes`), every connection with stored credentials, under the same
 rules: `{refreshes: [{connectionId, reason, refresh}]}`, `reason` `null` or the
 rule met; HTTP answers 202 while any runs.
+
+With `estimate: true`, `refresh_connection` records and collects nothing and
+returns `{estimates: [{connectionId, range, windows, cards, providerCalls}]}`,
+one per connection: `windows` counts a backfill's months (1 for the recent
+window), `cards` the cards discovery recorded, and `providerCalls` the provider
+requests expected under default collection options, without retries, or `null`
+when unknown.
 
 A backfill requests and checkpoints each month: an interrupted refresh resumes,
 redoing only unfinished months, and an authentication, rate-limit or budget
