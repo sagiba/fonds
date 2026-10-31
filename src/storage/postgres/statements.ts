@@ -276,11 +276,13 @@ const annotationCategory = sql<
  * removed: PostgreSQL text cannot hold NUL and decoding its escape fails. The
  * escape is dropped from the JSON text first, with escaped backslashes parked
  * on U+0001 (which JSON text always escapes) so a literal backslash-u0000 is
- * kept. `annotationCategory` stays the group's key and transport.
+ * kept. Backslashes are built with chr(92), so no string-literal escaping
+ * setting changes what is matched. `annotationCategory` stays the group's key
+ * and transport.
  */
 const categoryOrder = sql<
   string | null
->`(replace(replace(replace((${schema.annotations.data}::json -> 'category')::text, '\\\\', chr(1)), '\\u0000', ''), chr(1), '\\\\')::json #>> '{}')`;
+>`(replace(replace(replace((${schema.annotations.data}::json -> 'category')::text, chr(92) || chr(92), chr(1)), chr(92) || 'u0000', ''), chr(1), chr(92) || chr(92))::json #>> '{}')`;
 
 /** Summary items read only their own columns and the annotation category. */
 function summaryQuery(db: Executor) {

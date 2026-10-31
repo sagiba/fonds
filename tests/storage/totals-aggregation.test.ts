@@ -110,6 +110,20 @@ describe("grouped totals statement", () => {
   });
 });
 
+describe("category ordering statement", () => {
+  it("builds PostgreSQL backslashes with chr(92), never string literals", () => {
+    const statement = postgresGrouped(
+      postgresDrizzle.mock({ schema: postgresSchema }),
+      { ...filtersSchema.parse({}), perspective: "spending" },
+      "category",
+      501,
+    ).toSQL().sql;
+    // Literal backslashes would depend on the server's escaping settings.
+    expect(statement).not.toContain("\\");
+    expect(statement).toContain("chr(92) || 'u0000'");
+  });
+});
+
 for (const backend of backends) {
   describe(`totals aggregation: ${backend}`, () => {
     let db: Harness;
