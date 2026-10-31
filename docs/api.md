@@ -21,6 +21,7 @@ which runtimes offer refreshes.
 | Operation / MCP tool                                     | HTTP method and path                                                                 | Access | Notes                                                                                                                                               |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `list_connections`, `get_connection`                     | `GET /v1/connections`, `GET /v1/connections/:id`                                     | Read   | `list_connections` takes no input. A connection carries its [latest refresh](#connection).                                                          |
+| `get_connection_coverage`                                | `GET /v1/connections/:id/coverage`                                                   | Read   | [Coverage](#coverage) by month.                                                                                                                     |
 | `refresh_connection` (optional)                          | `POST /v1/connections/:id/refreshes`, `POST /v1/refreshes`                           | Write  | Body `{}` or `{from, to}`; without a connection, every connection. See [refreshes](#refreshes).                                                     |
 | `get_refresh`, `list_refreshes`                          | `GET /v1/refreshes/:id`, `GET /v1/connections/:id/refreshes`                         | Read   | [Refreshes](#refreshes), newest first.                                                                                                              |
 | `list_sync_runs`                                         | `GET /v1/connections/:id/sync-runs`                                                  | Read   | [Sync runs](#sync-run).                                                                                                                             |
@@ -148,6 +149,23 @@ refresh configuration, which may expose several cards and accounts.
 Credentials and internal configuration are never included. `latestRefresh` is the
 newest [refresh](#refreshes) or recorded scheduled occurrence, without its
 windows, or `null` before any.
+
+## Coverage
+
+`get_connection_coverage` shows how far one connection's history reaches without
+paging it:
+`{coverage: {connectionId, transactionCount, undatedCount, earliestDate, latestDate, months, monthsTruncated, recentRefreshCompletedAt, requiresAttention, failureCodes}}`.
+Counts and dates cover current, non-superseded rows of every perspective by
+`transactionDate`. `months` runs newest first, at most 240, from the newest to the
+oldest month holding transactions or a backfill request, each
+`{month, transactionCount, backfill, backfilledAt}`. `backfill` is the best
+outcome of the [refresh](#refreshes) windows that requested the month:
+`completed`, `partial`, `failed` (including windows a stopped refresh never
+ran), `in_progress` or `not_requested`; `backfilledAt` is when a refresh that
+completed it finished. A zero count with `not_requested` is not an absence of
+purchases: backfill the month first. Recent refreshes reread a provider-defined
+window and appear only as `recentRefreshCompletedAt`. `requiresAttention` and
+`failureCodes` come from the last finished refresh.
 
 ## Refreshes
 

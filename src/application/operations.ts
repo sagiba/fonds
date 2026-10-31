@@ -44,6 +44,7 @@ import {
   cardReadOutputSchema,
   connectionListOutputSchema,
   connectionReadOutputSchema,
+  coverageOutputSchema,
   eventListOutputSchema,
   OUTPUT_MAX_BYTES,
   outputByteLength,
@@ -51,6 +52,7 @@ import {
   presentAnnotationReceipt,
   presentCard,
   presentConnection,
+  presentCoverage,
   presentRefresh,
   presentRefreshDetail,
   presentRefreshStart,
@@ -422,6 +424,12 @@ const definitions = named({
     connectionReadOutputSchema,
     "read",
   ),
+  get_connection_coverage: define(
+    "Show how far a connection's history reaches without paging it: current transaction counts with the first and last transaction dates, and one entry per month, newest first, with its transaction count and backfill state. A month with no transactions and backfill not_requested was never asked for by a backfill, so it does not show an absence of purchases; refresh it with from/to before concluding that. Recent refreshes cover only the provider's recent window, reported by its last completion. requiresAttention and failureCodes come from the last finished refresh. Does not call the provider.",
+    connectionScopeSchema,
+    coverageOutputSchema,
+    "read",
+  ),
   list_cards: define(
     "Browse a bounded live page of one connection's cards, oldest first. A card's id matches transaction cardId. Unknown metadata stays null, and omission from discovery does not establish closure. Follow nextCursor while hasMore is true; concurrent changes can shift later pages.",
     catalogListSchema,
@@ -702,6 +710,13 @@ export function createApplication(
         throw new ApplicationError("not_found");
       }
       return { connection: presentConnection(connection) };
+    },
+    get_connection_coverage: async ({ connectionId }) => {
+      const coverage = await store.getCoverage(connectionId);
+      if (!coverage) {
+        throw new ApplicationError("not_found");
+      }
+      return presentCoverage(coverage);
     },
     list_cards: async ({ cursor, ...input }) => {
       const page = await store.listCards({

@@ -37,6 +37,9 @@ function refreshStillRunning(output: unknown) {
 export const OPERATION_ROUTES = {
   list_connections: [{ method: "GET", path: "/v1/connections" }],
   get_connection: [{ method: "GET", path: "/v1/connections/:connectionId" }],
+  get_connection_coverage: [
+    { method: "GET", path: "/v1/connections/:connectionId/coverage" },
+  ],
   list_accounts: [{ method: "GET", path: "/v1/accounts" }],
   get_account: [{ method: "GET", path: "/v1/accounts/:accountId" }],
   list_cards: [{ method: "GET", path: "/v1/cards" }],

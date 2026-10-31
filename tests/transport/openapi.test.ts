@@ -20,6 +20,7 @@ const issuer = `${publicOrigin}/api/auth`;
 const ROUTES = [
   ["get", "/v1/connections", "list_connections"],
   ["get", "/v1/connections/{connectionId}", "get_connection"],
+  ["get", "/v1/connections/{connectionId}/coverage", "get_connection_coverage"],
   ["get", "/v1/cards", "list_cards"],
   ["get", "/v1/cards/{cardId}", "get_card"],
   ["get", "/v1/accounts", "list_accounts"],

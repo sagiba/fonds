@@ -93,6 +93,32 @@ export interface TransactionPage {
   hasMore: boolean;
 }
 
+/** Newest months a coverage read reports; older ones are omitted. */
+export const COVERAGE_MAX_MONTHS = 240;
+
+export type BackfillOutcome =
+  "failed" | "in_progress" | "partial" | "completed";
+
+/** One connection's retained history and the months collection asked for. */
+export interface ConnectionCoverage {
+  connectionId: string;
+  transactionCount: number;
+  undatedCount: number;
+  earliestDate: string | null;
+  latestDate: string | null;
+  /** Newest first, at most `COVERAGE_MAX_MONTHS + 1` months holding transactions. */
+  transactionMonths: { month: string; count: number }[];
+  /** Newest first, at most `COVERAGE_MAX_MONTHS + 1` requested months. */
+  backfillMonths: {
+    month: string;
+    outcome: BackfillOutcome;
+    completedAt: string | null;
+  }[];
+  recentCompletedAt: string | null;
+  /** The last finished refresh, which carries the attention block. */
+  lastFinished: Pick<Refresh, "requiresAttention" | "failureCodes"> | null;
+}
+
 export interface UndoAnnotationInput {
   eventId: number;
   expectedVersion: number;
@@ -109,6 +135,8 @@ export interface FinancialStore {
   getConnection(id: string): Promise<PublicConnection | undefined>;
   listTransactionPage(input?: TransactionPageInput): Promise<TransactionPage>;
   getTransaction(id: string): Promise<TransactionView | undefined>;
+  /** Undefined for an unknown connection. */
+  getCoverage(connectionId: string): Promise<ConnectionCoverage | undefined>;
   getTotals(
     input?: TransactionFilters,
   ): Promise<ReturnType<typeof calculateTotals>>;

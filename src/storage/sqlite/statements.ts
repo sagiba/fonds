@@ -27,8 +27,10 @@ import type { FinancialPlan } from "../../domain/plans/state.js";
 import type { Connection, ConnectionConfig } from "../../domain/records.js";
 import type { RetainedRun } from "../run-evidence.js";
 import {
+  backfillOutcomeRank,
   chunks,
   connectionColumns,
+  currentRows,
   eventFilter,
   excludedSet,
   keysetSeek,
@@ -243,6 +245,80 @@ export const events = (db: Executor, input: EventQuery) =>
     .where(eventFilter(schema.events, input))
     .orderBy(asc(schema.events.id))
     .limit(input.limit);
+
+/** A transaction's `YYYY-MM` month, or null when undated. */
+const transactionMonth = sql<
+  string | null
+>`substr(${schema.transactions.transactionDate}, 1, 7)`;
+
+export const transactionMonths = (
+  db: Executor,
+  connectionId: string,
+  limit: number,
+) =>
+  db
+    .select({
+      month: transactionMonth,
+      count: sql<number>`count(*)`.mapWith(Number),
+      total: sql<number>`sum(count(*)) over ()`.mapWith(Number),
+      earliest: sql<
+        string | null
+      >`min(min(${schema.transactions.transactionDate})) over ()`,
+      latest: sql<
+        string | null
+      >`max(max(${schema.transactions.transactionDate})) over ()`,
+    })
+    .from(schema.transactions)
+    .where(
+      transactionFilter(
+        schema.transactions,
+        currentRows(connectionId),
+        schema.cards,
+      ),
+    )
+    .groupBy(transactionMonth)
+    .orderBy(sql`${transactionMonth} desc nulls first`)
+    .limit(limit);
+
+export const backfillMonths = (
+  db: Executor,
+  connectionId: string,
+  limit: number,
+) => {
+  const month = sql<string>`substr(${schema.refreshWindows.rangeFrom}, 1, 7)`;
+  return db
+    .select({
+      month,
+      rank: sql<number>`max(${backfillOutcomeRank(
+        schema.refreshWindows,
+        schema.refreshes,
+      )})`.mapWith(Number),
+      completedAt: sql<string | null>`max(case when ${
+        schema.refreshWindows.status
+      } = 'completed' then ${schema.refreshes.finishedAt} end)`,
+    })
+    .from(schema.refreshWindows)
+    .innerJoin(
+      schema.refreshes,
+      eq(schema.refreshes.id, schema.refreshWindows.refreshId),
+    )
+    .where(eq(schema.refreshes.connectionId, connectionId))
+    .groupBy(month)
+    .orderBy(sql`${month} desc`)
+    .limit(limit);
+};
+
+export const recentCompletion = (db: Executor, connectionId: string) =>
+  db
+    .select({ finishedAt: max(schema.refreshes.finishedAt) })
+    .from(schema.refreshes)
+    .where(
+      and(
+        eq(schema.refreshes.connectionId, connectionId),
+        isNull(schema.refreshes.rangeFrom),
+        eq(schema.refreshes.status, "completed"),
+      ),
+    );
 
 export const transactionCount = (db: Executor, connectionId: string) =>
   db

@@ -11,6 +11,7 @@ import {
 } from "../application/collection-lock.js";
 import {
   connectionInputSchema,
+  COVERAGE_MAX_MONTHS,
   type InternalStore,
 } from "../application/financial-store.js";
 import {
@@ -108,7 +109,7 @@ import {
   retainedRun,
   runEvidenceDigest,
 } from "./run-evidence.js";
-import { chunks, type PlanScope } from "./sql.js";
+import { BACKFILL_OUTCOMES, chunks, type PlanScope } from "./sql.js";
 import type {
   LatestAppliedRun,
   OrderedRun,
@@ -1581,6 +1582,57 @@ function buildStore<Db>(
         await db.execute(statements.transactionWithAnnotation(db.root, id))
       )[0];
       return row && presentTransaction(row.row, row.annotation);
+    },
+    getCoverage: async (connectionId) => {
+      const connection = await getConnection(connectionId);
+      if (!connection) {
+        return undefined;
+      }
+      const months = await db.execute(
+        statements.transactionMonths(
+          db.root,
+          connectionId,
+          COVERAGE_MAX_MONTHS + 2,
+        ),
+      );
+      const backfill = await db.execute(
+        statements.backfillMonths(
+          db.root,
+          connectionId,
+          COVERAGE_MAX_MONTHS + 1,
+        ),
+      );
+      const recent = (
+        await db.execute(statements.recentCompletion(db.root, connectionId))
+      )[0];
+      const finished = (
+        await db.execute(statements.lastExecutedRefresh(db.root, connectionId))
+      )[0];
+      const dated = months.filter(
+        (row): row is typeof row & { month: string } => row.month !== null,
+      );
+      return {
+        connectionId,
+        transactionCount: months[0]?.total ?? 0,
+        undatedCount: months.find((row) => row.month === null)?.count ?? 0,
+        earliestDate: months[0]?.earliest ?? null,
+        latestDate: months[0]?.latest ?? null,
+        transactionMonths: dated
+          .slice(0, COVERAGE_MAX_MONTHS + 1)
+          .map(({ month, count }) => ({ month, count })),
+        backfillMonths: backfill.map(({ month, rank, completedAt }) => ({
+          month,
+          outcome: BACKFILL_OUTCOMES[rank - 1]!,
+          completedAt,
+        })),
+        recentCompletedAt: recent?.finishedAt ?? null,
+        lastFinished: finished
+          ? {
+              requiresAttention: finished.requiresAttention,
+              failureCodes: finished.failureCodes,
+            }
+          : null,
+      };
     },
     getTotals: async (input) => {
       const filters = totalsSchema.parse(input ?? {});

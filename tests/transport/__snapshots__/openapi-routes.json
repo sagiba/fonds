@@ -32,6 +32,24 @@
       "500"
     ]
   },
+  "GET /v1/connections/{connectionId}/coverage": {
+    "operationId": "get_connection_coverage",
+    "scopes": [
+      "financial:read"
+    ],
+    "parameters": [
+      "path connectionId (required)"
+    ],
+    "responses": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "413",
+      "500"
+    ]
+  },
   "GET /v1/accounts": {
     "operationId": "list_accounts",
     "scopes": [

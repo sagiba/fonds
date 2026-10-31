@@ -33,7 +33,12 @@ import type {
   Transaction,
 } from "../domain/records.js";
 import { transactionChangedFields } from "../domain/transaction-content.js";
-import type { PublicConnection, SyncRun } from "./financial-store.js";
+import {
+  type ConnectionCoverage,
+  COVERAGE_MAX_MONTHS,
+  type PublicConnection,
+  type SyncRun,
+} from "./financial-store.js";
 import { listCursorSchema } from "./query-inputs.js";
 import {
   FAILURE_REASONS,
@@ -753,6 +758,101 @@ export function presentWireTotals(result: ReturnType<typeof calculateTotals>) {
     includedCount: result.includedCount,
     excludedCount: result.excludedCount,
     excluded: result.excluded,
+  };
+}
+
+const monthSchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
+
+export const coverageOutputSchema = z
+  .object({
+    coverage: z
+      .object({
+        connectionId: idSchema,
+        transactionCount: versionSchema,
+        undatedCount: versionSchema,
+        earliestDate: dateSchema,
+        latestDate: dateSchema,
+        months: z
+          .array(
+            z
+              .object({
+                month: monthSchema,
+                transactionCount: versionSchema,
+                backfill: z.enum([
+                  "completed",
+                  "partial",
+                  "failed",
+                  "in_progress",
+                  "not_requested",
+                ]),
+                backfilledAt: nullableTextSchema,
+              })
+              .strict(),
+          )
+          .max(COVERAGE_MAX_MONTHS),
+        monthsTruncated: z.boolean(),
+        recentRefreshCompletedAt: nullableTextSchema,
+        requiresAttention: z.boolean(),
+        failureCodes: z.array(refreshFailureCodeSchema).max(20),
+      })
+      .strict(),
+  })
+  .strict();
+
+const monthIndex = (month: string) =>
+  Number(month.slice(0, 4)) * 12 + Number(month.slice(5, 7)) - 1;
+
+const monthLabel = (index: number) =>
+  `${String(Math.floor(index / 12)).padStart(4, "0")}-${String((index % 12) + 1).padStart(2, "0")}`;
+
+/**
+ * Every month from the newest to the oldest one that holds transactions or a
+ * backfill request, newest first, so a month without purchases is listed
+ * beside the months collection asked for.
+ */
+export function presentCoverage(coverage: ConnectionCoverage) {
+  const counts = new Map(
+    coverage.transactionMonths.map((row) => [row.month, row.count]),
+  );
+  const backfill = new Map(
+    coverage.backfillMonths.map((row) => [row.month, row]),
+  );
+  const indexes = [...counts.keys(), ...backfill.keys()].map(monthIndex);
+  const months = [];
+  let truncated =
+    coverage.transactionMonths.length > COVERAGE_MAX_MONTHS ||
+    coverage.backfillMonths.length > COVERAGE_MAX_MONTHS;
+  if (indexes.length > 0) {
+    const newest = Math.max(...indexes);
+    const oldest = Math.min(...indexes);
+    for (let index = newest; index >= oldest; index--) {
+      if (months.length === COVERAGE_MAX_MONTHS) {
+        truncated = true;
+        break;
+      }
+      const month = monthLabel(index);
+      const requested = backfill.get(month);
+      months.push({
+        month,
+        transactionCount: counts.get(month) ?? 0,
+        backfill: requested?.outcome ?? ("not_requested" as const),
+        backfilledAt: requested?.completedAt ?? null,
+      });
+    }
+  }
+  return {
+    coverage: {
+      connectionId: coverage.connectionId,
+      transactionCount: coverage.transactionCount,
+      undatedCount: coverage.undatedCount,
+      earliestDate: coverage.earliestDate,
+      latestDate: coverage.latestDate,
+      months,
+      monthsTruncated: truncated,
+      recentRefreshCompletedAt: coverage.recentCompletedAt,
+      requiresAttention: coverage.lastFinished?.requiresAttention ?? false,
+      failureCodes: coverage.lastFinished?.failureCodes ?? [],
+    },
   };
 }
 

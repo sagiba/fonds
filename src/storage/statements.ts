@@ -131,6 +131,38 @@ export interface Statements<Db> {
     input: TransactionQuery,
   ): PromiseLike<Parameters<typeof calculateTotals>[0]>;
   events(db: Db, input: EventQuery): PromiseLike<LedgerEvent[]>;
+  /**
+   * Current rows per transaction month, newest first with undated rows (a null
+   * month) leading, at most `limit` groups; each row repeats the whole count
+   * and the first and last transaction dates.
+   */
+  transactionMonths(
+    db: Db,
+    connectionId: string,
+    limit: number,
+  ): PromiseLike<
+    {
+      month: string | null;
+      count: number;
+      total: number;
+      earliest: string | null;
+      latest: string | null;
+    }[]
+  >;
+  /**
+   * Each month a backfill window requested, newest first, at most `limit`:
+   * its best `backfillOutcomeRank` and when a refresh that completed it finished.
+   */
+  backfillMonths(
+    db: Db,
+    connectionId: string,
+    limit: number,
+  ): PromiseLike<{ month: string; rank: number; completedAt: string | null }[]>;
+  /** When a recent-window refresh of the connection last completed. */
+  recentCompletion(
+    db: Db,
+    connectionId: string,
+  ): PromiseLike<{ finishedAt: string | null }[]>;
   transactionCount(
     db: Db,
     connectionId: string,

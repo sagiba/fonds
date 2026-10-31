@@ -16,6 +16,7 @@ import {
   type Table,
 } from "drizzle-orm";
 
+import type { BackfillOutcome } from "../application/financial-store.js";
 import type {
   EventQuery,
   TransactionQuery,
@@ -301,4 +302,38 @@ export function* chunks<Row>(rows: readonly Row[], size: number) {
   for (let offset = 0; offset < rows.length; offset += size) {
     yield rows.slice(offset, offset + size);
   }
+}
+
+/** Current rows a coverage count includes: every row a current list returns. */
+export function currentRows(connectionId: string): TransactionQuery {
+  return {
+    connectionId,
+    presence: "current",
+    includeSuperseded: false,
+    perspective: "all",
+  };
+}
+
+/**
+ * Backfill window outcomes, worst first; a month takes its best window's. An
+ * unfinished window of a refresh that has finished was never retrieved.
+ */
+export const BACKFILL_OUTCOMES = [
+  "failed",
+  "in_progress",
+  "partial",
+  "completed",
+] as const satisfies readonly BackfillOutcome[];
+
+/** A window's 1-based position in `BACKFILL_OUTCOMES`. */
+export function backfillOutcomeRank(
+  window: { status: AnyColumn },
+  refresh: { status: AnyColumn },
+) {
+  return sql<number>`case
+    when ${window.status} = 'completed' then 4
+    when ${window.status} = 'partial' then 3
+    when ${window.status} in ('pending', 'running')
+      and ${refresh.status} in ('pending', 'running') then 2
+    else 1 end`;
 }

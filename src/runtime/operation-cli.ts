@@ -47,6 +47,11 @@ const presentations: Readonly<
     summary: "Show one connection",
     example: ["--connection-id", "cal"],
   },
+  get_connection_coverage: {
+    alias: "coverage",
+    summary: "Show which months a connection's history covers",
+    example: ["--connection-id", "cal"],
+  },
   list_cards: {
     summary: "List a connection's cards",
     example: ["--connection-id", "cal"],
