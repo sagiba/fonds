@@ -76,6 +76,9 @@ export const syncDiagnosticSchema = z.object({
       ledgerRows: count.optional(),
       priorRuns: count.optional(),
       removals: count.optional(),
+      /** Ledger rows a reconciliation read complete, and its planning rounds. */
+      hydratedRows: count.optional(),
+      hydrationRounds: count.optional(),
       /** Bytes a network-metered database had sent the apply transaction by then. */
       dbBytesRead: count.optional(),
     })

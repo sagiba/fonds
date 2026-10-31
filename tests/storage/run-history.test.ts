@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { TransactionInput } from "../../src/domain/model.js";
 import type { SourceAdapter } from "../../src/domain/source-adapter.js";
-import { runHistoryComparisons } from "../helpers/run-history-differential.js";
+import { loadingComparisons } from "../helpers/application-loading-differential.js";
 import {
   backends,
   type Harness,
@@ -95,7 +95,7 @@ for (const backend of backends) {
         failedScopes: [],
       },
     });
-    const scopedFor = () => runHistoryComparisons.at(-1)?.scoped;
+    const scopedFor = () => loadingComparisons.at(-1)?.scoped;
     const at = (time: string) => vi.setSystemTime(new Date(time));
 
     beforeEach(async () => {
@@ -252,12 +252,12 @@ for (const backend of backends) {
         row("k"),
         row("m"),
       ]);
-      expect(runHistoryComparisons.at(-1)).toMatchObject({
+      expect(loadingComparisons.at(-1)).toMatchObject({
         scoped: true,
         appliedRuns: 4,
       });
       // The latest run, and the base and witness runs the rows name.
-      expect(runHistoryComparisons.at(-1)!.loadedRuns).toBe(3);
+      expect(loadingComparisons.at(-1)!.loadedRuns).toBe(3);
       const restored = (
         await db.listTransactions({ connectionId, perspective: "all" })
       ).filter((transaction) => transaction.lastSeenRunId === "returned");

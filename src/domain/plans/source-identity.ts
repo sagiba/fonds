@@ -4,6 +4,7 @@ import { currentSourceRows } from "../provider-evidence.js";
 import type { Transaction } from "../records.js";
 import type { SourceAdapter } from "../source-adapter.js";
 import { retainedTransactionEvidence } from "../transaction-content.js";
+import { type LedgerRow, providerIdentity } from "./state.js";
 
 const financialFields = [
   "amountMinor",
@@ -44,10 +45,10 @@ export function financialState(row: TransactionFacts) {
 }
 
 export function declaredIdentityBase(
-  row: TransactionFacts,
+  row: LedgerRow | Pick<TransactionFacts, "details">,
   provider: string,
 ): string | undefined {
-  const identity = row.details.provider[provider]?.identity;
+  const identity = providerIdentity(row, provider);
   if (
     identity &&
     typeof identity === "object" &&
@@ -59,7 +60,10 @@ export function declaredIdentityBase(
   return undefined;
 }
 
-export function identityBase(row: TransactionFacts, provider: string): string {
+export function identityBase(
+  row: LedgerRow | Pick<TransactionFacts, "sourceKey" | "details">,
+  provider: string,
+): string {
   return declaredIdentityBase(row, provider) ?? row.sourceKey;
 }
 

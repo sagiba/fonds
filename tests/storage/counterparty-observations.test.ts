@@ -1,3 +1,5 @@
+import "../helpers/application-loading-differential.js";
+
 import { readFileSync } from "node:fs";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

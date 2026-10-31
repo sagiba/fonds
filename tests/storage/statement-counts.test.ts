@@ -204,12 +204,13 @@ for (const backend of backends) {
         capture(undefined, "2040-08-02T00:00:00Z"),
       );
       // Includes catalog resolution, checking the staged body's retention
-      // policy, the latest run with its stored summary and dependent runs.
-      expect(counts.reads).toBeLessThanOrEqual(11 + feedLock);
+      // policy, the latest run with its stored summary and dependent runs,
+      // and one read of the complete rows the capture observes.
+      expect(counts.reads).toBeLessThanOrEqual(12 + feedLock);
       expect(counts.fullSnapshots).toBe(1);
       // Coverage retained at or after a capture also reads every applied run.
       const earlier = await measure(() => capture());
-      expect(earlier.reads).toBeLessThanOrEqual(12 + feedLock);
+      expect(earlier.reads).toBeLessThanOrEqual(13 + feedLock);
       expect(earlier.fullSnapshots).toBe(1);
     });
     it("reads nonempty filtered views without an existence round trip", async () => {

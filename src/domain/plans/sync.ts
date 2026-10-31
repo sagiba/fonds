@@ -89,7 +89,12 @@ import {
   type SourceIdentityFacts,
 } from "./source-identity.js";
 import { resourceKey, scopeKey, sourceCoverage } from "./source-membership.js";
-import { type DeferredCandidate, FinancialPlan } from "./state.js";
+import {
+  type DeferredCandidate,
+  FinancialPlan,
+  type LedgerRow,
+  retiredFromMatching,
+} from "./state.js";
 
 const scopeSchema = z
   .object({
@@ -314,9 +319,13 @@ function withFinancialState(
 
 const POSTING_MATCH_ISSUE = "possible_pending_posted_match";
 
+type IdentityClaim = Pick<TransactionFacts, "identityStrength"> & {
+  details: Pick<TransactionDetails, "issues">;
+};
+
 function unambiguousNative(
-  current: TransactionFacts,
-  previous: TransactionFacts,
+  current: IdentityClaim,
+  previous: IdentityClaim,
 ): boolean {
   return [current, previous].every(
     (row) =>
@@ -525,7 +534,7 @@ function recordPaymentContextConflicts(
 }
 
 function insideRecentHorizon(
-  row: Transaction,
+  row: LedgerRow,
   cutoff: string | undefined,
 ): boolean {
   if (cutoff === undefined) {
@@ -594,7 +603,9 @@ function indexRunHistory(
     response(runId: string, accountKey: string) {
       return responsesByRun.get(runId)?.get(accountKey);
     },
-    historical(row: Transaction) {
+    historical(
+      row: Pick<Transaction, "lastSeenRunId" | "sourceScope" | "status">,
+    ) {
       const scope = responsesByRun
         .get(row.lastSeenRunId)
         ?.get(row.sourceScope)?.scope;
@@ -614,18 +625,18 @@ function indexRunHistory(
 
 /** Snapshot indexes deliberately exclude writes made during this response. */
 function indexAccountRows(
-  current: Transaction[],
+  current: LedgerRow[],
   inputs: SourceIdentityFacts[],
   adapter: SourceAdapter,
   capturedAt: string,
   history: ReturnType<typeof indexRunHistory>,
   pristineInputs: PristineInputs,
+  full: (row: LedgerRow) => Transaction,
 ) {
   const provider = adapter.provider;
-  const baseKey = (row: TransactionFacts) => identityBase(row, provider);
-  const eligible = current.filter(
-    (row) => !row.sourceEvidence?.identity?.retiredFromMatching,
-  );
+  const baseKey = (row: LedgerRow | TransactionFacts) =>
+    identityBase(row, provider);
+  const eligible = current.filter((row) => !retiredFromMatching(row));
   const knownGroups = Map.groupBy(eligible, baseKey);
   const oldGroups = Map.groupBy(
     eligible.filter((row) => row.presence === "seen" && !row.supersededById),
@@ -634,10 +645,10 @@ function indexAccountRows(
   const newGroups = Map.groupBy(inputs, baseKey);
   const sourceMatches = new Map<
     string,
-    { active: Set<Transaction>; inactive: Set<Transaction> }
+    { active: Set<LedgerRow>; inactive: Set<LedgerRow> }
   >();
   const rowsById = new Map(current.map((row) => [row.id, row]));
-  const linkedPostedAliases = new Map<string, Transaction>();
+  const linkedPostedAliases = new Map<string, LedgerRow>();
   for (const row of eligible) {
     if (row.supersededById) {
       continue;
@@ -645,8 +656,8 @@ function indexAccountRows(
     // A row can own a key both directly and through an alias: count it once.
     for (const key of new Set([row.sourceKey, ...row.sourceAliases])) {
       const bucket = sourceMatches.get(key) ?? {
-        active: new Set<Transaction>(),
-        inactive: new Set<Transaction>(),
+        active: new Set<LedgerRow>(),
+        inactive: new Set<LedgerRow>(),
       };
       (row.presence === "seen" ? bucket.active : bucket.inactive).add(row);
       sourceMatches.set(key, bucket);
@@ -682,10 +693,17 @@ function indexAccountRows(
         uncertain,
         pristineInputs,
         adapter,
+        full,
       );
       const { comparisonGroup } = legacy;
+      // Captured comparisons are read only in uncertain groups.
       const comparisons = new Map(
-        oldGroup.map((row, index) => [row.id, comparisonGroup?.[index] ?? row]),
+        uncertain
+          ? oldGroup.map((row, index) => [
+              row.id,
+              comparisonGroup?.[index] ?? full(row),
+            ])
+          : [],
       );
       const fingerprints = new Map(
         [
@@ -772,7 +790,7 @@ function indexAccountRows(
 }
 
 interface PostingContinuationOptions {
-  current: Transaction[];
+  current: LedgerRow[];
   inputs: TransactionFacts[];
   assertedInputs: ReadonlySet<TransactionFacts>;
   adapter: SourceAdapter;
@@ -780,8 +798,9 @@ interface PostingContinuationOptions {
   response: FinancialResponse;
   history: ReturnType<typeof indexRunHistory>;
   index: ReturnType<typeof indexAccountRows>;
-  comparableAbsence: (row: Transaction) => boolean;
+  comparableAbsence: (row: LedgerRow) => boolean;
   baseline: boolean;
+  full: (row: LedgerRow) => Transaction;
 }
 
 function freshPostingCapture(
@@ -825,6 +844,7 @@ function planPostingContinuations({
   index,
   comparableAbsence,
   baseline,
+  full,
 }: PostingContinuationOptions) {
   const empty = new Map<TransactionFacts, Transaction>();
   if (!adapter.automaticPosting || result.historical || baseline) {
@@ -904,7 +924,11 @@ function planPostingContinuations({
         unlinkedKeys.has(key),
       ),
   );
-  const { pairs } = automaticPostingPairs(
+  // Only components holding a new posted identity can pair, so only their
+  // stored members are read complete; component order is preserved.
+  const complete = (row: LedgerRow | TransactionFacts) =>
+    "id" in row ? full(row) : row;
+  const components = postingComponents<LedgerRow | TransactionFacts>(
     [
       ...active.filter((row) => row.status === "pending"),
       ...blockers.filter((row) => row.status === "pending"),
@@ -913,7 +937,21 @@ function planPostingContinuations({
       ...active.filter((row) => row.status === "posted"),
       ...blockers.filter((row) => row.status === "posted"),
     ],
-    disappearing,
+  ).filter(
+    (group) =>
+      group.pending.length > 0 &&
+      group.posted.some((row) => newPosted.has(row as TransactionFacts)),
+  );
+  const pending = components.flatMap((group) => group.pending);
+  const { pairs } = automaticPostingPairs(
+    pending.map(complete),
+    components.flatMap((group) => group.posted).map(complete),
+    new Map(
+      pending.flatMap((row) => {
+        const stored = "id" in row ? disappearing.get(row) : undefined;
+        return stored ? [[complete(row), full(stored)] as const] : [];
+      }),
+    ),
     adapter.automaticPosting,
     newPosted,
   );
@@ -922,8 +960,8 @@ function planPostingContinuations({
 
 /** Same card, date and kind, with same-sign amounts in different currencies. */
 function crossCurrencyCandidate(
-  pending: Transaction,
-  posted: Transaction,
+  pending: LedgerRow,
+  posted: LedgerRow,
 ): boolean {
   return (
     pending.cardId !== null &&
@@ -944,14 +982,14 @@ function crossCurrencyCandidate(
 
 function refreshPendingCandidates(
   plan: FinancialPlan,
-  accountRows: Transaction[],
+  accountRows: LedgerRow[],
   seenIds: Set<string>,
   postingReview: boolean,
   recentCutoff: string | undefined,
 ): void {
   const candidates = new Map<string, Set<string>>();
 
-  function addCandidate(pending: Transaction, posted: Transaction) {
+  function addCandidate(pending: LedgerRow, posted: LedgerRow) {
     if (postingRejected(pending, posted)) {
       return;
     }
@@ -975,7 +1013,7 @@ function refreshPendingCandidates(
     (row) =>
       !row.supersededById && row.presence !== "removed" && !isBilledLine(row),
   );
-  const candidateKey = (row: Transaction, day: number) =>
+  const candidateKey = (row: LedgerRow, day: number) =>
     JSON.stringify([
       row.cardId,
       row.merchantName,
@@ -983,7 +1021,7 @@ function refreshPendingCandidates(
       row.currency,
       day,
     ]);
-  const pendingBuckets = new Map<string, Transaction[]>();
+  const pendingBuckets = new Map<string, LedgerRow[]>();
   for (const row of eligible) {
     if (
       row.status !== "pending" ||
@@ -1073,14 +1111,15 @@ function refreshPendingCandidates(
     ) {
       continue;
     }
-    const issues = row.details.issues.filter(
+    const full = plan.full(row);
+    const issues = full.details.issues.filter(
       (issue) => issue !== POSTING_MATCH_ISSUE,
     );
     if (ids.length > 0) {
       issues.push(POSTING_MATCH_ISSUE);
     }
     plan.updateTransaction(row.id, {
-      details: { ...row.details, pendingPostingCandidates: ids, issues },
+      details: { ...full.details, pendingPostingCandidates: ids, issues },
     });
   }
 }
@@ -1273,9 +1312,14 @@ function reconcileLinkedComponents({
   absence: ResponseAbsence;
   observedIds: Set<string>;
 }): void {
-  for (const row of plan.account(response.accountKey)) {
-    const link = row.details.postingLink;
-    if (!link || link.split || row.supersededById) {
+  for (const stored of plan.account(response.accountKey)) {
+    if (!stored.details.postingLink || stored.supersededById) {
+      continue;
+    }
+    // Every unsplit survivor is rewritten below, so its link is read complete.
+    const row = plan.full(stored);
+    const link = row.details.postingLink!;
+    if (link.split) {
       continue;
     }
     let pending = structuredClone(link.pending);
@@ -1291,7 +1335,7 @@ function reconcileLinkedComponents({
         .filter(
           (candidate) =>
             !candidate.supersededById &&
-            !candidate.sourceEvidence?.identity?.retiredFromMatching &&
+            !retiredFromMatching(candidate) &&
             ownsSourceKey(candidate, authorization.sourceKey),
         );
       // A collision is not a choice of component, nor proof of its absence.
@@ -1441,7 +1485,7 @@ export function finishTransactionContent(
   const originals = new Map(plan.snapshot.rows.map((row) => [row.id, row]));
   const changedIds = new Set<string>();
   for (const [id, current] of plan.transactionWrites) {
-    const previous = originals.get(id);
+    const previous = plan.original(id);
     current.details.sourceRefs = references(current);
     if (current.details.additionalInformation) {
       current.details.additionalInformation = sortedEvidence(
@@ -1638,7 +1682,50 @@ export function finishTransactionContent(
   return { updated: changedIds.size, unchanged };
 }
 
-/** Pure reconciliation against a complete consistent connection snapshot. */
+/**
+ * Stored rows an application will very likely read complete: in each
+ * response's account, every linked row and every row that shares a source
+ * key or identity base with an input. This only saves planning rounds; the
+ * plan's hydration demands decide what it needs.
+ */
+export function predictHydration(
+  rows: readonly LedgerRow[],
+  extraction: ReturnType<typeof extractRun>,
+  adapter: SourceAdapter,
+): Set<string> {
+  const keys = new Map<string, Set<string>>();
+  const bases = new Map<string, Set<string>>();
+  for (const { response, result } of extraction.extracted) {
+    keys.set(response.accountKey, keys.get(response.accountKey) ?? new Set());
+    for (const input of result.transactions) {
+      const scopeKeys = keys.get(input.sourceScope) ?? new Set<string>();
+      for (const key of [input.sourceKey, ...input.sourceAliases]) {
+        scopeKeys.add(key);
+      }
+      keys.set(input.sourceScope, scopeKeys);
+      const scopeBases = bases.get(input.sourceScope) ?? new Set<string>();
+      scopeBases.add(identityBase(input, adapter.provider));
+      bases.set(input.sourceScope, scopeBases);
+    }
+  }
+  const ids = new Set<string>();
+  for (const row of rows) {
+    const scopeKeys = keys.get(row.sourceScope);
+    if (
+      scopeKeys &&
+      ((row.details.postingLink && !row.supersededById) ||
+        [row.sourceKey, ...row.sourceAliases].some((key) =>
+          scopeKeys.has(key),
+        ) ||
+        bases.get(row.sourceScope)?.has(identityBase(row, adapter.provider)))
+    ) {
+      ids.add(row.id);
+    }
+  }
+  return ids;
+}
+
+/** Pure reconciliation against a consistent connection snapshot. */
 export function planRun(
   plan: FinancialPlan,
   run: Run,
@@ -1710,6 +1797,7 @@ export function planRun(
     plan.snapshot.runHistory ?? summarizeRunHistory(priorRuns, adapter);
   const beforeRows = plan.orderedRows();
   const history = indexRunHistory(priorRuns, runHistory, adapter);
+  const full = (row: LedgerRow) => plan.full(row);
   const cardKeys = new Map(
     (plan.snapshot.catalog?.cards ?? []).map((card) => [
       card.id,
@@ -1724,6 +1812,7 @@ export function planRun(
       history,
       cardKeys,
       rows: beforeRows,
+      full,
       stale: (status) => stalePartition(response, status, adapter, history),
     }),
   );
@@ -1878,6 +1967,7 @@ export function planRun(
           )
           .map(({ facts, capturedFinancial }) => [facts, capturedFinancial]),
       ),
+      full,
     );
     const absence = responseAbsence({
       adapter,
@@ -1898,6 +1988,7 @@ export function planRun(
       index,
       comparableAbsence: absence.covers,
       baseline: baselineAccounts.has(response.accountKey),
+      full,
     });
     const markSeen = (id: string, observed = true) => {
       seenIds.add(id);
@@ -1906,8 +1997,8 @@ export function planRun(
       }
       index.consume(id);
     };
-    const markedGroups = new Set<readonly Transaction[]>();
-    const markGroupSeen = (rows: readonly Transaction[]) => {
+    const markedGroups = new Set<readonly LedgerRow[]>();
+    const markGroupSeen = (rows: readonly LedgerRow[]) => {
       if (markedGroups.has(rows)) {
         return;
       }
@@ -1984,7 +2075,7 @@ export function planRun(
         fingerprints,
       } = index.groups.get(base)!;
       const matches = index.matches(input.sourceKey);
-      const uniqueNative = (facts: TransactionFacts, row: TransactionFacts) =>
+      const uniqueNative = (facts: IdentityClaim, row: IdentityClaim) =>
         matches.count === 1 &&
         newGroup.length === 1 &&
         unambiguousNative(facts, row);
@@ -2019,7 +2110,7 @@ export function planRun(
           ownsSourceKey(known, input.sourceKey);
         if (enrichesKnownIdentity) {
           observedIds.add(known.id);
-          const previous = plan.transaction(known.id)!;
+          const previous = plan.hydrated(known.id)!;
           plan.updateTransaction(previous.id, {
             details: {
               ...previous.details,
@@ -2049,7 +2140,7 @@ export function planRun(
         // of absence. Keep attribution and money until current evidence proves it.
         markGroupSeen(legacyProtectedGroup);
         for (const previous of legacyProtectedGroup) {
-          const latest = plan.transaction(previous.id)!;
+          const latest = plan.hydrated(previous.id)!;
           plan.updateTransaction(previous.id, {
             details: {
               ...latest.details,
@@ -2078,7 +2169,7 @@ export function planRun(
           sameFacts.next++;
         }
       }
-      let previous = changedUncertainSet
+      let found = changedUncertainSet
         ? undefined
         : uncertain && oldGroup.length > 0
           ? sameFacts?.rows[sameFacts.next]
@@ -2088,14 +2179,14 @@ export function planRun(
       // A retained omission at or after this capture binds unless these facts
       // uniquely continue the native identity; newer current facts always win.
       if (
-        previous &&
-        ((previous.sourceAbsence !== undefined &&
-          previous.sourceAbsence.capturedAt >= response.capturedAt &&
-          !uniqueNative(input, previous)) ||
-          (!history.historical(previous) &&
-            previous.lastSeenAt > response.capturedAt))
+        found &&
+        ((found.sourceAbsence !== undefined &&
+          found.sourceAbsence.capturedAt >= response.capturedAt &&
+          !uniqueNative(input, found)) ||
+          (!history.historical(found) &&
+            found.lastSeenAt > response.capturedAt))
       ) {
-        markSeen(previous.id);
+        markSeen(found.id);
         continue;
       }
       const comparable = hasComparablePartition(result, input.status);
@@ -2124,7 +2215,7 @@ export function planRun(
         reviewedGroups.add(base);
         for (const old of oldGroup) {
           retirementCandidates.add(old.id);
-          const latest = plan.transaction(old.id)!;
+          const latest = plan.hydrated(old.id)!;
           plan.updateTransaction(old.id, {
             identityStrength: "ambiguous",
             details: {
@@ -2138,7 +2229,7 @@ export function planRun(
         changedUncertainSet ||
         reviewedGroups.has(base) ||
         (matches.count > 1 && !uncertain) ||
-        previous?.identityStrength === "ambiguous"
+        found?.identityStrength === "ambiguous"
       ) {
         const alreadyAmbiguous = input.identityStrength === "ambiguous";
         input.identityStrength = "ambiguous";
@@ -2150,33 +2241,30 @@ export function planRun(
         }
       }
       // Historical archives can add evidence but cannot replace current observations.
-      if (previous && result.historical) {
-        markSeen(previous.id);
+      if (found && result.historical) {
+        markSeen(found.id);
         continue;
       }
-      if (!previous && result.historical && matches.count > 0) {
+      if (!found && result.historical && matches.count > 0) {
         continue;
       }
-      if (
-        previous?.presence !== "seen" &&
-        input.identityStrength !== "native"
-      ) {
+      if (found?.presence !== "seen" && input.identityStrength !== "native") {
         // A disappeared authorization's reappearance is not proof of the same purchase.
-        previous = undefined;
+        found = undefined;
       }
-      if (previous?.presence === "removed") {
+      if (found?.presence === "removed") {
         const removal = plan.snapshot.removals.find(
-          (row) => row.transactionId === previous.id,
+          (row) => row.transactionId === found.id,
         );
         if (
-          response.capturedAt <= previous.lastSeenAt ||
+          response.capturedAt <= found.lastSeenAt ||
           (removal && response.capturedAt <= removal.createdAt)
         ) {
-          markSeen(previous.id);
+          markSeen(found.id);
           continue;
         }
       }
-      if (!previous) {
+      if (!found) {
         const financial = reconcileFinancialBundle({
           counterpartyKinds: adapter.counterpartyKinds,
           input,
@@ -2191,9 +2279,7 @@ export function planRun(
         };
       }
       const continuation =
-        !previous && !absence.prior(input)
-          ? continuations.get(input)
-          : undefined;
+        !found && !absence.prior(input) ? continuations.get(input) : undefined;
       if (continuation) {
         // Retain an audit row without allocating a discovery identity or created event.
         recordPaymentContextConflicts(input, continuation.details);
@@ -2238,12 +2324,12 @@ export function planRun(
         updated++;
         continue;
       }
-      const id = previous?.id ?? newId();
+      const id = found?.id ?? newId();
       markSeen(id);
       if (financialAuthority.kind === "asserted") {
         financiallyObservedIds.add(id);
       }
-      if (!previous) {
+      if (!found) {
         recordPaymentContextConflicts(input, undefined);
         const sourceAbsence = absence.prior(input);
         plan.insertTransaction({
@@ -2280,6 +2366,8 @@ export function planRun(
           });
         }
       } else {
+        // A matched row is written below: every comparison reads it complete.
+        const previous = plan.full(found);
         // Missing plan metadata is not a single-payment assertion. Keep the
         // known plan while accepting fresh purchase facts; explicit conflicts
         // keep accepted money and remain reviewable until the source restates
@@ -2387,7 +2475,7 @@ export function planRun(
           accepted.counterpartyName = previous.counterpartyName;
           retainUnassertedCounterpartyIdentity(accepted, previous);
         }
-        retainEvidence(plan.transaction(id)!, accepted, adapter);
+        retainEvidence(plan.hydrated(id)!, accepted, adapter);
         const changed =
           JSON.stringify(financialState(previous)) !==
           JSON.stringify(financialState(accepted));
@@ -2418,7 +2506,7 @@ export function planRun(
           },
           // Missing payment evidence keeps the stored value; a value or conflict
           // replaces it before the shared content comparison.
-          ...storedPaymentContext(accepted, plan.transaction(id)),
+          ...storedPaymentContext(accepted, plan.hydrated(id)),
           presence,
           sourceAbsence,
           lastSeenAt: response.capturedAt,
@@ -2456,7 +2544,7 @@ export function planRun(
       if (seenIds.has(id)) {
         continue;
       }
-      const previous = plan.transaction(id)!;
+      const previous = plan.hydrated(id)!;
       plan.updateTransaction(id, {
         sourceEvidence: {
           ...previous.sourceEvidence,
@@ -2478,13 +2566,18 @@ export function planRun(
       if (identities.size < 2) {
         continue;
       }
-      for (const previous of group) {
+      for (const row of group) {
+        if (
+          row.amountMinor === null &&
+          row.details.issues.includes(DUPLICATE_ORDINAL)
+        ) {
+          continue;
+        }
+        const previous = plan.full(row);
         if (previous.amountMinor === null) {
-          if (!previous.details.issues.includes(DUPLICATE_ORDINAL)) {
-            plan.updateTransaction(previous.id, {
-              details: heldLine(previous).details,
-            });
-          }
+          plan.updateTransaction(previous.id, {
+            details: heldLine(previous).details,
+          });
           continue;
         }
         const held = {

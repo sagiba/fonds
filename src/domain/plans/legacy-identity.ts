@@ -7,6 +7,7 @@ import {
   identitySourceRows,
   type SourceIdentityFacts,
 } from "./source-identity.js";
+import type { LedgerRow } from "./state.js";
 
 // Groups stored before captured identity comparisons existed. Once every stored
 // uncertain group carries a comparison, this module has nothing left to decide.
@@ -127,14 +128,17 @@ function legacyIdentityComparisons(
 /**
  * Old comparisons are proved, or the whole group stays protected: missing
  * migration metadata is evidence neither of a new transaction nor of absence.
+ * Only an uncertain group's comparison group is returned; `full` supplies the
+ * complete rows its captured comparisons need.
  */
-export function legacyGroupComparison(
-  oldGroup: Transaction[],
-  knownGroup: readonly Transaction[],
+export function legacyGroupComparison<Row extends LedgerRow>(
+  oldGroup: Row[],
+  knownGroup: readonly Row[],
   newGroup: SourceIdentityFacts[],
   uncertain: boolean,
   pristineInputs: PristineInputs,
   adapter: SourceAdapter,
+  full: (row: Row) => Transaction,
 ) {
   const unknownMembership = knownGroup.filter(
     (row) =>
@@ -142,16 +146,24 @@ export function legacyGroupComparison(
       !row.sourceAbsence &&
       !row.supersededById &&
       row.identityStrength !== "native" &&
-      row.sourceEvidence?.identity?.financialFingerprint === undefined,
+      full(row).sourceEvidence?.identity?.financialFingerprint === undefined,
   );
   const missingComparison =
     uncertain &&
     oldGroup.some(
-      (row) => row.sourceEvidence?.identity?.financialFingerprint === undefined,
+      (row) =>
+        full(row).sourceEvidence?.identity?.financialFingerprint === undefined,
     );
-  const comparisonGroup = missingComparison
-    ? legacyIdentityComparisons(oldGroup, newGroup, pristineInputs, adapter)
-    : oldGroup;
+  const comparisonGroup: SourceIdentityFacts[] | undefined = missingComparison
+    ? legacyIdentityComparisons(
+        oldGroup.map(full),
+        newGroup,
+        pristineInputs,
+        adapter,
+      )
+    : uncertain
+      ? oldGroup.map(full)
+      : [];
   return {
     missingComparison,
     comparisonGroup,

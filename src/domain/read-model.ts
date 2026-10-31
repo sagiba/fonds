@@ -173,9 +173,9 @@ export function isLiveBilledLine(
   );
 }
 
-export function billedLinesByPurchase(
-  rows: Iterable<Transaction>,
-): Map<string, Transaction[]> {
+export function billedLinesByPurchase<
+  Row extends Pick<Transaction, "purchaseId" | "presence" | "supersededById">,
+>(rows: Iterable<Row>): Map<string, Row[]> {
   return Map.groupBy(
     [...rows].filter(isLiveBilledLine),
     (row) => row.purchaseId!,

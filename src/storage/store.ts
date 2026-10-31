@@ -54,7 +54,7 @@ import {
   NotFoundError,
 } from "../domain/errors.js";
 import { toSafeMinor } from "../domain/money.js";
-import { compareStrings } from "../domain/observations.js";
+import { canonicalJson, compareStrings } from "../domain/observations.js";
 import {
   editSchema,
   planAnnotation,
@@ -84,11 +84,14 @@ import {
   type DeferredCandidate,
   FinancialPlan,
   type FinancialSnapshot,
+  isNarrow,
+  type NarrowRow,
 } from "../domain/plans/state.js";
 import {
   extractRun,
   finishTransactionContent,
   planRun,
+  predictHydration,
   refreshFailureCodes,
   type RunInput,
   type SyncResult,
@@ -121,11 +124,13 @@ import {
 } from "./sql.js";
 import type {
   LatestAppliedRun,
+  LedgerLoad,
   OrderedRun,
   RefreshRow,
   RefreshWindowRow,
   Statements,
 } from "./statements.js";
+import { narrowFacts } from "./transaction-codec.js";
 
 // Keep public error identity (for example version conflicts) while classifying recovery.
 const interpretationErrors = new WeakSet<Error>();
@@ -135,6 +140,12 @@ const RUN_ID_BATCH = 99;
 
 /** IDs per read by ID, well within D1's 100 parameters. */
 const ID_BATCH = 50;
+
+/** IDs per hydration read: one statement per round on most backends. */
+const HYDRATION_BATCH = 1000;
+
+/** Planning rounds before every row of the connection is hydrated. */
+const HYDRATION_ROUNDS = 4;
 
 const utf8 = new TextEncoder();
 
@@ -173,6 +184,8 @@ function priorRun({
 
 interface RunHistoryLoad extends Pick<FinancialSnapshot, "priorRuns"> {
   runHistory: RunHistorySummary;
+  /** Applied runs a scoped load fetched, before the latest run. */
+  dependent: (OrderedRun & { appliedAt: string })[];
   /** The run being applied, as its columns read before application. */
   applying: OrderedRun;
   latest: LatestAppliedRun | undefined;
@@ -249,27 +262,62 @@ export interface PlannedApplication {
   runHistory: RunHistoryDocument | undefined;
 }
 
-export interface RunHistoryComparison {
+export interface ApplicationLoadingComparison {
   /** Whether the dependency-driven plan loaded only dependent runs. */
   scoped: boolean;
   loadedRuns: number;
   appliedRuns: number;
+  /** The committed plan: narrow rows, hydrated on demand, and dependent runs. */
   dependent: PlannedApplication;
+  /** The same application planned from complete rows and every applied run. */
   complete: PlannedApplication;
+  /** Rows as the narrow load decoded them, in ingestion order. */
+  narrowRows: NarrowRow[];
+  /** The committed plan's snapshot: each row's ID and whether it stayed narrow, in order. */
+  plannedRows: { id: string; narrow: boolean }[];
+  /** The same rows as a complete load decodes them. */
+  completeRows: Transaction[];
+  /** Rows the committed plan had hydrated. */
+  hydrated: string[];
+  /** Rows whose narrow decode was in doubt, hydrated before planning. */
+  doubtful: string[];
+  rounds: number;
 }
 
-let runHistoryVerifier:
-  ((comparison: RunHistoryComparison) => void) | undefined;
+interface HydrationOptions {
+  /** Whether rows are predicted before the first round. */
+  predict: boolean;
+  /** Planning rounds before every row is hydrated. */
+  rounds: number;
+  /** Runs before each hydration read, with the IDs it will read. */
+  beforeRead?: (ids: string[]) => Promise<void> | void;
+}
+
+let hydrationOptions: HydrationOptions = {
+  predict: true,
+  rounds: HYDRATION_ROUNDS,
+};
+
+/** Test seam: changes how sync application hydrates. Production keeps the defaults. */
+export function configureHydration(
+  options: Partial<HydrationOptions> = {},
+): void {
+  hydrationOptions = { predict: true, rounds: HYDRATION_ROUNDS, ...options };
+}
+
+let loadingVerifier:
+  ((comparison: ApplicationLoadingComparison) => void) | undefined;
 
 /**
  * Test seam: every sync application in this module instance also plans from
- * every applied run, with the same clock and IDs, and reports both outcomes
- * before committing the dependency-driven one. Production sets none.
+ * complete rows and every applied run, with the same clock and IDs, and
+ * reports both outcomes before committing the dependent one. Production sets
+ * none.
  */
-export function verifyRunHistoryLoading(
-  verifier: ((comparison: RunHistoryComparison) => void) | undefined,
+export function verifyApplicationLoading(
+  verifier: ((comparison: ApplicationLoadingComparison) => void) | undefined,
 ): void {
-  runHistoryVerifier = verifier;
+  loadingVerifier = verifier;
 }
 
 function plannedApplication(
@@ -820,8 +868,8 @@ function buildStore<Db>(
   }
 
   /**
-   * Without `runs`, an unscoped plan loads every applied run; sync application
-   * supplies the runs its rows and capture depend on instead.
+   * Complete rows and, unscoped, every applied run. Sync application loads
+   * narrow rows and dependent runs instead (`planApplication`).
    */
   async function loadPlan(
     tx: Db,
@@ -829,9 +877,6 @@ function buildStore<Db>(
     scope?: PlanScope,
     relatedIds: string[] = [],
     catalog = false,
-    runs?: (
-      rows: Transaction[],
-    ) => Promise<Pick<FinancialSnapshot, "priorRuns" | "runHistory">>,
   ) {
     // Lock acquisition is a preceding statement: READ COMMITTED must see post-lock versions.
     const joined = await statements.planRows(tx, connection.id, scope);
@@ -851,11 +896,7 @@ function buildStore<Db>(
       annotations: joined.flatMap(({ annotation }) =>
         annotation ? [annotation] : [],
       ),
-      ...(scope
-        ? { priorRuns: [] }
-        : runs
-          ? await runs(rows)
-          : { priorRuns: await statements.priorRuns(tx, connection.id) }),
+      priorRuns: scope ? [] : await statements.priorRuns(tx, connection.id),
       removals: scope ? [] : await statements.removals(tx, connection.id),
       ...(catalog && { catalog: await loadCatalog(tx, connection.id) }),
     });
@@ -882,7 +923,7 @@ function buildStore<Db>(
     connectionId: string,
     run: Run,
     adapter: SourceAdapter,
-    rows: Transaction[],
+    rows: Iterable<unknown>,
   ): Promise<RunHistoryLoad> {
     const latest = (await statements.runHistory(tx, connectionId))[0];
     const stored = latest && decodeRunHistory(latest.document);
@@ -921,31 +962,213 @@ function buildStore<Db>(
       return {
         priorRuns,
         runHistory: summarizeRunHistory(priorRuns, adapter),
+        dependent: [],
         applying,
         latest,
         scoped,
       };
     }
-    const priorRuns = fetched
-      .filter(
+    return withDependentRuns(
+      { runHistory: current, dependent: [], applying, latest, scoped },
+      fetched,
+    );
+  }
+
+  /** A scoped load with `fetched` added to its dependent runs. */
+  function withDependentRuns(
+    load: Omit<RunHistoryLoad, "priorRuns">,
+    fetched: readonly OrderedRun[],
+  ): RunHistoryLoad {
+    const dependent = [
+      ...load.dependent,
+      ...fetched.filter(
         (candidate): candidate is OrderedRun & { appliedAt: string } =>
           candidate.appliedAt !== null,
-      )
-      .sort(applicationOrder);
+      ),
+    ].sort(applicationOrder);
     return {
+      ...load,
+      dependent,
       // Of the order, the planner reads only the last run's status; the
       // database's own ordering supplies that run.
-      priorRuns: [...priorRuns, ...(latest ? [latest] : [])].map(priorRun),
-      runHistory: current,
-      applying,
-      latest,
-      scoped,
+      priorRuns: [...dependent, ...(load.latest ? [load.latest] : [])].map(
+        priorRun,
+      ),
     };
   }
 
-  /** Plans the same application from every applied run and reports both. */
-  async function compareRunHistory(
-    verifier: (comparison: RunHistoryComparison) => void,
+  /** Adds to a scoped load the runs that hydrated `rows` name. */
+  async function addReferencedRuns(
+    tx: Db,
+    connectionId: string,
+    load: RunHistoryLoad,
+    rows: readonly Transaction[],
+  ): Promise<RunHistoryLoad> {
+    if (!load.scoped) {
+      return load;
+    }
+    const known = new Set(load.priorRuns.map(({ id }) => id));
+    known.add(load.applying.id);
+    const missing = [...referencedRunIds(rows)].filter((id) => !known.has(id));
+    if (missing.length === 0) {
+      return load;
+    }
+    const fetched: OrderedRun[] = [];
+    for (const batch of chunks(missing, RUN_ID_BATCH)) {
+      fetched.push(...(await statements.runsById(tx, connectionId, batch)));
+    }
+    return withDependentRuns(load, fetched);
+  }
+
+  /** Complete rows of `ids`; every one must exist. */
+  async function hydrate(tx: Db, ids: readonly string[]) {
+    const rows: Transaction[] = [];
+    for (const batch of chunks(
+      ids,
+      db.backend === "d1" ? RUN_ID_BATCH : HYDRATION_BATCH,
+    )) {
+      rows.push(...(await statements.completeRows(tx, batch)));
+    }
+    if (new Set(rows.map(({ id }) => id)).size !== new Set(ids).size) {
+      throw new Error("A hydrated transaction is missing");
+    }
+    return rows;
+  }
+
+  /**
+   * Plans one application from narrow rows, hydrating the rows the plan
+   * needs complete. A round whose plan demanded hydration is speculative:
+   * its result, and any planner error, is discarded, the demanded rows are
+   * hydrated, and the application is planned again from pristine inputs with
+   * the same clock and ID tape. Only a round without demands is returned, so
+   * it decides exactly as a plan from complete rows would.
+   */
+  async function planApplication(
+    tx: Db,
+    input: {
+      connection: Connection;
+      ledger: LedgerLoad[];
+      history: RunHistoryLoad;
+      removals: FinancialSnapshot["removals"];
+      catalog: NonNullable<FinancialSnapshot["catalog"]>;
+      run: Run;
+      extraction: ReturnType<typeof extractRun>;
+      adapter: SourceAdapter;
+      now: string;
+      onRead: (reading: boolean) => void;
+    },
+  ) {
+    const { connection, ledger, adapter } = input;
+    let history = input.history;
+    const narrow = new Map(ledger.map(({ row }) => [row.id, row]));
+    const doubtful = ledger
+      .filter(({ doubt }) => doubt)
+      .map(({ row }) => row.id);
+    const doubt = new Set(doubtful);
+    const annotations = ledger.flatMap(({ annotation }) =>
+      annotation ? [annotation] : [],
+    );
+    const complete = new Map<string, Transaction>();
+    const wanted = new Set([
+      ...doubtful,
+      ...(hydrationOptions.predict
+        ? predictHydration([...narrow.values()], input.extraction, adapter)
+        : []),
+    ]);
+    const tape: string[] = [];
+    for (let round = 1; ; round++) {
+      while (wanted.size > complete.size) {
+        input.onRead(true);
+        const reading = [...wanted].filter((id) => !complete.has(id));
+        await hydrationOptions.beforeRead?.(reading);
+        const rows = await hydrate(tx, reading);
+        history = await addReferencedRuns(tx, connection.id, history, rows);
+        input.onRead(false);
+        for (const row of rows) {
+          complete.set(row.id, row);
+          // A narrow decode that disagrees with the complete one is never
+          // trusted: every row of this application is hydrated instead.
+          if (
+            !doubt.has(row.id) &&
+            canonicalJson(narrowFacts(row)) !==
+              canonicalJson(narrow.get(row.id))
+          ) {
+            for (const id of narrow.keys()) {
+              wanted.add(id);
+            }
+          }
+        }
+      }
+      const plan = new FinancialPlan({
+        connection,
+        rows: ledger.map(({ row }) => complete.get(row.id) ?? row),
+        annotations,
+        priorRuns: history.priorRuns,
+        runHistory: history.runHistory,
+        removals: input.removals,
+        catalog: input.catalog,
+      });
+      const { run, extraction } = structuredClone({
+        run: input.run,
+        extraction: input.extraction,
+      });
+      let cursor = 0;
+      let result: SyncResult | undefined;
+      let failure: unknown;
+      try {
+        result = planRun(plan, run, adapter, extraction, input.now, () => {
+          if (cursor === tape.length) {
+            tape.push(crypto.randomUUID());
+          }
+          return tape[cursor++]!;
+        });
+      } catch (error) {
+        failure = error;
+      }
+      if (plan.demands.size === 0) {
+        if (!result) {
+          throw interpretationError(failure);
+        }
+        const written = [
+          ...plan.transactionWrites.values(),
+          ...plan.observationWrites.values(),
+        ];
+        if (
+          written.some(
+            (row) =>
+              isNarrow(row) || (narrow.has(row.id) && !complete.has(row.id)),
+          )
+        ) {
+          throw new Error("A write names a transaction that was not hydrated");
+        }
+        return {
+          plan,
+          result,
+          history,
+          tape,
+          narrowRows: [...narrow.values()],
+          hydrated: [...complete.keys()],
+          doubtful,
+          rounds: round,
+        };
+      }
+      for (const id of plan.demands) {
+        if (!narrow.has(id) || complete.has(id)) {
+          throw new Error("A hydration demand names no narrow row");
+        }
+        wanted.add(id);
+      }
+      if (round >= hydrationOptions.rounds) {
+        for (const id of narrow.keys()) {
+          wanted.add(id);
+        }
+      }
+    }
+  }
+
+  /** Plans the same application from complete rows and every applied run, and reports both. */
+  async function compareLoading(
+    verifier: (comparison: ApplicationLoadingComparison) => void,
     tx: Db,
     connection: Connection,
     dependent: {
@@ -958,6 +1181,10 @@ function buildStore<Db>(
       result: SyncResult;
       history: RunHistoryLoad;
       runHistory: RunHistoryDocument | undefined;
+      narrowRows: NarrowRow[];
+      hydrated: string[];
+      doubtful: string[];
+      rounds: number;
     },
   ) {
     const { adapter, history, runHistory } = dependent;
@@ -977,6 +1204,15 @@ function buildStore<Db>(
       scoped: history.scoped,
       loadedRuns: dependent.plan.snapshot.priorRuns.length,
       appliedRuns: priorRuns.length,
+      narrowRows: dependent.narrowRows,
+      plannedRows: dependent.plan.snapshot.rows.map((row) => ({
+        id: row.id,
+        narrow: isNarrow(row),
+      })),
+      completeRows: plan.snapshot.rows.map((row) => plan.full(row)),
+      hydrated: dependent.hydrated,
+      doubtful: dependent.doubtful,
+      rounds: dependent.rounds,
       dependent: plannedApplication(
         dependent.plan,
         dependent.result,
@@ -1227,33 +1463,22 @@ function buildStore<Db>(
         if (run.appliedAt) {
           return replayResult(run);
         }
-        let history: RunHistoryLoad | undefined;
-        const plan = await loadPlan(
+        const ledger = await statements.ledgerRows(tx, connection.id);
+        const loadedHistory = await loadRunHistory(
           tx,
-          locked,
-          undefined,
-          [],
-          true,
-          async (rows) => {
-            history = await loadRunHistory(
-              tx,
-              connection.id,
-              run,
-              adapter,
-              rows,
-            );
-            return {
-              priorRuns: history.priorRuns,
-              runHistory: history.runHistory,
-            };
-          },
+          connection.id,
+          run,
+          adapter,
+          ledger.map(({ row }) => row),
         );
+        const removals = await statements.removals(tx, connection.id);
+        const catalog = await loadCatalog(tx, connection.id);
         phase = "reconciliation";
         const reconciliationStarted = performance.now();
         const loaded = {
-          ledgerRows: plan.snapshot.rows.length,
-          priorRuns: plan.snapshot.priorRuns.length,
-          removals: plan.snapshot.removals.length,
+          ledgerRows: ledger.length,
+          priorRuns: loadedHistory.priorRuns.length,
+          removals: removals.length,
         };
         emit({
           event: "fonds_sync",
@@ -1262,32 +1487,38 @@ function buildStore<Db>(
           outcome: "started",
           counts: loaded,
         });
-        let result: SyncResult;
         const now = new Date().toISOString();
-        const issued: string[] = [];
-        // Planning may adjust its inputs; the comparison plans pristine copies.
-        const pristine =
-          runHistoryVerifier && structuredClone({ run, extraction });
-        try {
-          result = planRun(plan, run, adapter, extraction, now, () => {
-            const id = crypto.randomUUID();
-            issued.push(id);
-            return id;
-          });
-        } catch (error) {
-          throw interpretationError(error);
-        }
-        const runHistory = nextRunHistory(history!, plan.runUpdate, adapter);
-        if (runHistoryVerifier && pristine) {
-          await compareRunHistory(runHistoryVerifier, tx, locked, {
-            ...pristine,
+        const planned = await planApplication(tx, {
+          connection: locked,
+          ledger,
+          history: loadedHistory,
+          removals,
+          catalog,
+          run,
+          extraction,
+          adapter,
+          now,
+          onRead: (reading) => {
+            phase = reading ? "read" : "reconciliation";
+          },
+        });
+        const { plan, result, history } = planned;
+        const runHistory = nextRunHistory(history, plan.runUpdate, adapter);
+        if (loadingVerifier) {
+          await compareLoading(loadingVerifier, tx, locked, {
+            // Planning may adjust its inputs; the comparison plans pristine copies.
+            ...structuredClone({ run, extraction }),
             adapter,
             now,
-            issued,
+            issued: planned.tape,
             plan,
             result,
-            history: history!,
+            history,
             runHistory,
+            narrowRows: planned.narrowRows,
+            hydrated: planned.hydrated,
+            doubtful: planned.doubtful,
+            rounds: planned.rounds,
           });
         }
         const dbBytesRead = db.bytesRead?.(tx);
@@ -1305,6 +1536,9 @@ function buildStore<Db>(
             absent: result.unlisted,
             deferred: plan.deferredCandidates.length,
             ...loaded,
+            priorRuns: history.priorRuns.length,
+            hydratedRows: planned.hydrated.length,
+            hydrationRounds: planned.rounds,
             ...(dbBytesRead !== undefined && { dbBytesRead }),
           },
         });

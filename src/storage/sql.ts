@@ -467,6 +467,103 @@ export function listColumns<T extends Record<ListColumn, AnyColumn>>(
   return columns as Pick<T, ListColumn>;
 }
 
+/** Transaction columns a narrow ledger row reads (`NarrowRow`). */
+const ledgerColumnNames = [
+  "id",
+  "sourceScope",
+  "cardId",
+  "sourceKey",
+  "sourceAliases",
+  "identityStrength",
+  "status",
+  "presence",
+  "sourceAbsence",
+  "kind",
+  "merchantName",
+  "transactionDate",
+  "bookingDate",
+  "billingDate",
+  "amountMinor",
+  "currency",
+  "amountBasis",
+  "originalAmountMinor",
+  "originalCurrency",
+  "installmentCount",
+  "purchaseId",
+  "installmentNumber",
+  "firstSeenAt",
+  "version",
+  "supersededById",
+  "sourceIssues",
+] as const;
+
+export type LedgerColumn = (typeof ledgerColumnNames)[number];
+
+export function ledgerColumns<T extends Record<LedgerColumn, AnyColumn>>(
+  table: T,
+): Pick<T, LedgerColumn> {
+  const columns: Partial<Pick<T, LedgerColumn>> = {};
+  for (const key of ledgerColumnNames) {
+    columns[key] = table[key];
+  }
+  return columns as Pick<T, LedgerColumn>;
+}
+
+/** How often `text` occurs in a text column; zero for null. */
+function occurrences(column: AnyColumn, text: string) {
+  return sql<number>`(length(coalesce(${column}, '')) - length(replace(coalesce(${column}, ''), ${text}, ''))) / ${sql.raw(String(text.length))}`.mapWith(
+    Number,
+  );
+}
+
+/**
+ * Facts a narrow ledger row takes from large documents without evaluating
+ * them as JSON: PostgreSQL rejects some valid stored text (escaped NUL, lone
+ * surrogates) as soon as it parses it, so only text functions run here.
+ * These counts only prove facts in canonical cases; `decodeLedgerRow`
+ * leaves every other case in doubt, and a row in doubt is hydrated:
+ *
+ * - A key is absent when its bare name occurs nowhere and the document has no
+ *   `\u` escape, which could spell any name.
+ * - Inside a JSON string every quote is escaped, so the compact pair
+ *   `"retiredFromMatching":true` occurs only as that key with that value;
+ *   it decides only as the key's single mention, in a document without escapes.
+ * - A link document is absent as SQL null or the text `null`, and present
+ *   when it begins with `{`.
+ */
+export function ledgerFlags(columns: {
+  sourceEvidence: AnyColumn;
+  postingLink: AnyColumn;
+  provider: AnyColumn;
+}) {
+  const flag = (condition: SQL) =>
+    sql<number>`case when ${condition} then 1 else 0 end`.mapWith(Number);
+  return {
+    retiredMentions: occurrences(columns.sourceEvidence, "retiredFromMatching"),
+    retiredTrue: occurrences(
+      columns.sourceEvidence,
+      '"retiredFromMatching":true',
+    ),
+    retiredFalse: occurrences(
+      columns.sourceEvidence,
+      '"retiredFromMatching":false',
+    ),
+    evidenceEscapes: occurrences(columns.sourceEvidence, "\\u"),
+    linkAbsent: flag(
+      sql`${columns.postingLink} is null or ${columns.postingLink} = 'null'`,
+    ),
+    linkObject: flag(sql`substr(${columns.postingLink}, 1, 1) = '{'`),
+    // Operational identity lives in its own column; one left in the
+    // provider document would change the complete decode.
+    providerIdentityMentions: occurrences(columns.provider, "identity"),
+    providerEscapes: occurrences(columns.provider, "\\u"),
+  };
+}
+
+export type LedgerFlags = {
+  [Key in keyof ReturnType<typeof ledgerFlags>]: number;
+};
+
 export function planCondition(
   table: TransactionColumns & Table,
   connectionId: string,
