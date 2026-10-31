@@ -215,9 +215,9 @@ export interface RefreshEstimate {
   range: CollectionRange | null;
   /** Collection units: a backfill's months, or 1 for the recent window. */
   windows: number;
-  /** Cards known from discovery. */
+  /** Cards discovery recorded; cards known only from transactions are not counted. */
   cards: number;
-  /** Null when the provider offers no estimate or no card is known yet. */
+  /** Null when the provider offers no estimate or discovery recorded no card. */
   providerCalls: number | null;
 }
 

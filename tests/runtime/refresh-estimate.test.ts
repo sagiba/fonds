@@ -16,7 +16,7 @@ import {
   type Database,
   openDatabase,
 } from "../../src/storage/sqlite/database.js";
-import { synthetic } from "../helpers/storage-harness.js";
+import { row, synthetic } from "../helpers/storage-harness.js";
 
 describe("provider request estimates", () => {
   it("counts CAL's login, per-unit initialization, account and card-month requests", () => {
@@ -43,7 +43,7 @@ describe("refresh estimate", () => {
   beforeEach(async () => {
     db = await openDatabase(":memory:");
     collect.mockReset();
-    for (const id of ["estimated", "undiscovered"]) {
+    for (const id of ["estimated", "undiscovered", "transactions-only"]) {
       await db.ensureConnection({ id, provider: "cal" });
     }
     await db.recordCardDiscovery("estimated", {
@@ -69,16 +69,18 @@ describe("refresh estimate", () => {
     const service = createRefreshService({
       store: db,
       targets: async () => ({
-        targets: ["estimated", "undiscovered"].map((connectionId) => ({
-          connectionId,
-          adapter: synthetic,
-          estimateRequests: calProvider.estimateRequests!,
-          collector: async () => ({
-            provider: "cal",
-            collectorVersion: "synthetic-v1",
-            collect,
+        targets: ["estimated", "undiscovered", "transactions-only"].map(
+          (connectionId) => ({
+            connectionId,
+            adapter: synthetic,
+            estimateRequests: calProvider.estimateRequests!,
+            collector: async () => ({
+              provider: "cal",
+              collectorVersion: "synthetic-v1",
+              collect,
+            }),
           }),
-        })),
+        ),
         failures: 0,
       }),
       log: () => {},
@@ -134,9 +136,80 @@ describe("refresh estimate", () => {
           cards: 0,
           providerCalls: null,
         },
+        {
+          connectionId: "transactions-only",
+          range: null,
+          windows: 1,
+          cards: 0,
+          providerCalls: null,
+        },
       ],
     });
     expect(collect).not.toHaveBeenCalled();
+  });
+
+  /** Records a card that only a transaction references, never discovery. */
+  async function cardFromTransaction(connectionId: string, cardKey: string) {
+    await db.ingestRun(
+      {
+        runId: `${connectionId}-${cardKey}`,
+        connectionId,
+        responses: [
+          {
+            accountKey: "account",
+            endpoint: "synthetic",
+            capturedAt: "2040-07-03T00:00:00Z",
+            responseText: JSON.stringify([
+              row(`${cardKey}-purchase`, { cardKey }),
+            ]),
+          },
+        ],
+      },
+      synthetic,
+    );
+  }
+
+  it("counts only cards discovery recorded", async () => {
+    await cardFromTransaction("transactions-only", "card-x");
+    await cardFromTransaction("estimated", "card-z");
+    // Each catalog holds a card no discovery reported.
+    for (const [connectionId, total] of [
+      ["transactions-only", 1],
+      ["estimated", 4],
+    ] as const) {
+      const { cards } = await db.listCards({ connectionId });
+      expect(cards).toHaveLength(total);
+      expect(cards.filter((card) => card.lastSeenAt === null)).toHaveLength(1);
+    }
+    const estimate = (connectionId: string) =>
+      application().invoke("refresh_connection", {
+        connectionId,
+        from: "2040-01-15",
+        to: "2040-04-02",
+        estimate: true,
+      });
+    expect(await estimate("transactions-only")).toEqual({
+      estimates: [
+        {
+          connectionId: "transactions-only",
+          range: { from: "2040-01-15", to: "2040-04-02" },
+          windows: 4,
+          cards: 0,
+          providerCalls: null,
+        },
+      ],
+    });
+    expect(await estimate("estimated")).toEqual({
+      estimates: [
+        {
+          connectionId: "estimated",
+          range: { from: "2040-01-15", to: "2040-04-02" },
+          windows: 4,
+          cards: 3,
+          providerCalls: 21,
+        },
+      ],
+    });
   });
 
   it("refuses an unknown connection and an invalid range", async () => {

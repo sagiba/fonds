@@ -784,8 +784,12 @@ export function createRefreshService(options: RefreshServiceOptions) {
       const windows = range ? monthWindows(range).length : null;
       const estimates: RefreshEstimate[] = [];
       for (const target of chosen) {
-        const cards = await catalogSize(store, "cards", target.connectionId);
-        const accounts = await catalogSize(
+        const cards = await discoveredCount(
+          store,
+          "cards",
+          target.connectionId,
+        );
+        const accounts = await discoveredCount(
           store,
           "accounts",
           target.connectionId,
@@ -907,8 +911,12 @@ export function createRefreshService(options: RefreshServiceOptions) {
 
 export type RefreshService = ReturnType<typeof createRefreshService>;
 
-/** How many cards or accounts discovery has recorded for a connection. */
-async function catalogSize(
+/**
+ * How many cards or accounts discovery has recorded for a connection. A card
+ * known only from transactions was never discovered (`lastSeenAt` null), so it
+ * says nothing about what a refresh would request.
+ */
+async function discoveredCount(
   store: RefreshDatabase,
   kind: "cards" | "accounts",
   connectionId: string,
@@ -924,7 +932,7 @@ async function catalogSize(
         : await store
             .listAccounts({ connectionId, limit: 200, after })
             .then(({ accounts, hasMore }) => ({ rows: accounts, hasMore }));
-    size += page.rows.length;
+    size += page.rows.filter((row) => row.lastSeenAt !== null).length;
     const last = page.rows.at(-1);
     if (!page.hasMore || !last) {
       return size;
