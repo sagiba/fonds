@@ -122,7 +122,8 @@ type Unbatched = Exclude<CollectionEvent, { type: "card_discovery" }>;
 /** The unit's events not yet ingested, in collector order. */
 interface Batch {
   runId: string;
-  events: Unbatched[];
+  /** When collection met the run's first event. */
+  startedAt: string;
   responses: FinancialResponse[];
   failures: CollectionFailure[];
   sourceBytes: number;
@@ -193,6 +194,7 @@ export async function collectFromStore(
   /** Ingests and applies one run of the unit's captures and failures. */
   const ingest = async (
     runId: string,
+    startedAt: string,
     responses: FinancialResponse[],
     failures: CollectionFailure[],
   ) => {
@@ -208,6 +210,7 @@ export async function collectFromStore(
     const result = await store.ingestRun(
       {
         runId,
+        startedAt,
         connectionId: input.connectionId,
         collectorVersion: collector.collectorVersion,
         ...(input.refreshId && { refreshId: input.refreshId }),
@@ -308,28 +311,8 @@ export async function collectFromStore(
     if (!pending) {
       return;
     }
-    const { runId, responses, failures } = pending;
-    const result = await ingest(runId, responses, failures);
-    // The planner rejects a whole run, with its coverage, when any response is
-    // implausibly empty; one run per event confines that to its response.
-    if (
-      pending.events.length > 1 &&
-      result.status === "failed" &&
-      result.failureCode === "implausible_empty"
-    ) {
-      for (const event of pending.events) {
-        const isolated = crypto.randomUUID();
-        const single = event.type === "capture" ? [event.capture] : [];
-        const failed = event.type === "failure" ? [event.failure] : [];
-        account(
-          isolated,
-          await ingest(isolated, single, failed),
-          single.length,
-          failed.length,
-        );
-      }
-      return;
-    }
+    const { runId, startedAt, responses, failures } = pending;
+    const result = await ingest(runId, startedAt, responses, failures);
     account(runId, result, responses.length, failures.length);
   };
   /** Whether the event cannot join the current run under the run's invariants or size bound. */
@@ -378,20 +361,24 @@ export async function collectFromStore(
     if (batch && startsNewRun(batch, event, bytes)) {
       await flush();
     }
+    const collectedAt = new Date().toISOString();
     // A run is named by its first capture, so a one-event run keeps that ID.
     batch ??= {
       runId: captureId,
-      events: [],
+      startedAt: collectedAt,
       responses: [],
       failures: [],
       sourceBytes: 0,
     };
-    batch.events.push(event);
     if (event.type === "capture") {
       batch.responses.push(event.capture);
       batch.sourceBytes += bytes;
     } else {
-      batch.failures.push(event.failure);
+      // Health orders a run's failures against its responses by these times.
+      batch.failures.push({
+        ...event.failure,
+        failedAt: event.failure.failedAt ?? collectedAt,
+      });
     }
     diagnose({
       captureId,

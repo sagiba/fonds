@@ -101,7 +101,9 @@ for (const backend of backends) {
       const runs = await readRuns(db);
       expect(runs.map((run) => run.id)).toEqual(summary.runIds);
       expect(runs[0]?.snapshot.responses).toHaveLength(1);
-      expect(runs[0]?.snapshot.failures).toEqual([failure.failure]);
+      expect(runs[0]?.snapshot.failures).toEqual([
+        { ...failure.failure, failedAt: expect.any(String) },
+      ]);
       expect(runs[1]?.snapshot.responses).toHaveLength(1);
       expect(runs[1]?.snapshot.failures).toEqual([]);
       expect(runs[0]?.snapshot.responses[0]).not.toHaveProperty("responseText");
@@ -127,7 +129,12 @@ for (const backend of backends) {
       expect(runs).toHaveLength(1);
       expect(runs[0]?.snapshot.responses).toHaveLength(1);
       expect(runs[0]?.snapshot.failures).toEqual([
-        { accountKey: null, endpoint: "collection", code: "network_error" },
+        {
+          accountKey: null,
+          endpoint: "collection",
+          code: "network_error",
+          failedAt: expect.any(String),
+        },
       ]);
     });
 

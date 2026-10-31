@@ -32,6 +32,8 @@ export interface CollectionFailure {
   /** Explicitly failed optional enrichment; omitted failures affect financial coverage. */
   affectsCoverage?: false | undefined;
   code: CollectionFailureCode;
+  /** When collection met the failure; without it, the run's start stands in. */
+  failedAt?: string | undefined;
 }
 
 export interface FinancialResponse {

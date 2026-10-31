@@ -148,6 +148,10 @@ const failureSchema = z
     scope: scopeSchema.optional(),
     affectsCoverage: z.literal(false).optional(),
     code: collectionFailureCodeSchema,
+    failedAt: z.iso
+      .datetime({ offset: true })
+      .transform((value) => new Date(value).toISOString())
+      .optional(),
   })
   .strict();
 
@@ -547,6 +551,11 @@ function trackCollectionHealth(adapter: SourceAdapter) {
     // The archive's collection time survives replay; application completion does not.
     const started = Date.parse(run.startedAt);
     const attemptTime = Number.isFinite(started) ? started : Infinity;
+    // A run can hold failures met before or after its responses.
+    const failureTime = (failure: CollectionFailure | undefined) => {
+      const failed = failure?.failedAt ? Date.parse(failure.failedAt) : NaN;
+      return Number.isFinite(failed) ? failed : attemptTime;
+    };
     for (const part of run.coverage) {
       // An unscoped legacy archive cannot establish recovery of a live collection.
       if (part.success && !part.comparable && !part.scope) {
@@ -561,7 +570,16 @@ function trackCollectionHealth(adapter: SourceAdapter) {
       );
       const evidenceTime = response
         ? Date.parse(response.capturedAt)
-        : attemptTime;
+        : failureTime(
+            run.snapshot.failures?.find(
+              (failure) =>
+                failure.accountKey === part.accountKey &&
+                resourceKey(adapter, failure.endpoint) ===
+                  resourceKey(adapter, part.resource) &&
+                scopeKey(adapter, failure.scope) ===
+                  scopeKey(adapter, part.scope),
+            ),
+          );
       if (part.success && response) {
         recover(`collection:${scopeKey(adapter, part.scope)}`, evidenceTime);
       }
@@ -579,7 +597,10 @@ function trackCollectionHealth(adapter: SourceAdapter) {
     }
     for (const failure of run.snapshot.failures ?? []) {
       if (failure.affectsCoverage !== false && failure.accountKey === null) {
-        fail(`collection:${scopeKey(adapter, failure.scope)}`, attemptTime);
+        fail(
+          `collection:${scopeKey(adapter, failure.scope)}`,
+          failureTime(failure),
+        );
       }
     }
   };
@@ -1200,8 +1221,8 @@ function runStatus(
 /** Extract staged evidence before entering the atomic compare/write. */
 export function extractRun(run: Run, adapter: SourceAdapter) {
   const runId = run.id;
-  const deferred: DeferredCandidate[] = [];
   const extracted = run.snapshot.responses.map((response) => {
+    const deferred: DeferredCandidate[] = [];
     const result: ExtractionResult = unexpectedHttpStatus(response)
       ? {
           transactions: [],
@@ -1270,8 +1291,23 @@ export function extractRun(run: Run, adapter: SourceAdapter) {
           )
             .toISOString()
             .slice(0, 10);
-    return { response, result, recentCutoff };
+    return { response, result, recentCutoff, deferred };
   });
+  return {
+    extracted,
+    ...summarizeRun(extracted, run.snapshot.failures ?? [], adapter),
+  };
+}
+
+/** Coverage, warnings and status of a run's extracted responses and failures. */
+function summarizeRun(
+  extracted: readonly {
+    response: FinancialResponse;
+    result: ExtractionResult;
+  }[],
+  failures: readonly CollectionFailure[],
+  adapter: SourceAdapter,
+) {
   const coverage = extracted.flatMap(({ response, result }) =>
     result.partitions.map((partition) => ({
       ...partition,
@@ -1279,7 +1315,6 @@ export function extractRun(run: Run, adapter: SourceAdapter) {
       ...(response.scope ? { scope: response.scope } : {}),
     })),
   );
-  const failures = run.snapshot.failures ?? [];
   for (const failure of failures) {
     if (failure.affectsCoverage === false || failure.accountKey === null) {
       continue;
@@ -1309,7 +1344,7 @@ export function extractRun(run: Run, adapter: SourceAdapter) {
     failures.length,
     hasAcceptedRows,
   );
-  return { extracted, coverage, warnings, status, deferred };
+  return { coverage, warnings, status };
 }
 
 function stalePartition(
@@ -1736,8 +1771,11 @@ export function planRun(
       ...reconciliationFailure(run.warnings),
     };
   }
-  const { extracted, coverage, warnings, status, deferred } =
-    structuredClone(extraction);
+  const cloned = structuredClone(extraction);
+  let { extracted, coverage, status } = cloned;
+  const { warnings } = cloned;
+  /** The status of what the run applies, which alone drives health events. */
+  let appliedStatus = status;
   const defer = (
     input: TransactionFacts,
     reason: string,
@@ -1787,21 +1825,28 @@ export function planRun(
       card.providerKey,
     ]),
   );
-  // Rejection applies to the whole run; collection and the CLI build one response per run.
+  const rejected = extracted.filter(({ response, result }) =>
+    implausiblyEmpty({
+      adapter,
+      response,
+      result,
+      history,
+      cardKeys,
+      rows: beforeRows,
+      stale: (status) => stalePartition(response, status, adapter, history),
+    }),
+  );
+  const failures = run.snapshot.failures ?? [];
+  const failureCode =
+    rejected.length > 0
+      ? reconciliationFailureCodeSchema.enum.implausible_empty
+      : undefined;
+  // A run of nothing but implausibly empty responses is rejected whole.
   if (
-    extracted.some(({ response, result }) =>
-      implausiblyEmpty({
-        adapter,
-        response,
-        result,
-        history,
-        cardKeys,
-        rows: beforeRows,
-        stale: (status) => stalePartition(response, status, adapter, history),
-      }),
-    )
+    failureCode &&
+    rejected.length === extracted.length &&
+    failures.length === 0
   ) {
-    const failureCode = reconciliationFailureCodeSchema.enum.implausible_empty;
     // Terminal evidence only: no projection, health transition or later recovery event.
     plan.runUpdate = {
       status: "failed",
@@ -1821,14 +1866,27 @@ export function planRun(
       failureCode,
     };
   }
-  plan.deferredCandidates.push(...deferred);
+  if (failureCode) {
+    // Otherwise the rejection confines itself to those responses: as in a
+    // rejected run of their own, they leave no observations, coverage or
+    // health event, while the rest of the run applies.
+    extracted = extracted.filter((item) => !rejected.includes(item));
+    const applied = summarizeRun(extracted, failures, adapter);
+    coverage = applied.coverage;
+    appliedStatus = applied.status;
+    status = appliedStatus === "completed" ? "partial" : appliedStatus;
+    warnings.push(failureCode);
+  }
+  plan.deferredCandidates.push(
+    ...extracted.flatMap(({ deferred }) => deferred),
+  );
   const knownAccounts = new Set([
     ...history.knownAccounts,
     ...beforeRows.map((row) => row.sourceScope),
   ]);
   const baselineAccounts = new Set(
-    run.snapshot.responses
-      .map((response) => response.accountKey)
+    extracted
+      .map(({ response }) => response.accountKey)
       .filter((accountKey) => !knownAccounts.has(accountKey)),
   );
   const annotationData = new Map(
@@ -2716,7 +2774,7 @@ export function planRun(
     });
   }
   const previousStatus = priorRuns.at(-1)?.status ?? null;
-  if (status !== "completed") {
+  if (appliedStatus !== "completed") {
     event(
       status === "partial" ? "sync.partial" : "sync.failed",
       null,
@@ -2771,5 +2829,6 @@ export function planRun(
     updated,
     unlisted,
     status,
+    ...(failureCode && { failureCode }),
   };
 }

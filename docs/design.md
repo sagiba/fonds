@@ -154,10 +154,11 @@ Repeated omissions advance receipts quietly. Reappearance must postdate owner
 removal. [API fields](api.md#fields) owns inspectable state and queries.
 
 Adapters may reject an implausibly empty recent capture while covered, eligible
-rows remain. This is a failed, applied `implausible_empty` run that cannot be
-replayed into the ledger. Legitimate final-population disappearance can also be
-blocked until completeness is established; cancellation reconciliation is not
-guaranteed.
+rows remain. The rejection is applied evidence that cannot be replayed into the
+ledger: a run holding only such captures fails `implausible_empty`; otherwise
+the rest of its run still applies and the run is at most `partial`. Legitimate
+final-population disappearance can also be blocked until completeness is
+established; cancellation reconciliation is not guaranteed.
 
 ## Purchases and billed lines
 

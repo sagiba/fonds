@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   collectFromStore,
@@ -20,7 +20,11 @@ import {
   row,
   synthetic,
 } from "../helpers/storage-harness.js";
-import { readRuns } from "../helpers/storage-inspection.js";
+import {
+  dropFailure,
+  failWrites,
+  readRuns,
+} from "../helpers/storage-inspection.js";
 
 /** Reports complete partitions for whichever account the response was requested for. */
 const accounts: SourceAdapter = {
@@ -86,6 +90,9 @@ function collector(events: CollectionEvent[]): ProviderCollector {
   };
 }
 
+/** Rejects a wholly empty recent response while covered rows remain. */
+const guarded: SourceAdapter = { ...accounts, rejectEmptyRecent: true };
+
 const baselineAt = "2040-08-01T00:00:00.000Z";
 const unitAt = "2040-08-02T00:00:00.000Z";
 const baseline = [
@@ -128,6 +135,8 @@ const unit = [
   capture("third", [["third-kept", -400]], unitAt),
 ];
 
+const emptyThird = [unit[0]!, unit[1]!, capture("third", [], unitAt)];
+
 for (const backend of backends) {
   describe(`batched collection units: ${backend}`, () => {
     let db: Harness;
@@ -138,6 +147,28 @@ for (const backend of backends) {
       await db.ensureConnection({ id: connectionId, provider: "cal" });
     });
     afterEach(() => db?.close());
+
+    /** The unit's first and second captures apply; the empty third leaves its rows alone. */
+    async function expectConfinedLedger(runId: string) {
+      const rows = Object.fromEntries(
+        (await db.listTransactions({ connectionId, presence: "all" })).map(
+          (row) => [row.sourceKey, [row.amountMinor, row.presence]],
+        ),
+      );
+      expect(rows).toEqual({
+        "first-kept": [-100, "seen"],
+        "first-changed": [-250, "seen"],
+        "second-kept": [-300, "seen"],
+        "second-new": [-600, "seen"],
+        "third-kept": [-400, "seen"],
+        "third-dropped": [-500, "seen"],
+      });
+      const events = (await db.listEvents({ connectionId, limit: 1000 }))
+        .filter((event) => event.runId === runId)
+        .map((event) => event.type)
+        .sort();
+      expect(events).toEqual(["transaction.created", "transaction.updated"]);
+    }
 
     it("ingests a unit's captures as one run holding every response", async () => {
       const summary = await collectFromStore(
@@ -217,7 +248,12 @@ for (const backend of backends) {
         runs[0]!.snapshot.responses.map((response) => response.accountKey),
       ).toEqual(["first", "second"]);
       expect(runs[0]!.snapshot.failures).toEqual([
-        { accountKey: null, endpoint: "collection", code: "network_error" },
+        {
+          accountKey: null,
+          endpoint: "collection",
+          code: "network_error",
+          failedAt: expect.any(String),
+        },
       ]);
       expect(await db.listTransactions()).toHaveLength(3);
     });
@@ -256,7 +292,12 @@ for (const backend of backends) {
         runs[0]!.snapshot.responses.map((response) => response.accountKey),
       ).toEqual(["first", "third"]);
       expect(runs[0]!.snapshot.failures).toEqual([
-        { accountKey: "second", endpoint: "synthetic", code: "network_error" },
+        {
+          accountKey: "second",
+          endpoint: "synthetic",
+          code: "network_error",
+          failedAt: expect.any(String),
+        },
       ]);
       expect(runs[0]!.coverage).toEqual(
         expect.arrayContaining([
@@ -265,50 +306,216 @@ for (const backend of backends) {
       );
     });
 
-    it("confines an implausibly empty response's rejection to that response", async () => {
-      const guarded: SourceAdapter = { ...accounts, rejectEmptyRecent: true };
+    it("rejects a run whose only response is implausibly empty as a whole, without events", async () => {
       await collectFromStore(
         db,
         { connectionId },
         collector(baseline),
         guarded,
       );
+      const before = await db.listTransactions({
+        connectionId,
+        presence: "all",
+      });
       const summary = await collectFromStore(
         db,
         { connectionId },
-        collector([unit[0]!, unit[1]!, capture("third", [], unitAt)]),
+        collector([capture("third", [], unitAt)]),
         guarded,
       );
       expect(summary).toMatchObject({
-        status: "partial",
-        captures: 3,
+        status: "failed",
+        captures: 1,
         failures: 1,
         failureCodes: ["implausible_empty"],
-        created: 1,
-        updated: 1,
+        created: 0,
+        updated: 0,
         unlisted: 0,
       });
-      // The rejected unit run, then one run for each of its captures.
-      expect(summary.runIds).toHaveLength(4);
-      const runs = await readRuns(db);
-      expect(runs.map((run) => run.status)).toEqual([
-        "completed",
-        "failed",
-        "completed",
-        "completed",
-        "failed",
-      ]);
-      const amounts = Object.fromEntries(
-        (await db.listTransactions({ connectionId, presence: "all" })).map(
-          (row) => [row.sourceKey, [row.amountMinor, row.presence]],
-        ),
-      );
-      expect(amounts).toMatchObject({
-        "first-changed": [-250, "seen"],
-        "second-new": [-600, "seen"],
-        "third-kept": [-400, "seen"],
-        "third-dropped": [-500, "seen"],
+      const rejected = (await readRuns(db))[1]!;
+      expect(rejected).toMatchObject({
+        status: "failed",
+        coverage: [],
+        warnings: ["implausible_empty"],
       });
+      expect(
+        (await db.listEvents({ connectionId, limit: 1000 })).filter(
+          (event) => event.runId === rejected.id,
+        ),
+      ).toEqual([]);
+      expect(
+        await db.listTransactions({ connectionId, presence: "all" }),
+      ).toEqual(before);
+    });
+
+    it("confines an implausibly empty response's rejection to it, in the summary and the refresh", async () => {
+      await collectFromStore(
+        db,
+        { connectionId },
+        collector(baseline),
+        guarded,
+      );
+      const log: { stage?: string; outcome?: string; counts?: object }[] = [];
+      const service = createRefreshService({
+        store: db,
+        targets: async () => ({
+          targets: [
+            {
+              connectionId,
+              adapter: guarded,
+              collector: async () => collector(emptyThird),
+            },
+          ],
+          failures: 0,
+        }),
+        log: (entry) => log.push(entry as (typeof log)[number]),
+        retryDelaysMs: [],
+      });
+      const started = await service.start(connectionId, {
+        trigger: "manual",
+        operator: true,
+      });
+      await service.settled();
+      // The collection summary, as its closing diagnostic reports it.
+      expect(
+        log.find(
+          (entry) =>
+            entry.stage === "collection" && entry.outcome !== "started",
+        ),
+      ).toMatchObject({
+        outcome: "partial",
+        counts: {
+          captures: 3,
+          failures: 1,
+          observed: 4,
+          unchangedTransactions: 2,
+          unchanged: 0,
+          created: 1,
+          changed: 1,
+          absent: 0,
+        },
+      });
+      expect(await db.getRefresh(started.refresh!.id)).toMatchObject({
+        status: "partial",
+        failureCodes: ["implausible_empty"],
+        counts: {
+          captures: 3,
+          failures: 1,
+          observed: 4,
+          unchangedTransactions: 2,
+          unchanged: 0,
+          created: 1,
+          updated: 1,
+          unlisted: 0,
+        },
+      });
+      const runs = await readRuns(db);
+      expect(runs).toHaveLength(2);
+      expect(runs[1]).toMatchObject({
+        status: "partial",
+        warnings: ["implausible_empty"],
+      });
+      expect(
+        [...new Set(runs[1]!.coverage.map((part) => part.accountKey))].sort(),
+      ).toEqual(["first", "second"]);
+      await expectConfinedLedger(runs[1]!.id);
+    });
+
+    it("recovers an interrupted run with a confined rejection through pending-run recovery", async () => {
+      await collectFromStore(
+        db,
+        { connectionId },
+        collector(baseline),
+        guarded,
+      );
+      await failWrites(
+        db,
+        "interrupt_unit",
+        "transactions",
+        "INSERT",
+        "synthetic interruption",
+      );
+      await expect(
+        collectFromStore(db, { connectionId }, collector(emptyThird), guarded),
+      ).rejects.toThrow();
+      await dropFailure(db, "interrupt_unit", "transactions");
+      const pending = (await readRuns(db))[1]!;
+      expect(pending.status).toBe("started");
+      const recovered = await db.withCollectionLock(connectionId, (store) =>
+        store.recoverPendingRuns(guarded),
+      );
+      expect(recovered).toEqual({
+        acquired: true,
+        result: [
+          expect.objectContaining({
+            runId: pending.id,
+            replayed: false,
+            status: "partial",
+            failureCode: "implausible_empty",
+            created: 1,
+            updated: 1,
+            unlisted: 0,
+          }),
+        ],
+      });
+      expect(await readRuns(db)).toHaveLength(2);
+      await expectConfinedLedger(pending.id);
+    });
+
+    it("dates a unit's failure by collection, so a later success of its account recovers it", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(new Date("2040-08-01T12:00:00.000Z"));
+        await collectFromStore(
+          db,
+          { connectionId },
+          collector(baseline),
+          accounts,
+        );
+        const streaming: ProviderCollector = {
+          provider: "cal",
+          collectorVersion: "synthetic-v1",
+          async *collect() {
+            vi.setSystemTime(new Date("2040-08-02T00:00:00.000Z"));
+            yield failure("first");
+            // Fetched a minute later; its run is ingested a minute after that.
+            const fetched = capture(
+              "first",
+              [
+                ["first-kept", -100],
+                ["first-changed", -200],
+              ],
+              "2040-08-02T00:01:00.000Z",
+            );
+            vi.setSystemTime(new Date("2040-08-02T00:02:00.000Z"));
+            yield fetched;
+          },
+        };
+        const summary = await collectFromStore(
+          db,
+          { connectionId },
+          streaming,
+          accounts,
+        );
+        expect(summary.runIds).toHaveLength(2);
+        const [failedRun, recoveredRun] = summary.runIds;
+        expect((await readRuns(db, failedRun))[0]).toMatchObject({
+          status: "failed",
+          startedAt: "2040-08-02T00:00:00.000Z",
+        });
+        const events = await db.listEvents({ connectionId, limit: 1000 });
+        expect(
+          events
+            .filter((event) => event.type.startsWith("sync."))
+            .map((event) => [event.type, event.runId]),
+        ).toEqual([
+          ["sync.baseline", expect.any(String)],
+          ["sync.failed", failedRun],
+          ["sync.recovered", recoveredRun],
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("replays the batched run as already applied", async () => {

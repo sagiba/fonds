@@ -328,12 +328,14 @@ describe.each(backends)("%s optional collection failures", (backend) => {
             {
               ...optionalFailure(),
               code: "authentication_challenge",
+              failedAt: expect.any(String),
             },
             {
               accountKey: null,
               endpoint: "collection",
               code: "authentication_challenge",
               scope: { kind: "history", from: "2040-07-01", to: "2040-07-31" },
+              failedAt: expect.any(String),
             },
           ],
         }),
