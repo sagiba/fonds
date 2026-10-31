@@ -861,11 +861,17 @@ function buildStore<Db>(
         const plan = await loadPlan(tx, locked, undefined, [], true);
         phase = "reconciliation";
         const reconciliationStarted = performance.now();
+        const loaded = {
+          ledgerRows: plan.snapshot.rows.length,
+          priorRuns: plan.snapshot.priorRuns.length,
+          removals: plan.snapshot.removals.length,
+        };
         emit({
           event: "fonds_sync",
           ...ids,
           stage: "reconciliation",
           outcome: "started",
+          counts: loaded,
         });
         let result: SyncResult;
         try {
@@ -893,6 +899,7 @@ function buildStore<Db>(
             unchangedTransactions: result.unchanged ?? 0,
             absent: result.unlisted,
             deferred: plan.deferredCandidates.length,
+            ...loaded,
           },
         });
         const deferred = await Promise.all(

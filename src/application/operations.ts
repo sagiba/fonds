@@ -35,6 +35,7 @@ import {
   type RefreshStartResult,
   validateRefreshRange,
 } from "./refreshes.js";
+import { safeLog } from "./sync-diagnostics.js";
 import {
   accountListOutputSchema,
   accountReadOutputSchema,
@@ -177,6 +178,21 @@ export interface ApplicationCapabilities {
    * result.
    */
   afterWrite?(): void;
+  /** Told when an operation call ends; a failing logger never changes its result. */
+  onOperation?(entry: OperationLog): void | Promise<void>;
+}
+
+/** One operation call's volume, with no input values, identifiers or output content. */
+export interface OperationLog {
+  /** The catalog name. */
+  operation: string;
+  /** `ok`, or the public error code the call failed with. */
+  outcome: "ok" | ReturnType<typeof publicError>["code"];
+  durationMs: number;
+  /** The result's JSON byte length once produced, even when it exceeded the output limit. */
+  outputBytes?: number;
+  /** Items in a returned page. */
+  rowsReturned?: number;
 }
 
 export interface Application {
@@ -567,32 +583,75 @@ type Executors = {
   ) => Promise<z.input<Definitions[Name]["outputSchema"]>>;
 };
 
+/** Items in a page result: an object carrying `data` and `hasMore`. */
+function pageLength(output: unknown) {
+  if (output === null || typeof output !== "object") {
+    return undefined;
+  }
+  const { data, hasMore } = output as { data?: unknown; hasMore?: unknown };
+  return Array.isArray(data) && typeof hasMore === "boolean"
+    ? data.length
+    : undefined;
+}
+
 function bindOperation(
   definition: OperationDefinition,
   execute: (input: never) => unknown,
   afterWrite?: () => void,
+  onOperation?: (entry: OperationLog) => void,
 ): Operation {
+  async function run(input: unknown, measured: { outputBytes?: number }) {
+    // Executors are typed against their own definition's schema.
+    const value = await execute(definition.inputSchema.parse(input) as never);
+    try {
+      afterWrite?.();
+    } catch {
+      // The write has committed; its receipt is the result.
+    }
+    measured.outputBytes = outputByteLength(value);
+    if (measured.outputBytes > OUTPUT_MAX_BYTES) {
+      throw new OutputLimitError();
+    }
+    const output = definition.outputSchema.safeParse(value);
+    if (!output.success) {
+      if (exceedsOutputLimit(output.error.issues)) {
+        throw new OutputLimitError();
+      }
+      throw new Error("Operation returned invalid output");
+    }
+    return output.data;
+  }
+
+  if (!onOperation) {
+    return { ...definition, execute: (input) => run(input, {}) };
+  }
   return {
     ...definition,
     execute: async (input) => {
-      // Executors are typed against their own definition's schema.
-      const value = await execute(definition.inputSchema.parse(input) as never);
+      const started = performance.now();
+      const measured: { outputBytes?: number } = {};
+      const report = (
+        outcome: OperationLog["outcome"],
+        rowsReturned?: number,
+      ) =>
+        onOperation({
+          operation: definition.name,
+          outcome,
+          durationMs: Math.max(0, Math.round(performance.now() - started)),
+          ...(measured.outputBytes !== undefined && {
+            outputBytes: measured.outputBytes,
+          }),
+          ...(rowsReturned !== undefined && { rowsReturned }),
+        });
+      let output: unknown;
       try {
-        afterWrite?.();
-      } catch {
-        // The write has committed; its receipt is the result.
+        output = await run(input, measured);
+      } catch (error) {
+        report(publicError(error).code);
+        throw error;
       }
-      if (outputByteLength(value) > OUTPUT_MAX_BYTES) {
-        throw new OutputLimitError();
-      }
-      const output = definition.outputSchema.safeParse(value);
-      if (!output.success) {
-        if (exceedsOutputLimit(output.error.issues)) {
-          throw new OutputLimitError();
-        }
-        throw new Error("Operation returned invalid output");
-      }
-      return output.data;
+      report("ok", pageLength(output));
+      return output;
     },
   };
 }
@@ -788,6 +847,7 @@ export function createApplication(
             definition.name !== "refresh_connection"
             ? capabilities.afterWrite
             : undefined,
+          capabilities.onOperation && safeLog(capabilities.onOperation),
         ),
       ),
   };

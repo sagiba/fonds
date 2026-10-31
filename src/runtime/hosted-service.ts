@@ -399,6 +399,7 @@ export function createHostedService(
     createApplication(store, {
       ...(refreshes && { refreshes: ownerRefreshes(refreshes) }),
       afterWrite: writes.afterWrite,
+      onOperation: (entry) => logEvent("fonds_operation", entry),
     }),
     {
       publicOrigin: config.publicOrigin,
