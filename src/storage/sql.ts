@@ -569,12 +569,14 @@ export type LedgerFlags = {
  * statements within the driver's bound-parameter limit.
  *
  * - `accounts`: every row of these accounts in these statuses, every linked
- *   or aliased row, every undated row and every row whose provider text could
- *   state an identity a narrow read cannot see (a legacy identity, or any
- *   backslash, which can respell any key);
+ *   row, every undated row, every row whose provider text could state an
+ *   identity a narrow read cannot see (a legacy identity, or any backslash,
+ *   which can respell any key) and every row whose alias text holds a
+ *   backslash, which `alias` could not match;
  * - `window`: rows of one account dated within inclusive bounds, on
  *   `coalesce(transaction_date, booking_date)` or on `billing_date`;
  * - `keys`: rows with these source keys;
+ * - `alias`: rows whose alias text contains the key as a JSON string;
  * - `base`: rows whose operational identity text contains the base as a JSON
  *   string (a row whose text could spell it otherwise is an `accounts` row);
  * - `ids`: these rows;
@@ -591,6 +593,7 @@ export type LedgerClause =
       to: string;
     }
   | { kind: "keys"; keys: string[] }
+  | { kind: "alias"; key: string }
   | { kind: "base"; base: string }
   | { kind: "ids"; ids: string[] }
   | { kind: "dependents"; ids: string[] }
@@ -600,11 +603,12 @@ export type LedgerClause =
 export function clauseParameters(clause: LedgerClause): number {
   switch (clause.kind) {
     case "accounts":
-      return clause.accounts.length + clause.statuses.length + 3;
+      return clause.accounts.length + clause.statuses.length + 4;
     case "window":
       return 3;
     case "keys":
       return clause.keys.length;
+    case "alias":
     case "base":
       return 1;
     case "ids":
@@ -648,11 +652,11 @@ export function ledgerSelection(
           return sql`(${inArray(columns.sourceScope, clause.accounts)} and (${or(
             inArray(columns.status, clause.statuses),
             sql`(${columns.postingLink} is not null and ${columns.postingLink} <> 'null')`,
-            sql`${columns.sourceAliases} <> '[]'`,
             sql`(${columns.transactionDate} is null and ${columns.bookingDate} is null and ${columns.billingDate} is null)`,
             holdsText(columns.provider, "identity"),
             holdsText(columns.provider, backslash),
             holdsText(columns.providerIdentity, backslash),
+            holdsText(columns.sourceAliases, backslash),
           )}))`;
         case "window":
           return sql`(${columns.sourceScope} = ${clause.sourceScope} and ${
@@ -662,6 +666,8 @@ export function ledgerSelection(
           } between ${clause.from} and ${clause.to})`;
         case "keys":
           return inArray(columns.sourceKey, clause.keys);
+        case "alias":
+          return holdsText(columns.sourceAliases, JSON.stringify(clause.key));
         case "base":
           return holdsText(
             columns.providerIdentity,

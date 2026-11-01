@@ -167,6 +167,13 @@ const SCOPE_PARAMETERS = 1000;
 /** D1's 100, less the connection ID and the narrow read's own text patterns. */
 const D1_SCOPE_PARAMETERS = 90;
 
+/**
+ * Disjuncts of one bounded ledger read. They join in one flat OR, which
+ * SQLite parses as a tree as deep as the disjuncts are many, within its
+ * default expression depth of 1000.
+ */
+const SCOPE_CLAUSES = 200;
+
 const utf8 = new TextEncoder();
 
 /** PostgreSQL's "C" collation and SQLite's BINARY both compare UTF-8 bytes. */
@@ -1094,7 +1101,10 @@ function buildStore<Db>(
     return rows;
   }
 
-  /** `clauses` split into statements within the driver's parameter limit. */
+  /**
+   * `clauses` split into statements within the driver's parameter limit
+   * and `SCOPE_CLAUSES` disjuncts each.
+   */
   function packed(clauses: readonly LedgerClause[]): LedgerClause[][] {
     const budget = db.backend === "d1" ? D1_SCOPE_PARAMETERS : SCOPE_PARAMETERS;
     const pieces = clauses.flatMap((clause): LedgerClause[] => {
@@ -1103,7 +1113,7 @@ function buildStore<Db>(
           return [
             ...chunks(
               clause.accounts,
-              Math.max(1, budget - clause.statuses.length - 3),
+              Math.max(1, budget - clause.statuses.length - 4),
             ),
           ].map((accounts) => ({ ...clause, accounts }));
         case "keys":
@@ -1129,7 +1139,11 @@ function buildStore<Db>(
     let used = 0;
     for (const clause of pieces) {
       const size = clauseParameters(clause);
-      if (groups.length === 0 || used + size > budget) {
+      if (
+        groups.length === 0 ||
+        used + size > budget ||
+        groups.at(-1)!.length >= SCOPE_CLAUSES
+      ) {
         groups.push([]);
         used = 0;
       }
@@ -1141,11 +1155,11 @@ function buildStore<Db>(
 
   /**
    * The rows one sync application can decide on. The seed is what the scope
-   * names: every row of its accounts in its statuses, linked, aliased,
-   * undated or with an identity a narrow read cannot see, the padded
-   * request and observation windows, and rows named by source key or
-   * identity base. The seed is then closed, as a complete load would read
-   * them, over:
+   * names: every row of its accounts in its statuses, linked, undated, or
+   * with an identity or alias text a narrow read or key search cannot read
+   * exactly, the padded request and observation windows, and rows named by
+   * source key, alias or identity base. The seed is then closed, as a
+   * complete load would read them, over:
    *
    * - supersession, both ways, and purchase families: the purchase of every
    *   billed line and every line of every purchase;
@@ -1217,6 +1231,7 @@ function buildStore<Db>(
           ...window,
         })),
         ...(keys.length > 0 ? [{ kind: "keys" as const, keys }] : []),
+        ...scope.keys.map((key) => ({ kind: "alias" as const, key })),
         ...scope.bases.map((base) => ({ kind: "base" as const, base })),
       ]),
     );

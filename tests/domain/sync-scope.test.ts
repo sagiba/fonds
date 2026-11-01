@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import { emptyDetails, type TransactionInput } from "../../src/domain/model.js";
 import type { NarrowRow } from "../../src/domain/plans/state.js";
-import { namedWindows, syncScope } from "../../src/domain/plans/sync-scope.js";
+import {
+  namedWindows,
+  scopeNames,
+  syncScope,
+} from "../../src/domain/plans/sync-scope.js";
 import type { CollectionScope } from "../../src/domain/records.js";
 
 const adapter = {
@@ -137,5 +141,20 @@ describe("sync scope windows", () => {
         to: "9999-12-31",
       },
     ]);
+  });
+});
+
+describe("named rows", () => {
+  it("names a row by an alias equal to an observation's key, and not by another alias", () => {
+    const named = scopeNames({ keys: ["current-key"], bases: [] }, "cal");
+    const row = (sourceAliases: string[]) =>
+      ({
+        sourceKey: "stored-key",
+        sourceAliases,
+        providerIdentity: {},
+        hydration: "narrow",
+      }) as unknown as NarrowRow;
+    expect(named(row(["current-key"]))).toBe(true);
+    expect(named(row(["earlier-key"]))).toBe(false);
   });
 });

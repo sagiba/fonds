@@ -758,6 +758,182 @@ describe.each(backends)("%s bounded sync scope", (backend) => {
     }
   });
 
+  /** Replaces a stored row's aliases with raw text, as a re-keying parser left them. */
+  async function writeAliases(key: string, text: string) {
+    await db.raw(
+      "UPDATE transactions SET source_aliases_json = ? WHERE id = ?",
+      [text, await idOf(key)],
+    );
+  }
+
+  it("matches an observation to an old row whose alias is its key", async () => {
+    await capture("alias-1", "2040-07-01T12:00:00Z", [
+      row("rekeyed", { transactionDate: "2030-01-01", merchantName: "Old" }),
+    ]);
+    await writeAliases("rekeyed", '["current-key"]');
+    const rekeyed = await idOf("rekeyed");
+    // The observation's own date is far from the stored row's.
+    const result = await capture("alias-2", "2040-07-10T12:00:00Z", [
+      row("current-key", {
+        transactionDate: "2040-07-09",
+        merchantName: "Old",
+      }),
+    ]);
+    expect(result.created).toBe(0);
+    expect(await rowCount()).toBe(1);
+    expect(loadedIds()).toEqual([rekeyed]);
+    expect(await db.getTransaction(rekeyed)).toMatchObject({
+      lastSeenRunId: "alias-2",
+      transactionDate: "2040-07-09",
+    });
+  });
+
+  it("leaves out an old row whose alias no observation names", async () => {
+    await capture("unnamed-1", "2040-07-01T12:00:00Z", [
+      row("rekeyed", { transactionDate: "2030-01-01", merchantName: "Old" }),
+    ]);
+    await writeAliases("rekeyed", '["earlier-key"]');
+    const result = await capture("unnamed-2", "2040-07-10T12:00:00Z", [
+      row("fresh", { transactionDate: "2040-07-09", merchantName: "Fresh" }),
+    ]);
+    expect(result.created).toBe(1);
+    expect(loadedIds()).toEqual([]);
+    expect(await db.getTransaction(await idOf("rekeyed"))).toMatchObject({
+      lastSeenRunId: "unnamed-1",
+    });
+  });
+
+  it("reads every old row whose alias text holds a backslash, named or not", async () => {
+    await capture("escaped-alias-1", "2040-07-01T12:00:00Z", [
+      row("named", { transactionDate: "2030-01-01", merchantName: "Named" }),
+      row("unnamed", { transactionDate: "2030-01-02", merchantName: "Other" }),
+    ]);
+    // The same keys a search for the input's JSON text could not find.
+    await writeAliases("named", '["p\\/q"]');
+    await writeAliases("unnamed", '["r\\/s"]');
+    const named = await idOf("named");
+    const unnamed = await idOf("unnamed");
+    const result = await capture("escaped-alias-2", "2040-07-10T12:00:00Z", [
+      row("p/q", { transactionDate: "2040-07-09", merchantName: "Named" }),
+    ]);
+    expect(result.created).toBe(0);
+    expect(loadedIds().sort()).toEqual([named, unnamed].sort());
+    expect(await db.getTransaction(named)).toMatchObject({
+      lastSeenRunId: "escaped-alias-2",
+    });
+    expect(await db.getTransaction(unnamed)).toMatchObject({
+      lastSeenRunId: "escaped-alias-1",
+    });
+  });
+
+  it("reads only the rows near a one-row capture of a ledger whose every row carries an old key", async () => {
+    // Thirty posted rows, a week apart from 2039-01-01, then two in the
+    // capture's window; every one keeps the key it had before re-keying.
+    const dates = [
+      ...Array.from({ length: 30 }, (_, index) =>
+        new Date(Date.UTC(2039, 0, 1) + index * 7 * 86_400_000)
+          .toISOString()
+          .slice(0, 10),
+      ),
+      "2040-07-01",
+      "2040-07-02",
+    ];
+    await capture(
+      "rekeyed-1",
+      "2040-07-03T12:00:00Z",
+      dates.map((transactionDate, index) =>
+        row(`row-${index}`, { transactionDate, merchantName: `Shop ${index}` }),
+      ),
+    );
+    await db.raw(
+      "UPDATE transactions SET source_aliases_json = '[\"old-' || source_key || '\"]' WHERE connection_id = ?",
+      [connectionId],
+    );
+    const report = createSyncDiagnosticReport();
+    await db.ingestRun(
+      {
+        connectionId,
+        runId: "rekeyed-2",
+        responses: [
+          {
+            accountKey: "account",
+            endpoint: "synthetic:cal/recent",
+            capturedAt: "2040-07-10T12:00:00Z",
+            responseText: JSON.stringify([
+              row("fresh", {
+                transactionDate: "2040-07-09",
+                merchantName: "New",
+              }),
+            ]),
+          },
+        ],
+      },
+      pendingOnly,
+      report.log,
+    );
+    expect(
+      report
+        .report()
+        .entries.find(
+          (entry: SyncDiagnostic) =>
+            entry.stage === "reconciliation" && entry.outcome === "completed",
+        )?.counts,
+    ).toMatchObject({ scopeRows: 2, ledgerRows: 2 });
+    expect(loadedIds().sort()).toEqual(
+      [await idOf("row-30"), await idOf("row-31")].sort(),
+    );
+  });
+
+  it("splits the scope of a capture naming a thousand keys into readable statements", async () => {
+    await capture("many-1", "2040-07-01T12:00:00Z", [
+      ...["k-0", "k-1", "k-2"].map((key) =>
+        row(key, { transactionDate: "2030-01-01", merchantName: "Old" }),
+      ),
+      // Beyond the 40 days padded around the named rows' stored date.
+      row("far", { transactionDate: "2031-06-01", merchantName: "Far" }),
+    ]);
+    // Each key is also its own identity base, and each names an alias:
+    // a thousand key, alias and base disjuncts each.
+    const report = createSyncDiagnosticReport();
+    const result = await db.ingestRun(
+      {
+        connectionId,
+        runId: "many-2",
+        responses: [
+          {
+            accountKey: "account",
+            endpoint: "synthetic:cal/recent",
+            capturedAt: "2040-07-10T12:00:00Z",
+            responseText: JSON.stringify(
+              Array.from({ length: 1000 }, (_, index) =>
+                row(`k-${index}`, {
+                  transactionDate: "2040-07-09",
+                  merchantName: `Shop ${index}`,
+                }),
+              ),
+            ),
+          },
+        ],
+      },
+      pendingOnly,
+      report.log,
+    );
+    expect(result).toMatchObject({ created: 997, status: "completed" });
+    expect(await rowCount()).toBe(1001);
+    // Only the three old rows the capture names are read.
+    expect(
+      report
+        .report()
+        .entries.find(
+          (entry: SyncDiagnostic) =>
+            entry.stage === "reconciliation" && entry.outcome === "completed",
+        )?.counts,
+    ).toMatchObject({ scopeRows: 3, ledgerRows: 3 });
+    expect(await db.getTransaction(await idOf("far"))).toMatchObject({
+      lastSeenRunId: "many-1",
+    });
+  });
+
   it("finds identities a substring search cannot see in their stored text", async () => {
     await capture("text-1", "2040-07-01T12:00:00Z", [
       row("legacy", { transactionDate: "2030-01-01", merchantName: "Legacy" }),
