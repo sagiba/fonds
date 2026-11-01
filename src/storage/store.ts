@@ -85,6 +85,8 @@ import {
   FinancialPlan,
   type FinancialSnapshot,
   isNarrow,
+  type LedgerRow,
+  type LedgerScope,
   type NarrowRow,
 } from "../domain/plans/state.js";
 import {
@@ -96,6 +98,15 @@ import {
   type RunInput,
   type SyncResult,
 } from "../domain/plans/sync.js";
+import {
+  ledgerScope,
+  namedWindows,
+  scopeNames,
+  SYNC_SCOPE_DAYS,
+  type SyncScope,
+  syncScope,
+  windowHolds,
+} from "../domain/plans/sync-scope.js";
 import { presentTransaction, totalsFromParts } from "../domain/read-model.js";
 import type {
   Annotation,
@@ -118,8 +129,10 @@ import {
 import {
   BACKFILL_OUTCOMES,
   chunks,
+  clauseParameters,
   exactInteger,
   exactSumValue,
+  type LedgerClause,
   type PlanScope,
 } from "./sql.js";
 import type {
@@ -146,6 +159,12 @@ const HYDRATION_BATCH = 1000;
 
 /** Planning rounds before every row of the connection is hydrated. */
 const HYDRATION_ROUNDS = 4;
+
+/** Parameters a bounded ledger read's selection binds. */
+const SCOPE_PARAMETERS = 1000;
+
+/** D1's 100, less the connection ID and the narrow read's own text patterns. */
+const D1_SCOPE_PARAMETERS = 90;
 
 const utf8 = new TextEncoder();
 
@@ -282,6 +301,15 @@ export interface ApplicationLoadingComparison {
   /** Rows whose narrow decode was in doubt, hydrated before planning. */
   doubtful: string[];
   rounds: number;
+  /** Whether the committed plan read only its scope, rather than every row. */
+  bounded: boolean;
+  /** Whether a scope miss made the committed plan read every row. */
+  fallback: boolean;
+  /**
+   * Loaded rows whose exact-date group the bounded load left incomplete, as
+   * the committed plan ends: their duplicate-plan flags are not decided.
+   */
+  undecided: string[];
 }
 
 interface HydrationOptions {
@@ -289,20 +317,28 @@ interface HydrationOptions {
   predict: boolean;
   /** Planning rounds before every row is hydrated. */
   rounds: number;
+  /**
+   * Whether a bounded load closes its seed over stored references and date
+   * groups. Without it, plans miss rows and fall back to every row.
+   */
+  closure: boolean;
   /** Runs before each hydration read, with the IDs it will read. */
   beforeRead?: (ids: string[]) => Promise<void> | void;
 }
 
-let hydrationOptions: HydrationOptions = {
+const defaultHydration: HydrationOptions = {
   predict: true,
   rounds: HYDRATION_ROUNDS,
+  closure: true,
 };
+
+let hydrationOptions = defaultHydration;
 
 /** Test seam: changes how sync application hydrates. Production keeps the defaults. */
 export function configureHydration(
   options: Partial<HydrationOptions> = {},
 ): void {
-  hydrationOptions = { predict: true, rounds: HYDRATION_ROUNDS, ...options };
+  hydrationOptions = { ...defaultHydration, ...options };
 }
 
 let loadingVerifier:
@@ -997,12 +1033,12 @@ function buildStore<Db>(
     };
   }
 
-  /** Adds to a scoped load the runs that hydrated `rows` name. */
+  /** Adds to a scoped load the runs that newly loaded or hydrated `rows` name. */
   async function addReferencedRuns(
     tx: Db,
     connectionId: string,
     load: RunHistoryLoad,
-    rows: readonly Transaction[],
+    rows: readonly LedgerRow[],
   ): Promise<RunHistoryLoad> {
     if (!load.scoped) {
       return load;
@@ -1035,6 +1071,269 @@ function buildStore<Db>(
     return rows;
   }
 
+  /** `clauses` split into statements within the driver's parameter limit. */
+  function packed(clauses: readonly LedgerClause[]): LedgerClause[][] {
+    const budget = db.backend === "d1" ? D1_SCOPE_PARAMETERS : SCOPE_PARAMETERS;
+    const pieces = clauses.flatMap((clause): LedgerClause[] => {
+      switch (clause.kind) {
+        case "accounts":
+          return [
+            ...chunks(
+              clause.accounts,
+              Math.max(1, budget - clause.statuses.length - 3),
+            ),
+          ].map((accounts) => ({ ...clause, accounts }));
+        case "keys":
+          return [...chunks(clause.keys, budget)].map((keys) => ({
+            kind: "keys",
+            keys,
+          }));
+        case "ids":
+          return [...chunks(clause.ids, budget)].map((ids) => ({
+            kind: "ids",
+            ids,
+          }));
+        case "dependents":
+          return [...chunks(clause.ids, Math.floor(budget / 2))].map((ids) => ({
+            kind: "dependents",
+            ids,
+          }));
+        default:
+          return [clause];
+      }
+    });
+    const groups: LedgerClause[][] = [];
+    let used = 0;
+    for (const clause of pieces) {
+      const size = clauseParameters(clause);
+      if (groups.length === 0 || used + size > budget) {
+        groups.push([]);
+        used = 0;
+      }
+      groups.at(-1)!.push(clause);
+      used += size;
+    }
+    return groups;
+  }
+
+  /**
+   * The rows one sync application can decide on. The seed is what the scope
+   * names: every row of its accounts in its statuses, linked, aliased,
+   * undated or with an identity a narrow read cannot see, the padded
+   * request and observation windows, and rows named by source key or
+   * identity base. The seed is then closed, as a complete load would read
+   * them, over:
+   *
+   * - supersession, both ways, and purchase families: the purchase of every
+   *   billed line and every line of every purchase;
+   * - stored pending-to-posted candidate lists, both ways;
+   * - the observation radius around every named row, and the exact-date
+   *   group of every row a decision can move between groups (pending and
+   *   covered rows, named rows and rows whose identity is in doubt);
+   * - then supersession, purchase families and candidates again.
+   *
+   * A row the final pass added decides no exact-date fold unless its group
+   * is complete anyway (`LedgerScope.completeDate`). A reference that a
+   * by-ID read did not find is recorded as missing, as a complete load
+   * would not find it either.
+   */
+  async function loadBounded(
+    tx: Db,
+    connectionId: string,
+    scope: SyncScope,
+    provider: string,
+    candidates: boolean,
+  ): Promise<{
+    ledger: LedgerLoad[];
+    scope: LedgerScope;
+    knownScopes: string[];
+  }> {
+    const loaded = new Map<string, LedgerLoad>();
+    const take = (rows: readonly LedgerLoad[]) =>
+      rows.filter((load) => {
+        if (loaded.has(load.row.id)) {
+          return false;
+        }
+        loaded.set(load.row.id, load);
+        return true;
+      });
+    const read = async (clauses: readonly LedgerClause[]) => {
+      const rows: LedgerLoad[] = [];
+      for (const group of packed(clauses)) {
+        rows.push(...(await statements.ledgerRows(tx, connectionId, group)));
+      }
+      return rows;
+    };
+    const selected = async (clauses: readonly LedgerClause[]) => {
+      const ids = new Set<string>();
+      for (const group of packed(clauses)) {
+        for (const { id } of await statements.ledgerIds(
+          tx,
+          connectionId,
+          group,
+        )) {
+          ids.add(id);
+        }
+      }
+      return ids;
+    };
+    const keys = [...new Set([...scope.keys, ...scope.bases])];
+    take(
+      await read([
+        ...(scope.accounts.length > 0
+          ? [
+              {
+                kind: "accounts" as const,
+                accounts: scope.accounts,
+                statuses: scope.statuses,
+              },
+            ]
+          : []),
+        ...scope.windows.map((window) => ({
+          kind: "window" as const,
+          ...window,
+        })),
+        ...(keys.length > 0 ? [{ kind: "keys" as const, keys }] : []),
+        ...scope.bases.map((base) => ({ kind: "base" as const, base })),
+      ]),
+    );
+    const missing = new Set<string>();
+    let windows = scope.windows;
+    const groups = new Map<string, readonly [string, string]>();
+    if (hydrationOptions.closure) {
+      const lists: { id: string; candidates: string[] }[] = [];
+      if (candidates) {
+        for (const batch of chunks(scope.accounts, RUN_ID_BATCH)) {
+          lists.push(
+            ...(await statements.candidateLists(tx, connectionId, batch)),
+          );
+        }
+      }
+      const close = async (rows: LedgerLoad[]) => {
+        let frontier = rows;
+        while (frontier.length > 0) {
+          const wanted = new Set<string>();
+          const want = (id: string) => {
+            if (!loaded.has(id) && !missing.has(id)) {
+              wanted.add(id);
+            }
+          };
+          const references = new Set<string>();
+          for (const { row } of frontier) {
+            for (const id of [row.supersededById, row.purchaseId]) {
+              if (id !== null) {
+                references.add(id);
+              }
+            }
+            row.details.pendingPostingCandidates?.forEach(want);
+          }
+          references.forEach(want);
+          (
+            await selected([
+              { kind: "dependents", ids: frontier.map(({ row }) => row.id) },
+            ])
+          ).forEach(want);
+          for (const list of lists) {
+            if (
+              !loaded.has(list.id) &&
+              list.candidates.some((id) => loaded.has(id) || wanted.has(id))
+            ) {
+              wanted.add(list.id);
+            }
+          }
+          frontier =
+            wanted.size > 0
+              ? take(await read([{ kind: "ids", ids: [...wanted] }]))
+              : [];
+          for (const id of references) {
+            if (!loaded.has(id)) {
+              missing.add(id);
+            }
+          }
+        }
+      };
+      await close([...loaded.values()]);
+      const accounts = new Set(scope.accounts);
+      const statuses = new Set<string>(scope.statuses);
+      const named = scopeNames(scope, provider);
+      const anchors = [...loaded.values()].filter(
+        ({ row, doubt }) =>
+          doubt ||
+          named(row) ||
+          (accounts.has(row.sourceScope) && statuses.has(row.status)),
+      );
+      // A named row can be marked seen at its stored date, so its stored
+      // date is padded as an observed one is, which covers every row it
+      // could be suggested with. A row whose identity is in doubt
+      // may be named by an identity only its complete decode shows (one
+      // left in the provider document), so it counts as named here too.
+      const around = namedWindows(
+        anchors
+          .filter(
+            ({ row, doubt }) =>
+              accounts.has(row.sourceScope) && (doubt || named(row)),
+          )
+          .map(({ row }) => row),
+        scope.radius,
+      ).filter(
+        (window) =>
+          !scope.windows.some(
+            (seed) =>
+              seed.field === "transaction" &&
+              seed.sourceScope === window.sourceScope &&
+              seed.from <= window.from &&
+              window.to <= seed.to,
+          ),
+      );
+      windows = [...windows, ...around];
+      for (const { row } of anchors) {
+        if (
+          !row.supersededById &&
+          row.transactionDate !== null &&
+          !windowHolds(windows, row.sourceScope, row.transactionDate)
+        ) {
+          groups.set(JSON.stringify([row.sourceScope, row.transactionDate]), [
+            row.sourceScope,
+            row.transactionDate,
+          ]);
+        }
+      }
+      const added = [
+        ...(await selected([
+          ...around.map((window) => ({ kind: "window" as const, ...window })),
+          ...[...groups.values()].map(([sourceScope, transactionDate]) => ({
+            kind: "date" as const,
+            sourceScope,
+            transactionDate,
+          })),
+        ])),
+      ].filter((id) => !loaded.has(id));
+      await close(
+        added.length > 0 ? take(await read([{ kind: "ids", ids: added }])) : [],
+      );
+    }
+    const known = new Set(
+      [...loaded.values()].map(({ row }) => row.sourceScope),
+    );
+    for (const batch of chunks(
+      scope.accounts.filter((account) => !known.has(account)),
+      RUN_ID_BATCH,
+    )) {
+      for (const { sourceScope } of await statements.knownScopes(
+        tx,
+        connectionId,
+        batch,
+      )) {
+        known.add(sourceScope);
+      }
+    }
+    return {
+      ledger: [...loaded.values()].sort((a, b) => a.position - b.position),
+      scope: ledgerScope(windows, groups.values(), missing),
+      knownScopes: scope.accounts.filter((account) => known.has(account)),
+    };
+  }
+
   /**
    * Plans one application from narrow rows, hydrating the rows the plan
    * needs complete. A round whose plan demanded hydration is speculative:
@@ -1042,12 +1341,17 @@ function buildStore<Db>(
    * hydrated, and the application is planned again from pristine inputs with
    * the same clock and ID tape. Only a round without demands is returned, so
    * it decides exactly as a plan from complete rows would.
+   *
+   * A bounded load (`bounds`) holds only the rows its scope rule names. A
+   * round that looks up a row it does not hold is discarded the same way,
+   * and every row of the connection is loaded for the rounds that follow.
    */
   async function planApplication(
     tx: Db,
     input: {
       connection: Connection;
       ledger: LedgerLoad[];
+      bounds: { scope: LedgerScope; knownScopes: string[] } | undefined;
       history: RunHistoryLoad;
       removals: FinancialSnapshot["removals"];
       catalog: NonNullable<FinancialSnapshot["catalog"]>;
@@ -1058,14 +1362,13 @@ function buildStore<Db>(
       onRead: (reading: boolean) => void;
     },
   ) {
-    const { connection, ledger, adapter } = input;
-    let history = input.history;
-    const narrow = new Map(ledger.map(({ row }) => [row.id, row]));
-    const doubtful = ledger
-      .filter(({ doubt }) => doubt)
-      .map(({ row }) => row.id);
-    const doubt = new Set(doubtful);
-    const annotations = ledger.flatMap(({ annotation }) =>
+    const { connection, adapter } = input;
+    let { ledger, bounds, history } = input;
+    let read = ledger.length;
+    let narrow = new Map(ledger.map(({ row }) => [row.id, row]));
+    let doubtful = ledger.filter(({ doubt }) => doubt).map(({ row }) => row.id);
+    let doubt = new Set(doubtful);
+    let annotations = ledger.flatMap(({ annotation }) =>
       annotation ? [annotation] : [],
     );
     const complete = new Map<string, Transaction>();
@@ -1107,6 +1410,7 @@ function buildStore<Db>(
         runHistory: history.runHistory,
         removals: input.removals,
         catalog: input.catalog,
+        ...(bounds && { knownScopes: bounds.knownScopes, scope: bounds.scope }),
       });
       const { run, extraction } = structuredClone({
         run: input.run,
@@ -1124,6 +1428,36 @@ function buildStore<Db>(
         });
       } catch (error) {
         failure = error;
+      }
+      if (plan.misses.size > 0) {
+        // A scope rule that missed a row cannot be trusted to have read
+        // the rest of that row's decision: plan from every row instead.
+        input.onRead(true);
+        ledger = await statements.ledgerRows(tx, connection.id);
+        read += ledger.length;
+        history = await addReferencedRuns(
+          tx,
+          connection.id,
+          history,
+          ledger.map(({ row }) => row),
+        );
+        input.onRead(false);
+        narrow = new Map(ledger.map(({ row }) => [row.id, row]));
+        doubtful = ledger.filter(({ doubt }) => doubt).map(({ row }) => row.id);
+        doubt = new Set(doubtful);
+        annotations = ledger.flatMap(({ annotation }) =>
+          annotation ? [annotation] : [],
+        );
+        bounds = undefined;
+        for (const id of [...doubtful, ...plan.demands]) {
+          wanted.add(id);
+        }
+        if (round >= hydrationOptions.rounds) {
+          for (const id of narrow.keys()) {
+            wanted.add(id);
+          }
+        }
+        continue;
       }
       if (plan.demands.size === 0) {
         if (!result) {
@@ -1150,6 +1484,9 @@ function buildStore<Db>(
           hydrated: [...complete.keys()],
           doubtful,
           rounds: round,
+          read,
+          bounded: bounds !== undefined,
+          fallback: input.bounds !== undefined && bounds === undefined,
         };
       }
       for (const id of plan.demands) {
@@ -1185,6 +1522,8 @@ function buildStore<Db>(
       hydrated: string[];
       doubtful: string[];
       rounds: number;
+      bounded: boolean;
+      fallback: boolean;
     },
   ) {
     const { adapter, history, runHistory } = dependent;
@@ -1213,6 +1552,11 @@ function buildStore<Db>(
       hydrated: dependent.hydrated,
       doubtful: dependent.doubtful,
       rounds: dependent.rounds,
+      bounded: dependent.bounded,
+      fallback: dependent.fallback,
+      undecided: [...dependent.plan.rows.values()]
+        .filter((row) => !dependent.plan.decides(row))
+        .map(({ id }) => id),
       dependent: plannedApplication(
         dependent.plan,
         dependent.result,
@@ -1463,7 +1807,15 @@ function buildStore<Db>(
         if (run.appliedAt) {
           return replayResult(run);
         }
-        const ledger = await statements.ledgerRows(tx, connection.id);
+        const bounded = await loadBounded(
+          tx,
+          connection.id,
+          syncScope(extraction, adapter, SYNC_SCOPE_DAYS),
+          adapter.provider,
+          adapter.pendingPostingCandidates === true &&
+            extraction.extracted.some(({ result }) => !result.historical),
+        );
+        const ledger = bounded.ledger;
         const loadedHistory = await loadRunHistory(
           tx,
           connection.id,
@@ -1491,6 +1843,7 @@ function buildStore<Db>(
         const planned = await planApplication(tx, {
           connection: locked,
           ledger,
+          bounds: { scope: bounded.scope, knownScopes: bounded.knownScopes },
           history: loadedHistory,
           removals,
           catalog,
@@ -1519,6 +1872,8 @@ function buildStore<Db>(
             hydrated: planned.hydrated,
             doubtful: planned.doubtful,
             rounds: planned.rounds,
+            bounded: planned.bounded,
+            fallback: planned.fallback,
           });
         }
         const dbBytesRead = db.bytesRead?.(tx);
@@ -1536,6 +1891,7 @@ function buildStore<Db>(
             absent: result.unlisted,
             deferred: plan.deferredCandidates.length,
             ...loaded,
+            ledgerRows: planned.read,
             priorRuns: history.priorRuns.length,
             hydratedRows: planned.hydrated.length,
             hydrationRounds: planned.rounds,

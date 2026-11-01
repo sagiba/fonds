@@ -26,6 +26,22 @@ import {
 
 const latest = () => loadingComparisons.at(-1)!;
 
+/**
+ * The synthetic adapter with incomparable partitions: its captures read
+ * every row of their account (its coverage declares both statuses) but
+ * declare none absent, so they write only the rows they observe.
+ */
+const incomparable: SourceAdapter = {
+  ...synthetic,
+  extract(text, context) {
+    const result = synthetic.extract(text, context);
+    for (const partition of result.partitions) {
+      partition.comparable = false;
+    }
+    return result;
+  },
+};
+
 const evidence = "transaction_reconciliation.source_evidence_json";
 const provider = "transactions.provider_json";
 const aliases = "transactions.source_aliases_json";
@@ -237,13 +253,8 @@ describe.each(backends)("%s narrow ledger loading", (backend) => {
       await writeRaw(key, column, text);
     }
     const before = loadingComparisons.length;
-    // Another account's capture leaves every stored row untouched.
-    await capture(
-      "matrix-2",
-      2,
-      [row("other", { sourceScope: "other" })],
-      "other",
-    );
+    // A capture that declares nothing absent leaves every stored row untouched.
+    await capture("matrix-2", 2, [row("unrelated")], "account", incomparable);
     expect(loadingComparisons).toHaveLength(before + 1);
     const loaded = latest();
     const byKey = async (key: string) => {
@@ -331,12 +342,7 @@ describe.each(backends)("%s narrow ledger loading", (backend) => {
 
   it("detects a corrupted narrow fact of a row the plan never hydrated", async () => {
     await capture("matrix-1", 1, [row("kept")]);
-    await capture(
-      "matrix-2",
-      2,
-      [row("other", { sourceScope: "other" })],
-      "other",
-    );
+    await capture("matrix-2", 2, [row("unrelated")], "account", incomparable);
     const loaded = latest();
     const untouched = loaded.narrowRows.find(
       (candidate) => !loaded.hydrated.includes(candidate.id),
@@ -360,7 +366,10 @@ describe.each(backends)("%s narrow ledger loading", (backend) => {
     await capture("matrix-2", 2, [row("c", { sourceScope: "other" })], "other");
     await capture("matrix-3", 3, [row("a"), row("b")]);
     const loaded = latest();
-    expect(loaded.narrowRows).toHaveLength(3);
+    // Another account's row is outside the capture's scope: never read.
+    expect(loaded.narrowRows.map(({ id }) => id).sort()).toEqual(
+      [await idOf("a"), await idOf("b")].sort(),
+    );
     expect(new Set(loaded.hydrated)).toEqual(
       new Set([await idOf("a"), await idOf("b")]),
     );
@@ -390,15 +399,15 @@ describe.each(backends)("%s narrow ledger loading", (backend) => {
 
   it("falls back to every row after the round limit", async () => {
     await capture("matrix-1", 1, [row("a"), row("b")]);
-    // No planning of this account's captures ever demands the other account's row.
-    await capture("matrix-2", 2, [row("z", { sourceScope: "other" })], "other");
-    const unrelated = await idOf("z");
+    // No planning of these captures, which declare nothing absent, demands "b".
+    const unrelated = await idOf("b");
     configureHydration({ predict: false });
-    await capture("matrix-3", 3, [row("a")]);
+    await capture("matrix-3", 3, [row("a")], "account", incomparable);
     expect(latest().rounds).toBe(2);
+    expect(latest().narrowRows.map(({ id }) => id)).toContain(unrelated);
     expect(latest().hydrated).not.toContain(unrelated);
     configureHydration({ predict: false, rounds: 1 });
-    await capture("matrix-4", 4, [row("a")]);
+    await capture("matrix-4", 4, [row("a")], "account", incomparable);
     expect(latest().rounds).toBe(2);
     expect(latest().hydrated).toContain(unrelated);
     expect(latest().hydrated).toHaveLength(latest().narrowRows.length);

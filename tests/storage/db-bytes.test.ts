@@ -17,6 +17,7 @@ import {
   type SyncDiagnostic,
 } from "../../src/application/sync-diagnostics.js";
 import { emptyDetails, type TransactionInput } from "../../src/domain/model.js";
+import type { SourceAdapter } from "../../src/domain/source-adapter.js";
 import {
   bytesReadSince,
   databaseByteMeter,
@@ -582,15 +583,73 @@ describe.skipIf(!postgresUrl)("PostgreSQL database byte readings", () => {
     const ledger = keys(200).map(heavy);
     await reconcile("account", ledger, "2040-07-02T00:00:00Z");
     const observed = await reconcile("account", ledger, "2040-07-03T00:00:00Z");
-    // Another account's capture leaves the stored rows narrow.
+    // Another account's capture never reads the stored rows.
     const untouched = await reconcile(
       "other",
       [row("other", { sourceScope: "other" })],
       "2040-07-04T00:00:00Z",
     );
     expect(observed).toMatchObject({ ledgerRows: 200, hydratedRows: 200 });
-    expect(untouched).toMatchObject({ ledgerRows: 200, hydratedRows: 0 });
+    expect(untouched).toMatchObject({ ledgerRows: 0, hydratedRows: 0 });
     expect(untouched!.dbBytesRead!).toBeLessThan(observed!.dbBytesRead! / 3);
+  });
+
+  it("reads only the rows near a one-row capture of a three-year ledger", async () => {
+    await db.ensureConnection({ id: "synthetic", provider: "cal" });
+    // Pending-only coverage, as the providers declare: posted rows are read
+    // only within a capture's scope.
+    const bounded: SourceAdapter = {
+      ...synthetic,
+      sourceCoverage: { kind: "same_origin", statuses: ["pending"] },
+    };
+    const date = (index: number) =>
+      new Date(Date.UTC(2037, 6, 1) + index * 4 * 86_400_000)
+        .toISOString()
+        .slice(0, 10);
+    const reconcile = async (
+      adapter: SourceAdapter,
+      rows: TransactionInput[],
+      capturedAt: string,
+    ) => {
+      const report = createSyncDiagnosticReport();
+      await db.ingestRun(
+        {
+          runId: crypto.randomUUID(),
+          connectionId: "synthetic",
+          responses: [
+            {
+              accountKey: "account",
+              endpoint: "synthetic",
+              capturedAt,
+              responseText: JSON.stringify(rows),
+            },
+          ],
+        },
+        adapter,
+        report.log,
+      );
+      return report
+        .report()
+        .entries.find(
+          (entry: SyncDiagnostic) =>
+            entry.stage === "reconciliation" && entry.outcome === "completed",
+        )!.counts!;
+    };
+    // One row every four days from 2037-07-01 to 2040-06-11.
+    const ledger = Array.from({ length: 270 }, (_, index) =>
+      row(`key-${index}`, { transactionDate: date(index) }),
+    );
+    await reconcile(bounded, ledger, "2040-07-01T00:00:00Z");
+    const latestRow = [row("key-269", { transactionDate: date(269) })];
+    // Coverage of posted rows makes the whole account the scope.
+    const whole = await reconcile(synthetic, latestRow, "2040-07-02T00:00:00Z");
+    const near = await reconcile(bounded, latestRow, "2040-07-03T00:00:00Z");
+    expect(whole.ledgerRows).toBe(270);
+    // The days around the capture and around the row it observed hold a
+    // dozen rows.
+    expect(near.ledgerRows).toBeGreaterThan(0);
+    expect(near.ledgerRows).toBeLessThan(20);
+    expect(near.dbBytesRead!).toBeLessThan(whole.dbBytesRead! / 3);
   });
 
   it("tells a meter each transaction's bytes and survives a failing observer", async () => {

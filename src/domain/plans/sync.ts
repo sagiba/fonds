@@ -95,6 +95,7 @@ import {
   type LedgerRow,
   retiredFromMatching,
 } from "./state.js";
+import { CANDIDATE_DAYS } from "./sync-scope.js";
 
 const scopeSchema = z
   .object({
@@ -1050,7 +1051,7 @@ function refreshPendingCandidates(
       continue;
     }
     const day = Date.parse(posted.transactionDate) / DAY_MILLISECONDS;
-    for (let offset = -7; offset <= 7; offset++) {
+    for (let offset = -CANDIDATE_DAYS; offset <= CANDIDATE_DAYS; offset++) {
       for (const pending of pendingBuckets.get(
         candidateKey(posted, day + offset),
       ) ?? []) {

@@ -37,8 +37,10 @@ import {
   excludedSet,
   groupedMoneyColumns,
   keysetSeek,
+  type LedgerClause,
   ledgerColumns,
   ledgerFlags,
+  ledgerSelection,
   listColumns,
   planCondition,
   type PlanScope,
@@ -639,16 +641,45 @@ export const planRows = (db: Executor, id: string, scope?: PlanScope) =>
       .where(planCondition(schema.transactions, id, scope))
       .orderBy(asc(sql`transactions.rowid`)),
   );
+const ledgerCondition = (id: string, clauses?: readonly LedgerClause[]) =>
+  and(
+    eq(schema.transactions.connectionId, id),
+    clauses &&
+      ledgerSelection(
+        {
+          id: schema.transactions.id,
+          sourceScope: schema.transactions.sourceScope,
+          status: schema.transactions.status,
+          sourceKey: schema.transactions.sourceKey,
+          sourceAliases: schema.transactions.sourceAliases,
+          transactionDate: schema.transactions.transactionDate,
+          bookingDate: schema.transactions.bookingDate,
+          billingDate: schema.transactions.billingDate,
+          purchaseId: schema.transactions.purchaseId,
+          supersededById: schema.transactions.supersededById,
+          provider: schema.transactions.provider,
+          providerIdentity: schema.transactionReconciliation.providerIdentity,
+          postingLink: schema.transactionPostingLinks.postingLink,
+        },
+        clauses,
+      ),
+  );
+
 /**
- * Narrow rows of every transaction of the connection, in ingestion order,
- * with their annotations: everything sync decisions read of rows they do not
- * hydrate (`NarrowRow`).
+ * Narrow rows of the connection, every one or those `clauses` select, in
+ * ingestion order, with their annotations and ingestion positions:
+ * everything sync decisions read of rows they do not hydrate (`NarrowRow`).
  */
-export const ledgerRows = async (db: Executor, id: string) =>
+export const ledgerRows = async (
+  db: Executor,
+  id: string,
+  clauses?: readonly LedgerClause[],
+) =>
   (
     await db
       .select({
         row: ledgerColumns(schema.transactions),
+        position: sql<number>`transactions.rowid`,
         observation: {
           lastSeenAt: schema.transactionObservations.lastSeenAt,
           lastSeenRunId: schema.transactionObservations.lastSeenRunId,
@@ -694,11 +725,65 @@ export const ledgerRows = async (db: Executor, id: string) =>
         schema.annotations,
         eq(schema.annotations.transactionId, schema.transactions.id),
       )
-      .where(eq(schema.transactions.connectionId, id))
+      .where(ledgerCondition(id, clauses))
       .orderBy(asc(sql`transactions.rowid`))
   ).map((input) => ({
     ...decodeLedgerRow(input, id),
+    position: Number(input.position),
     annotation: input.annotation,
+  }));
+/** IDs of the connection's rows that `clauses` select, in no particular order. */
+export const ledgerIds = (
+  db: Executor,
+  id: string,
+  clauses: readonly LedgerClause[],
+) =>
+  db
+    .select({ id: schema.transactions.id })
+    .from(schema.transactions)
+    .innerJoin(
+      schema.transactionReconciliation,
+      eq(
+        schema.transactionReconciliation.transactionId,
+        schema.transactions.id,
+      ),
+    )
+    .innerJoin(
+      schema.transactionPostingLinks,
+      eq(schema.transactionPostingLinks.transactionId, schema.transactions.id),
+    )
+    .where(ledgerCondition(id, clauses));
+/** Stored pending-to-posted candidate lists that name any row, in these accounts. */
+export const candidateLists = async (
+  db: Executor,
+  id: string,
+  scopes: string[],
+) =>
+  (
+    await db
+      .select({
+        id: schema.transactionReconciliation.transactionId,
+        candidates: schema.transactionReconciliation.pendingPostingCandidates,
+      })
+      .from(schema.transactionReconciliation)
+      .innerJoin(
+        schema.transactions,
+        eq(
+          schema.transactions.id,
+          schema.transactionReconciliation.transactionId,
+        ),
+      )
+      .where(
+        and(
+          eq(schema.transactions.connectionId, id),
+          inArray(schema.transactions.sourceScope, scopes),
+          isNotNull(schema.transactionReconciliation.pendingPostingCandidates),
+          sql`${schema.transactionReconciliation.pendingPostingCandidates} not in ('[]', 'null')`,
+        ),
+      )
+  ).map(({ id: transactionId, candidates }) => ({
+    id: transactionId,
+    candidates: candidates ?? [],
   }));
 /** Which of `scopes` hold any row of the connection. */
 export const knownScopes = (db: Executor, id: string, scopes: string[]) =>
