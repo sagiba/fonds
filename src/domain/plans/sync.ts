@@ -1863,6 +1863,7 @@ export function planRun(
   const knownAccounts = new Set([
     ...history.knownAccounts,
     ...beforeRows.map((row) => row.sourceScope),
+    ...(plan.snapshot.knownScopes ?? []),
   ]);
   const baselineAccounts = new Set(
     extracted

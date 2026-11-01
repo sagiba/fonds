@@ -155,6 +155,17 @@ function standIn(row: NarrowRow): Transaction {
   };
 }
 
+/**
+ * What a bounded sync load holds. Without one, `rows` is every row of the
+ * connection.
+ */
+export interface LedgerScope {
+  /** Whether every row with this collection scope and transaction date is loaded. */
+  completeDate(sourceScope: string, transactionDate: string): boolean;
+  /** IDs the load looked up and found absent, as a complete load would. */
+  readonly missing: ReadonlySet<string>;
+}
+
 export interface FinancialSnapshot {
   connection: Connection;
   /**
@@ -180,6 +191,13 @@ export interface FinancialSnapshot {
    * resolve provider keys to service IDs (collection and discovery).
    */
   catalog?: { cards: Card[]; accounts: Account[] };
+  /**
+   * Collection scopes, among those the operation reads, that hold any row of
+   * the connection: a bounded load can hold none of an account's rows.
+   */
+  knownScopes?: string[];
+  /** The bounds of a load that holds only some rows of the connection. */
+  scope?: LedgerScope;
 }
 
 export interface DeferredCandidate {
@@ -208,6 +226,7 @@ export class FinancialPlan {
   /** Cards minted for transaction references; written only once referenced. */
   readonly #cardReferences = new Map<string, Card>();
   readonly #demands = new Set<string>();
+  readonly #misses = new Set<string>();
   #originals: Map<string, LedgerRow> | undefined;
 
   constructor(readonly snapshot: FinancialSnapshot) {
@@ -297,7 +316,12 @@ export class FinancialPlan {
   }
 
   transaction(id: string): LedgerRow | undefined {
-    return this.rows.get(id);
+    const row = this.rows.get(id);
+    const scope = this.snapshot.scope;
+    if (!row && scope && !scope.missing.has(id)) {
+      this.#misses.add(id);
+    }
+    return row;
   }
 
   /**
@@ -315,7 +339,7 @@ export class FinancialPlan {
 
   /** The current complete document of a row that is about to be decided on or written. */
   hydrated(id: string): Transaction | undefined {
-    const row = this.rows.get(id);
+    const row = this.transaction(id);
     return row && this.full(row);
   }
 
@@ -329,6 +353,27 @@ export class FinancialPlan {
   /** Narrow rows this plan needed complete; a plan with any is speculative. */
   get demands(): ReadonlySet<string> {
     return this.#demands;
+  }
+
+  /**
+   * IDs a bounded load did not hold when the plan looked them up; a plan
+   * with any is discarded and planned again from every row.
+   */
+  get misses(): ReadonlySet<string> {
+    return this.#misses;
+  }
+
+  /**
+   * Whether a fold over the row's exact-date group may decide it: a bounded
+   * load holds that whole group. Every row decides in a complete load.
+   */
+  decides(row: LedgerRow): boolean {
+    const scope = this.snapshot.scope;
+    return (
+      !scope ||
+      row.transactionDate === null ||
+      scope.completeDate(row.sourceScope, row.transactionDate)
+    );
   }
 
   annotation(id: string) {

@@ -210,6 +210,11 @@ export function refreshDuplicatePlans(plan: FinancialPlan): Transaction[] {
   );
   const changed: Transaction[] = [];
   for (const row of rows) {
+    // A row whose date group a bounded load left incomplete keeps its flag
+    // until a load that holds the group decides it.
+    if (!plan.decides(row)) {
+      continue;
+    }
     const duplicate = duplicates.has(row.id);
     if (row.details.issues.includes(duplicatePlanIssue) === duplicate) {
       continue;

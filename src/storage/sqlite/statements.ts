@@ -700,6 +700,18 @@ export const ledgerRows = async (db: Executor, id: string) =>
     ...decodeLedgerRow(input, id),
     annotation: input.annotation,
   }));
+/** Which of `scopes` hold any row of the connection. */
+export const knownScopes = (db: Executor, id: string, scopes: string[]) =>
+  db
+    .select({ sourceScope: schema.transactions.sourceScope })
+    .from(schema.transactions)
+    .where(
+      and(
+        eq(schema.transactions.connectionId, id),
+        inArray(schema.transactions.sourceScope, scopes),
+      ),
+    )
+    .groupBy(schema.transactions.sourceScope);
 /** Complete rows of these IDs, without annotations, in no particular order. */
 export const completeRows = async (db: Executor, ids: string[]) =>
   (

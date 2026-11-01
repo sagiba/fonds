@@ -257,6 +257,12 @@ export interface Statements<Db> {
   ledgerRows(db: Db, id: string): PromiseLike<LedgerLoad[]>;
   /** Complete rows of these IDs, in no particular order. */
   completeRows(db: Db, ids: string[]): PromiseLike<Transaction[]>;
+  /** Which of `scopes` hold any row of the connection; at most 99 scopes. */
+  knownScopes(
+    db: Db,
+    id: string,
+    scopes: string[],
+  ): PromiseLike<{ sourceScope: string }[]>;
   /** Every applied run, in application order. */
   priorRuns(db: Db, id: string): PromiseLike<PriorRun[]>;
   /**
