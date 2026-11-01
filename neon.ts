@@ -12,12 +12,17 @@ import {
 import { defineConfig } from "@neon/config/v1";
 
 import { parseCredentials } from "./src/domain/credentials.js";
+import { SYNC_SCOPE_DAYS } from "./src/domain/plans/sync-scope.js";
 import {
   parseCollectionSchedule,
   utcCron,
 } from "./src/runtime/collection-schedule.js";
 import { parseCredentialsKey } from "./src/runtime/credential-vault.js";
 import { runtimeProvider } from "./src/runtime/providers.js";
+import {
+  SYNC_SCOPE_DAYS_INVALID,
+  syncScopeDaysSchema,
+} from "./src/runtime/sync-scope.js";
 
 const REQUIRED = [
   "FONDS_PUBLIC_ORIGIN",
@@ -81,6 +86,14 @@ if (apiDescription !== "0" && apiDescription !== "1") {
   throw new Error("FONDS_PUBLIC_API_DESCRIPTION must be 0 or 1");
 }
 env.FONDS_PUBLIC_API_DESCRIPTION = apiDescription;
+
+// Always declared for the same reason: removing the setting deploys the
+// default rather than keeping an earlier deploy's value.
+const syncScope = process.env.FONDS_SYNC_SCOPE_DAYS ?? String(SYNC_SCOPE_DAYS);
+if (!syncScopeDaysSchema.safeParse(syncScope).success) {
+  throw new Error(SYNC_SCOPE_DAYS_INVALID);
+}
+env.FONDS_SYNC_SCOPE_DAYS = syncScope;
 
 // Provider credentials are uploaded only when explicitly supplied. Neon merges
 // omitted Function variables, so ordinary deploys keep stored credentials.

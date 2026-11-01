@@ -23,6 +23,7 @@ import {
 } from "./runtime/local-ledger.js";
 import { CommandInputError } from "./runtime/operation-cli.js";
 import { STATE_FILE, StateError } from "./runtime/state.js";
+import { syncScopeDays } from "./runtime/sync-scope.js";
 import { createHttpService } from "./transport/http.js";
 import { createMcpServer } from "./transport/mcp.js";
 
@@ -185,7 +186,12 @@ export async function startServer(args: string[], seams: ServerSeams = {}) {
       `The state file's FONDS_API_TOKEN must be 32 to 256 base64url characters: ${join(stateDirectory, STATE_FILE)}`,
     );
   }
-  const session = await openSqliteSession(databasePath, installation);
+  const session = await openSqliteSession(databasePath, installation, {
+    syncScopeDays: syncScopeDays(
+      env,
+      (message) => new CommandInputError(message),
+    ),
+  });
   let schedule: LocalServiceOptions["schedule"];
   try {
     schedule = await localSchedule(session.store, env);

@@ -2,6 +2,10 @@ import "../helpers/application-loading-differential.js";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import {
+  createSyncDiagnosticReport,
+  type SyncDiagnostic,
+} from "../../src/application/sync-diagnostics.js";
 import { emptyDetails, type TransactionInput } from "../../src/domain/model.js";
 import type { CollectionScope } from "../../src/domain/records.js";
 import type { SourceAdapter } from "../../src/domain/source-adapter.js";
@@ -955,5 +959,242 @@ describe.each(backends)("%s bounded sync scope", (backend) => {
     expect(Object.keys(updates[0]!.after as object)).toEqual([
       "providerEvidence",
     ]);
+  });
+});
+
+describe.each(backends)("%s configured sync scope", (backend) => {
+  const stores: Harness[] = [];
+  afterEach(async () => {
+    configureHydration();
+    await Promise.all(stores.splice(0).map((store) => store.close()));
+  });
+
+  async function opened(syncScopeDays?: number) {
+    const db = await open(
+      backend,
+      syncScopeDays === undefined ? {} : { syncScopeDays },
+    );
+    stores.push(db);
+    await db.ensureConnection({ id: connectionId, provider: "cal" });
+    return db;
+  }
+
+  const run = (
+    runId: string,
+    capturedAt: string,
+    rows: TransactionInput[],
+    scope?: CollectionScope,
+  ) => ({
+    connectionId,
+    runId,
+    responses: [
+      {
+        accountKey: "account",
+        endpoint: "synthetic:cal/recent",
+        capturedAt,
+        responseText: JSON.stringify(rows),
+        ...(scope ? { scope } : {}),
+      },
+    ],
+  });
+
+  async function idOf(db: Harness, sourceKey: string) {
+    const [stored] = await db.raw(
+      "SELECT id FROM transactions WHERE connection_id = ? AND source_key = ?",
+      [connectionId, sourceKey],
+    );
+    return stored!.id as string;
+  }
+
+  /** The reconciliation's completed log entry. */
+  function reconciliation(
+    report: ReturnType<typeof createSyncDiagnosticReport>,
+  ) {
+    return report
+      .report()
+      .entries.find(
+        (entry: SyncDiagnostic) =>
+          entry.stage === "reconciliation" && entry.outcome === "completed",
+      )!;
+  }
+
+  const ledger = [
+    row("near", { transactionDate: "2040-07-10", merchantName: "Near" }),
+    row("seen", { transactionDate: "2040-07-20" }),
+  ];
+
+  it("reads a row ten days from the window with the default pad, not with one day, and decides alike", async () => {
+    const results = [];
+    for (const [days, read] of [
+      [undefined, true],
+      [1, false],
+    ] as const) {
+      const db = await opened(days);
+      await db.ingestRun(
+        run("pad-1", "2040-07-01T12:00:00Z", ledger),
+        pendingOnly,
+      );
+      results.push(
+        await db.ingestRun(
+          run("pad-2", "2040-07-20T12:00:00Z", [ledger[1]!]),
+          pendingOnly,
+        ),
+      );
+      const ids = loadingComparisons.at(-1)!.narrowRows.map(({ id }) => id);
+      expect(ids.includes(await idOf(db, "near")), String(days)).toBe(read);
+    }
+    expect(results[1]).toStrictEqual(results[0]);
+  });
+
+  it("pads a named row's stored date by the configured days, not only the candidate distance", async () => {
+    for (const [days, read] of [
+      [undefined, true],
+      [1, false],
+    ] as const) {
+      const db = await opened(days);
+      await db.ingestRun(
+        run("named-1", "2040-07-05T12:00:00Z", [
+          authorization("p", { transactionDate: "2040-03-01" }),
+        ]),
+        pendingOnly,
+      );
+      const [card] = await db.raw(
+        "SELECT id FROM cards WHERE connection_id = ?",
+        [connectionId],
+      );
+      // A posted neighbour 19 days later: beyond the candidate distance,
+      // within the default padding.
+      await insertTransactionFixture(db, [
+        storedRow(connectionId, "q", {
+          cardId: card!.id as string,
+          merchantName: "Merchant",
+          amountMinor: -100,
+          transactionDate: "2040-03-20",
+          lastSeenRunId: "named-1",
+          lastSeenAt: "2040-07-05T12:00:00.000Z",
+          details: { ...storedRow(connectionId, "q").details, provider: {} },
+        }),
+      ]);
+      // Another origin's older capture names the authorization, which keeps
+      // its stored date and is only marked seen.
+      await db.ingestRun(
+        {
+          ...run("named-2", "2040-07-03T12:00:00Z", [
+            authorization("p", { transactionDate: "2040-06-20" }),
+          ]),
+          responses: [
+            {
+              accountKey: "account",
+              endpoint: "synthetic:cal/other",
+              capturedAt: "2040-07-03T12:00:00Z",
+              responseText: JSON.stringify([
+                authorization("p", { transactionDate: "2040-06-20" }),
+              ]),
+            },
+          ],
+        },
+        pendingOnly,
+      );
+      const ids = loadingComparisons.at(-1)!.narrowRows.map(({ id }) => id);
+      expect(ids.includes("q"), String(days)).toBe(read);
+      const p = await idOf(db, "p");
+      expect(ids, String(days)).toContain(p);
+      // Nineteen days is no candidate distance, whatever was read.
+      const stored = (await db.getTransaction(p))!;
+      expect(stored.transactionDate, String(days)).toBe("2040-03-01");
+      expect(stored.details.pendingPostingCandidates, String(days)).toBe(
+        undefined,
+      );
+    }
+  });
+
+  it("honours the configured pad in the store a live refresh locks", async () => {
+    const db = await opened(1);
+    await db.ingestRun(
+      run("lock-1", "2040-07-01T12:00:00Z", ledger),
+      pendingOnly,
+    );
+    const attempt = await db.withCollectionLock(connectionId, (store) =>
+      store.ingestRun(
+        run("lock-2", "2040-07-20T12:00:00Z", [ledger[1]!]),
+        pendingOnly,
+      ),
+    );
+    expect(attempt).toMatchObject({ acquired: true });
+    const ids = loadingComparisons.at(-1)!.narrowRows.map(({ id }) => id);
+    expect(ids).toContain(await idOf(db, "seen"));
+    expect(ids).not.toContain(await idOf(db, "near"));
+  });
+
+  it("logs the padded request bounds, the rows its scope selected and no fallback", async () => {
+    const db = await opened(1);
+    await db.ingestRun(
+      run("log-1", "2040-07-01T12:00:00Z", ledger),
+      pendingOnly,
+    );
+    const recent = createSyncDiagnosticReport();
+    await db.ingestRun(
+      run("log-2", "2040-07-20T12:00:00Z", [ledger[1]!]),
+      pendingOnly,
+      recent.log,
+    );
+    // The capture day, one day either side; the observed row's own window
+    // never reaches the log.
+    expect(reconciliation(recent)).toMatchObject({
+      requestScope: { from: "2040-07-19", to: "2040-07-21" },
+      scopeFallback: false,
+      counts: { scopeRows: 1, ledgerRows: 1 },
+    });
+    const month = createSyncDiagnosticReport();
+    const wide = await opened();
+    await wide.ingestRun(
+      run("log-3", "2040-07-01T12:00:00Z", ledger),
+      pendingOnly,
+    );
+    await wide.ingestRun(
+      run(
+        "log-4",
+        "2040-07-21T12:00:00Z",
+        [row("march", { transactionDate: "2024-03-15", merchantName: "Old" })],
+        { kind: "history", month: "2024-03" },
+      ),
+      pendingOnly,
+      month.log,
+    );
+    expect(reconciliation(month)).toMatchObject({
+      requestScope: { from: "2024-01-21", to: "2024-05-10" },
+      scopeFallback: false,
+      counts: { scopeRows: 0 },
+    });
+  });
+
+  it("logs a fallback and every row it read", async () => {
+    const db = await opened();
+    await db.ingestRun(
+      run("fallback-1", "2040-06-12T12:00:00Z", [
+        purchase(),
+        line("line-2", 2, "2040-07-10"),
+        row("unrelated", {
+          transactionDate: "2030-01-01",
+          merchantName: "Old",
+        }),
+      ]),
+      pendingOnly,
+    );
+    configureHydration({ closure: false });
+    const report = createSyncDiagnosticReport();
+    await db.ingestRun(
+      run("fallback-2", "2040-07-12T12:00:00Z", [
+        row("fresh", { transactionDate: "2040-07-11", merchantName: "Fresh" }),
+      ]),
+      pendingOnly,
+      report.log,
+    );
+    // The line in the billing window is the scope; the fallback then reads
+    // all three stored rows.
+    expect(reconciliation(report)).toMatchObject({
+      scopeFallback: true,
+      counts: { scopeRows: 1, ledgerRows: 4 },
+    });
   });
 });

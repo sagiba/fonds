@@ -208,7 +208,9 @@ Unavailable commands exit 3; otherwise 0 means success, 1 failure or `busy`, 2 p
 refresh. `refresh` calls the provider and prints a
 `refresh_summary` of status and summed [counts](../api.md#refreshes);
 `list-refreshes` keeps individual results. Without dates it rereads recent data;
-`--from`/`--to` request backfill. `--credentials-fd`, `--history-mode`,
+`--from`/`--to` request backfill. Applying a capture reads the rows within
+`FONDS_SYNC_SCOPE_DAYS` (default 40, at most 3660) of its requested dates and
+observations ([scope](../design.md#collection-and-evidence)). `--credentials-fd`, `--history-mode`,
 `--search-window-months` and `--call-budget` need `--connection`. Without stored
 credentials it prompts secretly or reads the private descriptor; provider guides
 list the fields.

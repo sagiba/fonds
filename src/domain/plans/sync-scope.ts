@@ -7,6 +7,14 @@ import type { extractRun } from "./sync.js";
 /** Days around a capture's request window and observations that it reconciles. */
 export const SYNC_SCOPE_DAYS = 40;
 
+/** The widest configurable padding: about ten years. */
+export const SYNC_SCOPE_MAX_DAYS = 3660;
+
+/** Whether `days` is a configurable padding: a whole number from 1 to 3660. */
+export function isSyncScopeDays(days: number): boolean {
+  return Number.isInteger(days) && days >= 1 && days <= SYNC_SCOPE_MAX_DAYS;
+}
+
 /** The widest date distance between a pending row and a posted candidate. */
 export const CANDIDATE_DAYS = 7;
 

@@ -27,6 +27,7 @@ import {
   selectedBackend,
 } from "./runtime/operator-cli.js";
 import { STATE_FILE } from "./runtime/state.js";
+import { syncScopeDays } from "./runtime/sync-scope.js";
 
 const repositoryRoot = protectedDirectory(import.meta.url);
 
@@ -159,6 +160,12 @@ postgresql:// FONDS_DATABASE_URL makes fonds use PostgreSQL instead.`,
         ...(await openSqliteSession(
           path,
           await installation(mode.create && !existsSync(path)),
+          {
+            syncScopeDays: syncScopeDays(
+              env,
+              (message) => new CommandInputError(message),
+            ),
+          },
         )),
         // Journal files a collection created must be as private as the ledger.
         verify: () => validatePrivateDatabase(path),
@@ -172,7 +179,12 @@ postgresql:// FONDS_DATABASE_URL makes fonds use PostgreSQL instead.`,
     async demo(globals, p) {
       const path = databasePath(globals.db, DEMO_DATABASE);
       const current = await installation(true);
-      const database = await openLocalLedger(path, current);
+      const database = await openLocalLedger(path, current, {
+        syncScopeDays: syncScopeDays(
+          env,
+          (message) => new CommandInputError(message),
+        ),
+      });
       try {
         await loadDemo(database);
         return await demoSummary(

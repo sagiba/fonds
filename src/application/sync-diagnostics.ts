@@ -59,6 +59,16 @@ export const syncDiagnosticSchema = z.object({
     .optional(),
   requiresAttention: z.boolean().optional(),
   durationMs: count.optional(),
+  /**
+   * The padded request bounds a reconciliation's scope rule read around;
+   * observed dates widen the scope but never these bounds.
+   */
+  requestScope: z
+    .object({ from: z.iso.date(), to: z.iso.date() })
+    .strict()
+    .optional(),
+  /** Whether a reconciliation's scope proved incomplete and it read every row. */
+  scopeFallback: z.boolean().optional(),
   counts: z
     .object({
       observed: count.optional(),
@@ -72,8 +82,13 @@ export const syncDiagnosticSchema = z.object({
       unchanged: count.optional(),
       failures: count.optional(),
       recoveredRuns: count.optional(),
-      /** Snapshot volume a reconciliation loaded: ledger rows, applied runs and removals. */
+      /**
+       * Snapshot volume a reconciliation loaded: ledger rows read (its scope,
+       * then every row after a fallback), applied runs and removals.
+       */
       ledgerRows: count.optional(),
+      /** Ledger rows the reconciliation's scope rule selected. */
+      scopeRows: count.optional(),
       priorRuns: count.optional(),
       removals: count.optional(),
       /** Ledger rows a reconciliation read complete, and its planning rounds. */

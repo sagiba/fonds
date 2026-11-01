@@ -99,6 +99,7 @@ import {
   type SyncResult,
 } from "../domain/plans/sync.js";
 import {
+  isSyncScopeDays,
   ledgerScope,
   namedWindows,
   scopeNames,
@@ -511,6 +512,15 @@ async function commitInOrder<
   return results as WriteResults<Writes>;
 }
 
+/** Installation settings every store of a database shares. */
+export interface StoreOptions {
+  /**
+   * Days around each capture's requested dates and observations that its
+   * application reads: a whole number from 1 to 3660, by default 40.
+   */
+  syncScopeDays?: number;
+}
+
 /**
  * The store a collection uses while it holds its connection's lock. `db` is the
  * lock's own: a reserved session, or a fence that leads every write.
@@ -520,8 +530,9 @@ export function lockedCollectionStore<Db>(
   statements: Statements<Db>,
   connectionId: string,
   signal: AbortSignal,
+  options: StoreOptions = {},
 ): LockedCollectionStore {
-  const store = buildStore(db, statements);
+  const store = buildStore(db, statements, options);
   return {
     identity: store.identity,
     getConnection: store.getConnection,
@@ -574,16 +585,28 @@ export function lockedCollectionStore<Db>(
 export function createStore<Db>(
   db: StoreDatabase<Db>,
   statements: Statements<Db>,
+  options: StoreOptions = {},
 ): InternalStore {
-  const { updateRefresh: _fencedOnly, ...store } = buildStore(db, statements);
+  const { updateRefresh: _fencedOnly, ...store } = buildStore(
+    db,
+    statements,
+    options,
+  );
   return store;
 }
 
 function buildStore<Db>(
   db: StoreDatabase<Db>,
   statements: Statements<Db>,
+  options: StoreOptions,
 ): InternalStore & RefreshWriter {
   const commitWrites = db.commit ?? commitInOrder;
+  const scopeDays = options.syncScopeDays ?? SYNC_SCOPE_DAYS;
+  if (!isSyncScopeDays(scopeDays)) {
+    throw new RangeError(
+      "Sync scope days must be a whole number from 1 to 3660",
+    );
+  }
 
   /** Every write of a transaction goes through here, after its reads. */
   async function commit<const Writes extends readonly PromiseLike<unknown>[]>(
@@ -1807,10 +1830,11 @@ function buildStore<Db>(
         if (run.appliedAt) {
           return replayResult(run);
         }
+        const scope = syncScope(extraction, adapter, scopeDays);
         const bounded = await loadBounded(
           tx,
           connection.id,
-          syncScope(extraction, adapter, SYNC_SCOPE_DAYS),
+          scope,
           adapter.provider,
           adapter.pendingPostingCandidates === true &&
             extraction.extracted.some(({ result }) => !result.historical),
@@ -1829,14 +1853,18 @@ function buildStore<Db>(
         const reconciliationStarted = performance.now();
         const loaded = {
           ledgerRows: ledger.length,
+          scopeRows: ledger.length,
           priorRuns: loadedHistory.priorRuns.length,
           removals: removals.length,
         };
+        // Request bounds only: an observation's date never reaches the log.
+        const requestScope = scope.requestScope && { ...scope.requestScope };
         emit({
           event: "fonds_sync",
           ...ids,
           stage: "reconciliation",
           outcome: "started",
+          ...(requestScope && { requestScope }),
           counts: loaded,
         });
         const now = new Date().toISOString();
@@ -1883,6 +1911,8 @@ function buildStore<Db>(
           stage: "reconciliation",
           outcome: "completed",
           durationMs: elapsedMs(reconciliationStarted),
+          ...(requestScope && { requestScope }),
+          scopeFallback: planned.fallback,
           counts: {
             observed: result.observed ?? 0,
             created: result.created,

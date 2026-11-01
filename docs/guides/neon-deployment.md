@@ -74,6 +74,7 @@ FONDS_ENV=/absolute/private/neon.env
 | `FONDS_REFRESH_SECRET`                             | Generated once by setup; bearer for the operator refresh route                                                           |
 | `FONDS_REFRESH_SCHEDULE`, `FONDS_REFRESH_TIMEZONE` | Optional [schedule](hosted-service.md#scheduling); scheduled refresh is off without it                                   |
 | `FONDS_PUBLIC_API_DESCRIPTION`                     | Optional `1` publishes the [API description](hosted-service.md#configuration); every deploy declares it, `0` when absent |
+| `FONDS_SYNC_SCOPE_DAYS`                            | Optional [scope](hosted-service.md#configuration) days; every deploy declares it, `40` when absent                       |
 | `FONDS_REFRESH_TIME`                               | Generated once by setup: this installation's random `HH:MM`; set it only to pin the time                                 |
 
 The file is this installation's [state](../database.md#state-directory-and-backup),
