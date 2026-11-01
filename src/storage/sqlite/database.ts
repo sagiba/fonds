@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { type Client, createClient, LibsqlError } from "@libsql/client/sqlite3";
 import { drizzle } from "drizzle-orm/libsql/sqlite3";
 
+import type { StoreOptions } from "../store.js";
 import { storeForDatabase } from "./client.js";
 import { checkSqliteSchema, migrateSqliteSchema } from "./migrate.js";
 import { sqliteMigrations } from "./migration.js";
@@ -49,7 +50,7 @@ async function enableWal(client: Client) {
  */
 export async function openDatabase(
   filename: string,
-  options: { settings?: Readonly<Record<string, string>> } = {},
+  options: { settings?: Readonly<Record<string, string>> } & StoreOptions = {},
 ) {
   if (filename !== ":memory:") {
     try {
@@ -106,7 +107,11 @@ export async function openDatabase(
     }
 
     const orm = drizzle(client, { schema });
-    const database = storeForDatabase(orm, client, "sqlite", schedule);
+    const database = storeForDatabase(orm, client, "sqlite", schedule, {
+      ...(options.syncScopeDays !== undefined && {
+        syncScopeDays: options.syncScopeDays,
+      }),
+    });
     return {
       ...database,
       close: (): Promise<void> => {

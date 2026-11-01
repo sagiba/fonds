@@ -31,6 +31,7 @@ import {
 } from "../../src/storage/postgres/store.js";
 import { openDatabase } from "../../src/storage/sqlite/database.js";
 import * as sqliteSchema from "../../src/storage/sqlite/schema.js";
+import type { StoreOptions } from "../../src/storage/store.js";
 import {
   encodeObservation,
   encodeReconciliation,
@@ -228,20 +229,23 @@ export async function migrateD1(binding: D1Database) {
   }
 }
 
-export async function open(backend: Backend): Promise<Harness> {
+export async function open(
+  backend: Backend,
+  options: StoreOptions = {},
+): Promise<Harness> {
   if (backend === "postgres") {
     const database = await disposableDatabase(postgresUrl!);
     const config = {
       connectionString: database.url,
       options: database.options,
     };
-    const db = openPostgresDatabase({ ...config, max: 1 });
+    const db = openPostgresDatabase({ ...config, max: 1 }, options);
     await initializePostgresDatabase(db.pool);
     return {
       ...db,
       eventSubscriptions: createPostgresEventStore(db.pool, db),
       peer: async () => {
-        const peer = openPostgresDatabase({ ...config, max: 2 });
+        const peer = openPostgresDatabase({ ...config, max: 2 }, options);
         return {
           ...peer,
           eventSubscriptions: createPostgresEventStore(peer.pool, peer),
@@ -282,11 +286,11 @@ export async function open(backend: Backend): Promise<Harness> {
       exec: (query: string) => local.exec(query),
     } as unknown as D1Database;
     await migrateD1(binding);
-    const db = openD1Database(binding);
+    const db = openD1Database(binding, options);
     return {
       ...db,
       peer: async () => ({
-        ...openD1Database(binding),
+        ...openD1Database(binding, options),
         close: async () => {},
       }),
       driver: { kind: "d1", binding },
@@ -303,10 +307,10 @@ export async function open(backend: Backend): Promise<Harness> {
   if (backend === "sqlite") {
     const directory = await mkdtemp(join(tmpdir(), "fonds-sqlite-contract-"));
     const path = join(directory, "database.sqlite");
-    const db = await openDatabase(path);
+    const db = await openDatabase(path, options);
     return {
       ...db,
-      peer: () => openDatabase(path),
+      peer: () => openDatabase(path, options),
       driver: { kind: "libsql", client: db.client },
       raw: async (statement, args = []) => {
         const result = await db.client.execute({
@@ -332,14 +336,17 @@ export async function open(backend: Backend): Promise<Harness> {
   }
   await client.execute("PRAGMA foreign_keys=ON");
   await initializeTursoDatabase(client);
-  const db = databaseForClient(client);
+  const db = databaseForClient(client, options);
   return {
     ...db,
     // An in-memory database has one connection; over HTTP each client is independent.
     peer: async () =>
       backend === "libsql-local"
-        ? { ...databaseForClient(client), close: async () => {} }
-        : databaseForClient(createClient({ url: httpUrl!, intMode: "number" })),
+        ? { ...databaseForClient(client, options), close: async () => {} }
+        : databaseForClient(
+            createClient({ url: httpUrl!, intMode: "number" }),
+            options,
+          ),
     driver: { kind: "libsql", client },
     raw: async (statement, args = []) => {
       const result = await client.execute({

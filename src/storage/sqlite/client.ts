@@ -10,6 +10,7 @@ import {
   createStore,
   lockedCollectionStore,
   type StoreDatabase,
+  type StoreOptions,
 } from "../store.js";
 import { createSqliteCredentialStore } from "./credentials.js";
 import { createSqliteEventStore } from "./events.js";
@@ -21,6 +22,7 @@ export function storeForDatabase(
   client: Client,
   backend: "sqlite" | "turso",
   schedule: <T>(work: () => Promise<T>) => Promise<T> = (work) => work(),
+  options: StoreOptions = {},
 ) {
   const database: StoreDatabase<statements.Executor> = {
     backend,
@@ -29,7 +31,7 @@ export function storeForDatabase(
     execute: (statement) => schedule(async () => statement),
     transaction: (work) => schedule(() => orm.transaction(work)),
   };
-  const store = createStore(database, statements);
+  const store = createStore(database, statements, options);
   const execute = (sql: string, args: InValue[]) =>
     schedule(() => client.execute({ sql, args }));
   const query = async (sql: string, args: InValue[]) =>
@@ -39,7 +41,7 @@ export function storeForDatabase(
   function withCollectionLock<T>(
     connectionId: string,
     work: (store: LockedCollectionStore, signal: AbortSignal) => Promise<T>,
-    options?: CollectionLeaseOptions,
+    leaseOptions?: CollectionLeaseOptions,
   ) {
     return withCollectionLease(
       {
@@ -75,10 +77,11 @@ export function storeForDatabase(
             statements,
             connectionId,
             signal,
+            options,
           ),
       },
       work,
-      options,
+      leaseOptions,
     );
   }
 

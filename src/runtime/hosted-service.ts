@@ -47,6 +47,7 @@ import {
   ownerRefreshes,
   type RefreshServiceOptions,
 } from "./refresh-service.js";
+import { syncScopeDaysSchema } from "./sync-scope.js";
 import { sendSignedWebhook, verifyWebhookCallback } from "./webhook.js";
 
 /** Administrative Better Auth account name; never a real mailbox. */
@@ -85,6 +86,7 @@ export const hostedEnvironmentSchema = z.object({
   FONDS_CREDENTIALS_KEY: z.string().optional(),
   // 1 serves /v1/openapi.json without authentication; 0 or unset does not.
   FONDS_PUBLIC_API_DESCRIPTION: z.enum(["0", "1"]).optional(),
+  FONDS_SYNC_SCOPE_DAYS: syncScopeDaysSchema.optional(),
 });
 
 /** Names variables only; never includes received values. */
@@ -170,6 +172,9 @@ export function hostedConfiguration(
     ...(credentialsKey && { credentialsKey }),
     ...(values.FONDS_PUBLIC_API_DESCRIPTION === "1" && {
       publicApiDescription: true,
+    }),
+    ...(values.FONDS_SYNC_SCOPE_DAYS !== undefined && {
+      syncScopeDays: values.FONDS_SYNC_SCOPE_DAYS,
     }),
     ...(manualSecret && {
       collection: {
@@ -375,7 +380,12 @@ export function createHostedService(
   );
   options.attachPool?.(financialPool);
   options.attachPool?.(authPool);
-  const store = openPostgresDatabase(financialPool);
+  const store = openPostgresDatabase(
+    financialPool,
+    config.syncScopeDays === undefined
+      ? {}
+      : { syncScopeDays: config.syncScopeDays },
+  );
   const issuer = createBetterAuth(authPool, {
     publicOrigin: config.publicOrigin,
     secret: config.secret,

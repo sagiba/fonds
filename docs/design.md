@@ -77,7 +77,11 @@ interrupted broad range, and unknown continuation metadata makes a capture
 incomplete. Collection is API-only, without browser automation or statement
 fallback; authentication challenges and rate limits stop it, and bodies, timeouts,
 retries and failure budgets are bounded. Every capture reconciles against current
-state and policy. Unchanged content advances receipt/observation freshness without
+state and policy within its scope: rows near the month or window it requested,
+pending authorizations, linked components and rows its observations name by
+identity, purchase, link or candidate. Other rows keep their state until a capture
+covers them; a scope found incomplete widens to every row. Unchanged content
+advances receipt/observation freshness without
 transaction-row writes or change events. Capture rules belong to the provider guides
 ([CAL](providers/cal.md), [Isracard](providers/isracard.md)).
 

@@ -421,6 +421,7 @@ describe("Neon configuration", () => {
         "FONDS_PUBLIC_API_DESCRIPTION",
         "FONDS_PUBLIC_ORIGIN",
         "FONDS_REFRESH_SECRET",
+        "FONDS_SYNC_SCOPE_DAYS",
       ]);
     } finally {
       vi.unstubAllEnvs();
@@ -539,6 +540,53 @@ describe("Neon configuration", () => {
         );
         expect(error?.message, JSON.stringify(invalid)).toBe(
           "FONDS_PUBLIC_API_DESCRIPTION must be 0 or 1",
+        );
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
+  it("always declares the sync scope setting, 40 unless set", async () => {
+    for (const name of [
+      "FONDS_PUBLIC_ORIGIN",
+      "FONDS_OWNER_ID",
+      "FONDS_AUTH_SECRET",
+      "FONDS_CONNECTION_ID",
+      "FONDS_CONNECTION_PROVIDER",
+      "FONDS_REFRESH_SECRET",
+      "FONDS_NEON_GOOGLE_AUTH_URL",
+      "FONDS_GOOGLE_OWNER_EMAIL",
+    ]) {
+      vi.stubEnv(name, `synthetic-${name}`);
+    }
+    vi.stubEnv("FONDS_CONNECTION_CREDENTIALS_FILE", undefined);
+    vi.stubEnv("FONDS_CREDENTIALS_KEY", undefined);
+    try {
+      // Neon keeps an omitted variable, so the default is declared.
+      for (const [value, declared] of [
+        [undefined, "40"],
+        ["1", "1"],
+        ["3660", "3660"],
+      ] as const) {
+        vi.stubEnv("FONDS_SYNC_SCOPE_DAYS", value);
+        vi.resetModules();
+        const { default: config } = await import("../../../neon.js");
+        expect(
+          config.functions?.fonds?.env?.FONDS_SYNC_SCOPE_DAYS,
+          String(value),
+        ).toBe(declared);
+      }
+      for (const invalid of ["", "0", "3661", "040", "7.5"]) {
+        vi.stubEnv("FONDS_SYNC_SCOPE_DAYS", invalid);
+        vi.resetModules();
+        const error = await import("../../../neon.js").then(
+          () => undefined,
+          (rejection: unknown) => rejection as Error,
+        );
+        expect(error?.message, JSON.stringify(invalid)).toBe(
+          "FONDS_SYNC_SCOPE_DAYS must be a whole number of days from 1 to 3660",
         );
       }
     } finally {

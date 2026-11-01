@@ -3,12 +3,13 @@ import { drizzle } from "drizzle-orm/libsql/web";
 
 import { storeForDatabase } from "./sqlite/client.js";
 import * as schema from "./sqlite/schema.js";
+import type { StoreOptions } from "./store.js";
 
 export { initializeTursoDatabase } from "./sqlite/initialize-libsql.js";
 
-export function databaseForClient(client: Client) {
+export function databaseForClient(client: Client, options?: StoreOptions) {
   const orm = drizzle(client, { schema });
-  return storeForDatabase(orm, client, "turso");
+  return storeForDatabase(orm, client, "turso", undefined, options);
 }
 
 export function openTursoDatabase(config: Config) {

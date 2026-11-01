@@ -564,6 +564,123 @@ export type LedgerFlags = {
   [Key in keyof ReturnType<typeof ledgerFlags>]: number;
 };
 
+/**
+ * One disjunct of a bounded ledger read. The store packs disjuncts into
+ * statements within the driver's bound-parameter limit.
+ *
+ * - `accounts`: every row of these accounts in these statuses, every linked
+ *   or aliased row, every undated row and every row whose provider text could
+ *   state an identity a narrow read cannot see (a legacy identity, or any
+ *   backslash, which can respell any key);
+ * - `window`: rows of one account dated within inclusive bounds, on
+ *   `coalesce(transaction_date, booking_date)` or on `billing_date`;
+ * - `keys`: rows with these source keys;
+ * - `base`: rows whose operational identity text contains the base as a JSON
+ *   string (a row whose text could spell it otherwise is an `accounts` row);
+ * - `ids`: these rows;
+ * - `dependents`: rows superseded by, or billed lines of, these rows;
+ * - `date`: every row of one account and exact transaction date.
+ */
+export type LedgerClause =
+  | { kind: "accounts"; accounts: string[]; statuses: string[] }
+  | {
+      kind: "window";
+      sourceScope: string;
+      field: "transaction" | "billing";
+      from: string;
+      to: string;
+    }
+  | { kind: "keys"; keys: string[] }
+  | { kind: "base"; base: string }
+  | { kind: "ids"; ids: string[] }
+  | { kind: "dependents"; ids: string[] }
+  | { kind: "date"; sourceScope: string; transactionDate: string };
+
+/** Parameters a disjunct binds. */
+export function clauseParameters(clause: LedgerClause): number {
+  switch (clause.kind) {
+    case "accounts":
+      return clause.accounts.length + clause.statuses.length + 3;
+    case "window":
+      return 3;
+    case "keys":
+      return clause.keys.length;
+    case "base":
+      return 1;
+    case "ids":
+      return clause.ids.length;
+    case "dependents":
+      return 2 * clause.ids.length;
+    case "date":
+      return 2;
+  }
+}
+
+/** Whether a text column contains `text`, case-sensitively; false for null. Text functions only, as `ledgerFlags`. */
+function holdsText(column: AnyColumn, text: string) {
+  return sql`(${column} is not null and replace(${column}, ${text}, '') <> ${column})`;
+}
+
+/** The disjunction of `clauses` over a ledger read's joined columns. */
+export function ledgerSelection(
+  columns: {
+    id: AnyColumn;
+    sourceScope: AnyColumn;
+    status: AnyColumn;
+    sourceKey: AnyColumn;
+    sourceAliases: AnyColumn;
+    transactionDate: AnyColumn;
+    bookingDate: AnyColumn;
+    billingDate: AnyColumn;
+    purchaseId: AnyColumn;
+    supersededById: AnyColumn;
+    provider: AnyColumn;
+    providerIdentity: AnyColumn;
+    postingLink: AnyColumn;
+  },
+  clauses: readonly LedgerClause[],
+): SQL {
+  const backslash = "\\";
+  return or(
+    ...clauses.map((clause) => {
+      switch (clause.kind) {
+        case "accounts":
+          return sql`(${inArray(columns.sourceScope, clause.accounts)} and (${or(
+            inArray(columns.status, clause.statuses),
+            sql`(${columns.postingLink} is not null and ${columns.postingLink} <> 'null')`,
+            sql`${columns.sourceAliases} <> '[]'`,
+            sql`(${columns.transactionDate} is null and ${columns.bookingDate} is null and ${columns.billingDate} is null)`,
+            holdsText(columns.provider, "identity"),
+            holdsText(columns.provider, backslash),
+            holdsText(columns.providerIdentity, backslash),
+          )}))`;
+        case "window":
+          return sql`(${columns.sourceScope} = ${clause.sourceScope} and ${
+            clause.field === "transaction"
+              ? sql`coalesce(${columns.transactionDate}, ${columns.bookingDate})`
+              : columns.billingDate
+          } between ${clause.from} and ${clause.to})`;
+        case "keys":
+          return inArray(columns.sourceKey, clause.keys);
+        case "base":
+          return holdsText(
+            columns.providerIdentity,
+            JSON.stringify(clause.base),
+          );
+        case "ids":
+          return inArray(columns.id, clause.ids);
+        case "dependents":
+          return or(
+            inArray(columns.supersededById, clause.ids),
+            inArray(columns.purchaseId, clause.ids),
+          );
+        case "date":
+          return sql`(${columns.sourceScope} = ${clause.sourceScope} and ${columns.transactionDate} = ${clause.transactionDate})`;
+      }
+    }),
+  )!;
+}
+
 export function planCondition(
   table: TransactionColumns & Table,
   connectionId: string,

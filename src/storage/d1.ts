@@ -17,6 +17,7 @@ import {
   createStore,
   lockedCollectionStore,
   type StoreDatabase,
+  type StoreOptions,
   type WriteResults,
 } from "./store.js";
 
@@ -40,7 +41,10 @@ function isRevisionConflict(error: unknown): boolean {
  * its writes as one atomic batch led by a connection revision guard. A concurrent
  * writer fails the batch with ConflictError instead of being silently overwritten.
  */
-export function openD1Database(binding: D1Database) {
+export function openD1Database(
+  binding: D1Database,
+  options: StoreOptions = {},
+) {
   const orm = drizzle(binding, { schema });
 
   async function commit<const Writes extends readonly PromiseLike<unknown>[]>(
@@ -93,7 +97,7 @@ export function openD1Database(binding: D1Database) {
   function withCollectionLock<T>(
     connectionId: string,
     work: (store: LockedCollectionStore, signal: AbortSignal) => Promise<T>,
-    options?: CollectionLeaseOptions,
+    leaseOptions?: CollectionLeaseOptions,
   ) {
     return withCollectionLease(
       {
@@ -129,14 +133,15 @@ export function openD1Database(binding: D1Database) {
             statements,
             connectionId,
             signal,
+            options,
           ),
       },
       work,
-      options,
+      leaseOptions,
     );
   }
 
-  const store = createStore(database, statements);
+  const store = createStore(database, statements, options);
   return {
     ...store,
     withCollectionLock,

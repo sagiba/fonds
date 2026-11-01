@@ -12,6 +12,7 @@ import {
   createStore,
   lockedCollectionStore,
   type StoreDatabase,
+  type StoreOptions,
 } from "../store.js";
 import * as schema from "./schema.js";
 import * as statements from "./statements.js";
@@ -251,7 +252,10 @@ function postgresDatabase(
 }
 
 /** The returned store owns its pool lifetime; close() also ends a supplied Pool. */
-export function openPostgresDatabase(config: PoolConfig | Pool) {
+export function openPostgresDatabase(
+  config: PoolConfig | Pool,
+  options: StoreOptions = {},
+) {
   const supplied = config instanceof Pool ? config : new Pool(config);
   // pg removes failed idle clients before emitting this event. Active operations still
   // reject normally; never let an idle driver's raw error crash or enter service logs.
@@ -270,7 +274,7 @@ export function openPostgresDatabase(config: PoolConfig | Pool) {
   function withCollectionLock<T>(
     connectionId: string,
     work: (store: LockedCollectionStore, signal: AbortSignal) => Promise<T>,
-    options?: CollectionLeaseOptions,
+    leaseOptions?: CollectionLeaseOptions,
   ) {
     return withCollectionLease(
       {
@@ -294,15 +298,16 @@ export function openPostgresDatabase(config: PoolConfig | Pool) {
             statements,
             connectionId,
             signal,
+            options,
           ),
       },
       work,
-      options,
+      leaseOptions,
     );
   }
 
   return {
-    ...createStore(database, statements),
+    ...createStore(database, statements, options),
     orm,
     pool,
     withCollectionLock,

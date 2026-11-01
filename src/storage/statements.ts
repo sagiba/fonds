@@ -39,7 +39,7 @@ import type {
 } from "../domain/records.js";
 import type { FailureReason, ProviderStopReason } from "../domain/refreshes.js";
 import type { RetainedRun } from "./run-evidence.js";
-import type { PlanScope } from "./sql.js";
+import type { LedgerClause, PlanScope } from "./sql.js";
 
 /** A run with the columns that place it in application order. */
 export type OrderedRun = PriorRun & {
@@ -58,11 +58,15 @@ export interface PlanRow {
   annotation: Annotation | null;
 }
 
-/** A narrow row, whether it must be hydrated before planning, and its annotation. */
+/**
+ * A narrow row, whether it must be hydrated before planning, its annotation
+ * and its position in ingestion order.
+ */
 export interface LedgerLoad {
   row: NarrowRow;
   doubt: boolean;
   annotation: Annotation | null;
+  position: number;
 }
 
 export interface RefreshRow {
@@ -253,10 +257,38 @@ export interface Statements<Db> {
     limit: number,
   ): PromiseLike<Pick<Run, "id" | "parserVersion">[]>;
   planRows(db: Db, id: string, scope?: PlanScope): PromiseLike<PlanRow[]>;
-  /** Narrow rows of every transaction of the connection, in ingestion order. */
-  ledgerRows(db: Db, id: string): PromiseLike<LedgerLoad[]>;
+  /**
+   * Narrow rows of the connection, every one or those `clauses` select, in
+   * ingestion order.
+   */
+  ledgerRows(
+    db: Db,
+    id: string,
+    clauses?: readonly LedgerClause[],
+  ): PromiseLike<LedgerLoad[]>;
+  /** IDs of the connection's rows that `clauses` select, in no particular order. */
+  ledgerIds(
+    db: Db,
+    id: string,
+    clauses: readonly LedgerClause[],
+  ): PromiseLike<{ id: string }[]>;
+  /**
+   * Each row of these accounts whose stored pending-to-posted candidate list
+   * names any row, with that list; at most 99 accounts.
+   */
+  candidateLists(
+    db: Db,
+    id: string,
+    scopes: string[],
+  ): PromiseLike<{ id: string; candidates: string[] }[]>;
   /** Complete rows of these IDs, in no particular order. */
   completeRows(db: Db, ids: string[]): PromiseLike<Transaction[]>;
+  /** Which of `scopes` hold any row of the connection; at most 99 scopes. */
+  knownScopes(
+    db: Db,
+    id: string,
+    scopes: string[],
+  ): PromiseLike<{ sourceScope: string }[]>;
   /** Every applied run, in application order. */
   priorRuns(db: Db, id: string): PromiseLike<PriorRun[]>;
   /**

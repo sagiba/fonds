@@ -28,6 +28,7 @@ import {
 import { CommandInputError } from "./operation-cli.js";
 import type { BackendSession } from "./operator-cli.js";
 import { STATE_SECRETS, StateError } from "./state.js";
+import { syncScopeDays } from "./sync-scope.js";
 
 export {
   FINANCIAL_SCHEMA,
@@ -193,6 +194,12 @@ export async function openPostgresSession(
   }
   const store = openPostgresDatabase(
     financialPoolConfig(env.FONDS_DATABASE_URL),
+    {
+      syncScopeDays: syncScopeDays(
+        env,
+        (message) => new CommandInputError(message),
+      ),
+    },
   );
   try {
     if (options.initialize) {

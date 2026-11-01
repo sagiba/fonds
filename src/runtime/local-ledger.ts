@@ -5,6 +5,7 @@ import {
   sameInstallation,
 } from "../application/installation.js";
 import { openDatabase } from "../storage/sqlite/database.js";
+import type { StoreOptions } from "../storage/store.js";
 import { outsideDirectory } from "./checkout.js";
 import { dataHome, ensureDataHome } from "./data-home.js";
 import {
@@ -53,11 +54,13 @@ function recordedFingerprint(text: string | undefined) {
 export async function openLocalLedger(
   databasePath: string,
   installation: Installation,
+  options: StoreOptions = {},
 ) {
   if (databasePath === ":memory:") {
-    return openDatabase(databasePath);
+    return openDatabase(databasePath, options);
   }
   const database = await openDatabase(databasePath, {
+    ...options,
     settings: {
       [INSTALLATION_SETTING]: JSON.stringify(installation.fingerprint),
     },
@@ -82,8 +85,9 @@ export async function openLocalLedger(
 export async function openSqliteSession(
   databasePath: string,
   installation: Installation,
+  options: StoreOptions = {},
 ): Promise<BackendSession> {
-  const database = await openLocalLedger(databasePath, installation);
+  const database = await openLocalLedger(databasePath, installation, options);
   return {
     store: database,
     credentials: database.credentials,

@@ -185,6 +185,23 @@ describe("trusted client address", () => {
     },
   );
 
+  it.each(["", "0", "3661", "040", "ten"])(
+    "accepts sync scope days from 1 to 3660, not %o",
+    (value) => {
+      const parse = (FONDS_SYNC_SCOPE_DAYS?: string) =>
+        hostedNodeConfiguration({
+          ...base,
+          FONDS_DATABASE_URL: "postgresql://u:p@127.0.0.1/fonds",
+          ...(FONDS_SYNC_SCOPE_DAYS !== undefined && { FONDS_SYNC_SCOPE_DAYS }),
+        }).syncScopeDays;
+      // Unset leaves the store's default.
+      expect(parse()).toBeUndefined();
+      expect(parse("1")).toBe(1);
+      expect(parse("3660")).toBe(3660);
+      expect(() => parse(value)).toThrow(/FONDS_SYNC_SCOPE_DAYS/);
+    },
+  );
+
   it.each(["", "true", "yes", "2"])(
     "publishes the API description only when opted in with 1, not %o",
     (value) => {
