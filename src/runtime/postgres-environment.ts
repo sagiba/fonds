@@ -25,6 +25,7 @@ import {
   installationFromSecrets,
   resolveInstallation,
 } from "./installation.js";
+import { loginFailuresBeforeAttention } from "./login-failures.js";
 import { CommandInputError } from "./operation-cli.js";
 import type { BackendSession } from "./operator-cli.js";
 import { STATE_SECRETS, StateError } from "./state.js";
@@ -192,6 +193,10 @@ export async function openPostgresSession(
       "FONDS_DATABASE_URL is required; without it, fonds uses SQLite.",
     );
   }
+  const loginFailures = loginFailuresBeforeAttention(
+    env,
+    (message) => new CommandInputError(message),
+  );
   const store = openPostgresDatabase(
     financialPoolConfig(env.FONDS_DATABASE_URL),
     {
@@ -213,6 +218,7 @@ export async function openPostgresSession(
       credentials: createPostgresCredentialStore(store.pool),
       eventSubscriptions: createPostgresEventStore(store.pool, store),
       credentialsKey: installation.credentialsKey,
+      loginFailuresBeforeAttention: loginFailures,
       close: () => store.close(),
     };
   } catch (error) {

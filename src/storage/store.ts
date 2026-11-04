@@ -29,6 +29,8 @@ import {
   finalAttention,
   isActive,
   isExecuted,
+  isLoginStop,
+  LOGIN_FAILURES_BEFORE_ATTENTION,
   type NotStartedReason,
   type Refresh,
   refreshHealthEvents,
@@ -775,7 +777,7 @@ function buildStore<Db>(
       (await db.execute(statements.activeRefreshes(db.root))).map((row) =>
         refreshFromRow(row),
       ),
-    updateRefresh: (id, progress) =>
+    updateRefresh: (id, progress, policy) =>
       db.transaction(async (tx) => {
         const reference = (await statements.refresh(tx, id))[0];
         const connection =
@@ -793,6 +795,18 @@ function buildStore<Db>(
           : undefined;
         // A refresh's terminal status and its final attention commit together.
         if (finishing) {
+          const attention = policy ?? {
+            loginFailuresBeforeAttention: LOGIN_FAILURES_BEFORE_ATTENTION,
+          };
+          // Only a refused login looks back past the previous refresh.
+          const earlier =
+            isLoginStop(row) && attention.loginFailuresBeforeAttention > 1
+              ? await statements.loginStreakRefreshes(
+                  tx,
+                  row.connectionId,
+                  attention.loginFailuresBeforeAttention - 1,
+                )
+              : [];
           fields.requiresAttention = finalAttention(
             {
               status,
@@ -801,6 +815,8 @@ function buildStore<Db>(
               providerStopReason: row.providerStopReason,
             },
             previous,
+            earlier,
+            attention,
           );
         }
         const cumulative = counts && { ...counts };
@@ -2050,13 +2066,6 @@ function buildStore<Db>(
                       ),
                     ]),
                   ].sort(),
-                  requiresAttention:
-                    refresh.requiresAttention ||
-                    (run.snapshot.failures ?? []).some(
-                      (failure) =>
-                        failure.code === "authentication_failed" ||
-                        failure.code === "authentication_challenge",
-                    ),
                 }),
               ]
             : []),

@@ -455,10 +455,11 @@ describe.each(backends)("operations parity on %s", (backend) => {
       const ordinary = { operator: false, now };
       const operator = { operator: true, now };
       await db.admitRefresh(
+        // An hour ago: past the cooldown, short of the daily retry.
         refresh("blocked", {
           status: "failed",
-          startedAt: "2000-01-01T00:00:00.000Z",
-          finishedAt: "2000-01-01T00:00:00.000Z",
+          startedAt: new Date(now - 60 * 60_000).toISOString(),
+          finishedAt: new Date(now - 60 * 60_000).toISOString(),
           requiresAttention: true,
         }),
         operator,
@@ -847,7 +848,7 @@ describe.each(backends)("operations parity on %s", (backend) => {
       expect(sources[connectionId]!.calls).toBe(1);
     });
 
-    it("blocks refresh after an authentication failure until an operator run", async () => {
+    it("blocks scheduled refresh after two authentication failures in a row until its daily retry completes", async () => {
       const failing = collector(async function* () {
         yield {
           type: "failure",
@@ -859,40 +860,52 @@ describe.each(backends)("operations parity on %s", (backend) => {
           fatal: true,
         };
       });
+      /** Moves a refresh's finish back by `minutes`, as time passing would. */
+      const finishedAgo = (id: string, minutes: number) =>
+        db.raw("UPDATE refreshes SET finished_at=? WHERE id=?", [
+          new Date(Date.now() - minutes * 60_000).toISOString(),
+          id,
+        ]);
       const blocked = service({ [connectionId]: failing });
-      const [failed] = await blocked.wait([
+      const [first] = await blocked.wait([
         await blocked.start(connectionId, { trigger: "manual" }),
       ]);
-      expect(failed?.refresh).toMatchObject({
+      expect(first?.refresh).toMatchObject({
+        status: "failed",
+        requiresAttention: false,
+      });
+      await finishedAgo(first!.refresh!.id, 2);
+      const [second] = await blocked.wait([
+        await blocked.start(connectionId, { trigger: "manual" }),
+      ]);
+      expect(second?.refresh).toMatchObject({
         status: "failed",
         requiresAttention: true,
       });
-      // Move past the cooldown, as a later refresh would be.
-      await db.raw("UPDATE refreshes SET finished_at=? WHERE id=?", [
-        "2000-01-01T00:00:00.000Z",
-        failed!.refresh!.id,
-      ]);
+      await finishedAgo(first!.refresh!.id, 23 * 60 + 2);
+      await finishedAgo(second!.refresh!.id, 23 * 60);
       const source = collector(async function* () {
         yield capture("after-block");
       });
       const refreshes = service({ [connectionId]: source });
-      expect(
-        await refreshes.start(connectionId, {
+      const scheduled = () =>
+        refreshes.start(connectionId, {
           trigger: "scheduled",
           occurrence: { key: `scheduled-${randomUUID()}`, at: Date.now() },
-        }),
-      ).toMatchObject({ reason: "requires_attention" });
+        });
+      expect(await scheduled()).toMatchObject({
+        reason: "requires_attention",
+      });
       expect(source.calls).toBe(0);
-      const [retried] = await refreshes.wait([
-        await refreshes.start(connectionId, {
-          trigger: "manual",
-          operator: true,
-        }),
-      ]);
+      await finishedAgo(first!.refresh!.id, 24 * 60 + 3);
+      await finishedAgo(second!.refresh!.id, 24 * 60 + 1);
+      const [retried] = await refreshes.wait([await scheduled()]);
       expect(retried?.refresh).toMatchObject({
+        trigger: "scheduled",
         status: "completed",
         requiresAttention: false,
       });
+      expect(source.calls).toBe(1);
     });
 
     it("delivers a signed Events wake-up for the changes a refresh committed", async () => {

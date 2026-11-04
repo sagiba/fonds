@@ -202,6 +202,27 @@ describe("trusted client address", () => {
     },
   );
 
+  it.each(["", "0", "6", "02", "1.5", "two"])(
+    "accepts login failures before attention from 1 to 5, not %o",
+    (value) => {
+      const parse = (FONDS_LOGIN_FAILURES_BEFORE_ATTENTION?: string) =>
+        hostedNodeConfiguration({
+          ...base,
+          FONDS_DATABASE_URL: "postgresql://u:p@127.0.0.1/fonds",
+          ...(FONDS_LOGIN_FAILURES_BEFORE_ATTENTION !== undefined && {
+            FONDS_LOGIN_FAILURES_BEFORE_ATTENTION,
+          }),
+        }).loginFailuresBeforeAttention;
+      // Unset leaves the refresh service's default.
+      expect(parse()).toBeUndefined();
+      expect(parse("1")).toBe(1);
+      expect(parse("5")).toBe(5);
+      expect(() => parse(value)).toThrow(
+        /FONDS_LOGIN_FAILURES_BEFORE_ATTENTION/,
+      );
+    },
+  );
+
   it.each(["", "true", "yes", "2"])(
     "publishes the API description only when opted in with 1, not %o",
     (value) => {

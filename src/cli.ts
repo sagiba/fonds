@@ -19,6 +19,7 @@ import {
   openLocalLedger,
   openSqliteSession,
 } from "./runtime/local-ledger.js";
+import { loginFailuresBeforeAttention } from "./runtime/login-failures.js";
 import { localMcpSetup, mcpClientChooser } from "./runtime/mcp-setup.js";
 import { CommandInputError } from "./runtime/operation-cli.js";
 import {
@@ -162,6 +163,10 @@ postgresql:// FONDS_DATABASE_URL makes fonds use PostgreSQL instead.`,
           await installation(mode.create && !existsSync(path)),
           {
             syncScopeDays: syncScopeDays(
+              env,
+              (message) => new CommandInputError(message),
+            ),
+            loginFailuresBeforeAttention: loginFailuresBeforeAttention(
               env,
               (message) => new CommandInputError(message),
             ),

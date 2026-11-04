@@ -85,7 +85,10 @@ export async function openLocalLedger(
 export async function openSqliteSession(
   databasePath: string,
   installation: Installation,
-  options: StoreOptions = {},
+  {
+    loginFailuresBeforeAttention,
+    ...options
+  }: StoreOptions & { loginFailuresBeforeAttention?: number } = {},
 ): Promise<BackendSession> {
   const database = await openLocalLedger(databasePath, installation, options);
   return {
@@ -93,6 +96,9 @@ export async function openSqliteSession(
     credentials: database.credentials,
     eventSubscriptions: database.eventSubscriptions,
     credentialsKey: installation.credentialsKey,
+    ...(loginFailuresBeforeAttention !== undefined && {
+      loginFailuresBeforeAttention,
+    }),
     close: () => database.close(),
   };
 }

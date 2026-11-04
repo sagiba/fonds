@@ -328,7 +328,7 @@ describe("refresh service", () => {
     },
   );
 
-  it("stops requesting months after an authentication failure and needs attention", async () => {
+  it("stops requesting months after an authentication failure, which alone needs no attention", async () => {
     const requested: string[] = [];
     const refreshes = service(async () =>
       source(async function* (options) {
@@ -354,7 +354,7 @@ describe("refresh service", () => {
     expect(requested).toEqual(["2040-03-01", "2040-02-01"]);
     expect(result?.refresh).toMatchObject({
       status: "partial",
-      requiresAttention: true,
+      requiresAttention: false,
       failureCodes: ["authentication_failed"],
       windows: [
         { from: "2040-03-01", status: "completed" },
@@ -366,22 +366,25 @@ describe("refresh service", () => {
 
   it("announces an attention block once, keeps its skips quiet and announces the operator's recovery", async () => {
     let authenticationFails = true;
-    const refreshes = service(async () =>
-      source(async function* (options) {
-        if (authenticationFails && options.range?.from === "2040-02-01") {
-          yield {
-            type: "failure",
-            failure: {
-              accountKey: null,
-              endpoint: "login",
-              code: "authentication_failed",
-            },
-            fatal: true,
-          };
-          return;
-        }
-        yield capture(options.range?.from ?? "recent");
-      }),
+    // One refused login blocks at once under a threshold of one.
+    const refreshes = service(
+      async () =>
+        source(async function* (options) {
+          if (authenticationFails && options.range?.from === "2040-02-01") {
+            yield {
+              type: "failure",
+              failure: {
+                accountKey: null,
+                endpoint: "login",
+                code: "authentication_failed",
+              },
+              fatal: true,
+            };
+            return;
+          }
+          yield capture(options.range?.from ?? "recent");
+        }),
+      { loginFailuresBeforeAttention: 1 },
     );
     const invoker = inProcessInvoker(
       createApplication(db, { refreshes: ownerRefreshes(refreshes) }),
@@ -912,18 +915,21 @@ describe("refresh service", () => {
   it.each(
     (
       [
-        { code: "authentication_failed", attention: true },
-        { code: "authentication_challenge", attention: true },
-        { code: "rate_limited", attention: false },
-        { code: "budget_exhausted", attention: false },
+        // One refused login needs attention only when one is the threshold.
+        { code: "authentication_failed", threshold: 1, attention: true },
+        { code: "authentication_failed", threshold: 2, attention: false },
+        { code: "authentication_challenge", threshold: 1, attention: true },
+        { code: "authentication_challenge", threshold: 2, attention: false },
+        { code: "rate_limited", threshold: 1, attention: false },
+        { code: "budget_exhausted", threshold: 1, attention: false },
       ] as const
-    ).flatMap(({ code, attention }) => [
-      { state: "staged", code, attention },
-      { state: "persisted", code, attention },
+    ).flatMap(({ code, threshold, attention }) => [
+      { state: "staged", code, threshold, attention },
+      { state: "persisted", code, threshold, attention },
     ]),
   )(
-    "finishes a $state $code stop without restarting collection",
-    async ({ state, code, attention }) => {
+    "finishes a $state $code stop without restarting collection, attention after $threshold",
+    async ({ state, code, threshold, attention }) => {
       const persisted = state === "persisted";
       if (persisted) {
         await abandoned(new Date().toISOString(), {
@@ -958,7 +964,9 @@ describe("refresh service", () => {
         yield capture("must-not-request-after-provider-stop");
       });
       const collector = vi.fn(async () => source(collect));
-      const refreshes = service(collector);
+      const refreshes = service(collector, {
+        loginFailuresBeforeAttention: threshold,
+      });
       if (persisted) {
         await refreshes.resumeStalled();
         await refreshes.settled();
@@ -1984,7 +1992,8 @@ describe("provider sessions across a backfill", () => {
     expect(cal.calls.logins).toBe(2);
     expect(refresh).toMatchObject({
       status: "partial",
-      requiresAttention: true,
+      providerStopReason: "authentication_failed",
+      requiresAttention: false,
     });
   });
 
@@ -2045,7 +2054,7 @@ describe("provider sessions across a backfill", () => {
     });
   });
 
-  it("hard stops a backfill when CAL rejects the credentials in JSON", async () => {
+  it("stops a backfill as an authentication failure when CAL rejects the credentials in JSON", async () => {
     const cal = refusingCal(() =>
       Response.json(
         {
@@ -2060,7 +2069,7 @@ describe("provider sessions across a backfill", () => {
     expect(refresh).toMatchObject({
       status: "failed",
       providerStopReason: "authentication_failed",
-      requiresAttention: true,
+      requiresAttention: false,
     });
   });
 
@@ -2235,7 +2244,11 @@ describe("soft provider stops, attention retries and login pacing", () => {
   });
 
   const stop = (
-    code: "rate_limited" | "authentication_failed" | "network_error",
+    code:
+      | "rate_limited"
+      | "authentication_failed"
+      | "authentication_challenge"
+      | "network_error",
   ) =>
     ({
       type: "failure",
@@ -2362,13 +2375,334 @@ describe("soft provider stops, attention retries and login pacing", () => {
     });
   });
 
+  const clockStart = Date.parse("2040-06-01T08:00:00.000Z");
+  const hours = (count: number) => count * 60 * 60_000;
+
+  /** Runs `test` on a clock that stands still until the test sets it. */
+  async function onClock(test: (at: (offsetMs: number) => void) => unknown) {
+    vi.useFakeTimers({ toFake: ["Date"], now: clockStart });
+    try {
+      await test((offset) => vi.setSystemTime(clockStart + offset));
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  const healthTypes = async () =>
+    (await db.listEvents())
+      .map((event) => event.type)
+      .filter((type) => type.startsWith("refresh."));
+
+  /** The skip lines a log received, in order. */
+  const skipLines = (log: ReturnType<typeof vi.fn>) =>
+    log.mock.calls
+      .map(([entry]) => entry as Record<string, unknown>)
+      .filter(
+        (entry) =>
+          entry.event === "fonds_refresh" && entry.status === "skipped",
+      );
+
+  it("cools down after one refused login, retries after six hours, and needs attention after two in a row", async () => {
+    await onClock(async (at) => {
+      const log = vi.fn();
+      const { refreshes, executions } = scripted(
+        () => stop("authentication_failed"),
+        { log },
+      );
+      expect((await scheduled(refreshes)).refresh).toMatchObject({
+        status: "failed",
+        providerStopReason: "authentication_failed",
+        requiresAttention: false,
+      });
+      expect(await healthTypes()).toEqual(["refresh.failed"]);
+      at(hours(6) - 60_000);
+      expect(await scheduled(refreshes)).toMatchObject({
+        reason: "cooldown",
+        refresh: { status: "skipped", skipReason: "cooldown" },
+      });
+      expect(skipLines(log)).toEqual([
+        {
+          event: "fonds_refresh",
+          provider: "cal",
+          trigger: "scheduled",
+          status: "skipped",
+          skipReason: "cooldown",
+          retryAt: "2040-06-01T14:00:00.000Z",
+        },
+      ]);
+      expect(executions.count).toBe(1);
+      at(hours(6));
+      expect((await scheduled(refreshes)).refresh).toMatchObject({
+        status: "failed",
+        providerStopReason: "authentication_failed",
+        requiresAttention: true,
+      });
+      expect(executions.count).toBe(2);
+      expect(await healthTypes()).toEqual([
+        "refresh.failed",
+        "refresh.failed",
+        "refresh.attention_required",
+      ]);
+    });
+  });
+
+  it("restarts the refused-login count after a completed refresh", async () => {
+    await onClock(async (at) => {
+      const outcomes = [
+        stop("authentication_failed"),
+        capture("between-refused-logins"),
+        stop("authentication_failed"),
+      ];
+      const { refreshes } = scripted(() => outcomes.shift()!);
+      expect((await scheduled(refreshes)).refresh?.requiresAttention).toBe(
+        false,
+      );
+      at(hours(6));
+      expect((await scheduled(refreshes)).refresh?.status).toBe("completed");
+      at(hours(12));
+      expect((await scheduled(refreshes)).refresh).toMatchObject({
+        status: "failed",
+        providerStopReason: "authentication_failed",
+        requiresAttention: false,
+      });
+      expect(await healthTypes()).not.toContain("refresh.attention_required");
+    });
+  });
+
+  it("neither counts nor breaks a run of refused logins at a rate limit", async () => {
+    await onClock(async (at) => {
+      const outcomes = [
+        stop("rate_limited"),
+        stop("authentication_failed"),
+        stop("rate_limited"),
+        stop("authentication_failed"),
+      ];
+      const { refreshes, executions } = scripted(() => outcomes.shift()!);
+      const attention: boolean[] = [];
+      for (const step of [0, 1, 2, 3]) {
+        at(hours(6 * step));
+        attention.push(
+          (await scheduled(refreshes)).refresh?.requiresAttention ?? false,
+        );
+      }
+      // A rate limit after a refused login is not a second rate limit, and a
+      // refused login after a rate limit starts no run of its own.
+      expect(attention).toEqual([false, false, false, true]);
+      expect(executions.count).toBe(4);
+    });
+  });
+
+  it.each([1, 2, 5])(
+    "needs attention at refused login number %i in a row, under that threshold",
+    async (threshold) => {
+      await onClock(async (at) => {
+        const { refreshes, executions } = scripted(
+          () => stop("authentication_challenge"),
+          { loginFailuresBeforeAttention: threshold },
+        );
+        const attention: boolean[] = [];
+        for (let step = 0; step < threshold; step++) {
+          at(hours(6 * step));
+          attention.push(
+            (await scheduled(refreshes)).refresh?.requiresAttention ?? false,
+          );
+        }
+        expect(attention).toEqual([
+          ...Array<boolean>(threshold - 1).fill(false),
+          true,
+        ]);
+        expect(executions.count).toBe(threshold);
+        expect(
+          (await healthTypes()).filter(
+            (type) => type === "refresh.attention_required",
+          ),
+        ).toHaveLength(1);
+      });
+    },
+  );
+
+  it.each([0, 6, 1.5])(
+    "refuses a threshold of %s refused logins",
+    (threshold) => {
+      expect(() =>
+        scripted(() => stop("authentication_failed"), {
+          loginFailuresBeforeAttention: threshold,
+        }),
+      ).toThrow("Invalid login failures before attention");
+    },
+  );
+
+  it("retries a blocked connection once a day, and a completed retry ends the block", async () => {
+    await onClock(async (at) => {
+      const log = vi.fn();
+      const outcomes = [
+        stop("authentication_failed"),
+        stop("authentication_failed"),
+        stop("network_error"),
+        capture("daily-retry"),
+      ];
+      const { refreshes, executions } = scripted(() => outcomes.shift()!, {
+        log,
+        loginFailuresBeforeAttention: 1,
+      });
+      expect((await scheduled(refreshes)).refresh?.requiresAttention).toBe(
+        true,
+      );
+      expect(await healthTypes()).toEqual([
+        "refresh.failed",
+        "refresh.attention_required",
+      ]);
+      at(hours(23));
+      expect(await scheduled(refreshes)).toMatchObject({
+        reason: "requires_attention",
+        refresh: { status: "skipped", skipReason: "requires_attention" },
+      });
+      expect(skipLines(log).at(-1)).toEqual({
+        event: "fonds_refresh",
+        provider: "cal",
+        trigger: "scheduled",
+        status: "skipped",
+        skipReason: "requires_attention",
+        retryAt: "2040-06-02T08:00:00.000Z",
+      });
+      expect(executions.count).toBe(1);
+      // The daily retry runs; failing, it keeps the block it does not announce again.
+      at(hours(24));
+      expect(await scheduled(refreshes)).toMatchObject({
+        reason: null,
+        refresh: { status: "failed", requiresAttention: true },
+      });
+      expect(executions.count).toBe(2);
+      expect(await healthTypes()).toEqual([
+        "refresh.failed",
+        "refresh.attention_required",
+        "refresh.failed",
+      ]);
+      // A manual retry keeps its own hourly allowance and moves the next daily one.
+      at(hours(24.5));
+      const manual = await refreshes.start(connectionId, { trigger: "manual" });
+      await refreshes.settled();
+      expect(await db.getRefresh(manual.refresh!.id)).toMatchObject({
+        status: "failed",
+        requiresAttention: true,
+      });
+      at(hours(25.5) - 60_000);
+      expect(
+        (await refreshes.start(connectionId, { trigger: "manual" })).reason,
+      ).toBe("requires_attention");
+      expect(executions.count).toBe(3);
+      at(hours(48.5) - 60_000);
+      expect((await scheduled(refreshes)).reason).toBe("requires_attention");
+      expect(skipLines(log).at(-1)).toMatchObject({
+        retryAt: "2040-06-03T08:30:00.000Z",
+      });
+      at(hours(48.5));
+      expect(await scheduled(refreshes)).toMatchObject({
+        reason: null,
+        refresh: { status: "completed", requiresAttention: false },
+      });
+      expect(executions.count).toBe(4);
+      expect(await healthTypes()).toEqual([
+        "refresh.failed",
+        "refresh.attention_required",
+        "refresh.failed",
+        "refresh.failed",
+        "refresh.recovered",
+      ]);
+    });
+  });
+
+  it("logs every skipped scheduled connection with when a scheduled start is next admitted", async () => {
+    await onClock(async (at) => {
+      const log = vi.fn();
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const outcomes: (() => Promise<CollectionEvent>)[] = [
+        async () => {
+          await gate;
+          return capture("held-open");
+        },
+      ];
+      const refreshes = createRefreshService({
+        store: db,
+        targets: async () => ({
+          targets: [
+            {
+              connectionId,
+              adapter: synthetic,
+              collector: async () =>
+                source(async function* () {
+                  yield await (
+                    outcomes.shift() ?? (async () => capture("later"))
+                  )();
+                }),
+            },
+          ],
+          failures: 0,
+        }),
+        log,
+        retryDelaysMs: [],
+      });
+      const occurrence = () => ({
+        trigger: "scheduled" as const,
+        occurrence: { key: crypto.randomUUID(), at: Date.now() },
+      });
+      await refreshes.start(connectionId, { trigger: "manual" });
+      expect((await refreshes.start(connectionId, occurrence())).reason).toBe(
+        "busy",
+      );
+      release();
+      await refreshes.settled();
+      at(30_000);
+      expect((await refreshes.start(connectionId, occurrence())).reason).toBe(
+        "cooldown",
+      );
+      await refreshes.recordMissed({
+        first: { key: "missed-first", at: Date.UTC(2040, 4, 31, 9) },
+        last: { key: "missed-last", at: Date.UTC(2040, 4, 31, 18) },
+        count: 2,
+      });
+      // A retried occurrence reports its recorded skip without a second line.
+      await refreshes.recordMissed({
+        first: { key: "missed-first", at: Date.UTC(2040, 4, 31, 9) },
+        last: { key: "missed-last", at: Date.UTC(2040, 4, 31, 18) },
+        count: 2,
+      });
+      const line = {
+        event: "fonds_refresh",
+        provider: "cal",
+        trigger: "scheduled",
+        status: "skipped",
+      };
+      expect(skipLines(log)).toEqual([
+        { ...line, skipReason: "busy", retryAt: null },
+        // A minute after the completed refresh, at 08:00 on the stopped clock.
+        {
+          ...line,
+          skipReason: "cooldown",
+          retryAt: "2040-06-01T08:01:00.000Z",
+        },
+        { ...line, skipReason: "missed", retryAt: null },
+      ]);
+      // A manual start meets the same rules without a skip line.
+      expect(
+        (await refreshes.start(connectionId, { trigger: "manual" })).reason,
+      ).toBe("cooldown");
+      expect(skipLines(log)).toHaveLength(3);
+    });
+  });
+
   it("lets one manual refresh an hour past an attention block, which only completion clears", async () => {
     const outcomes = [
       stop("authentication_failed"),
       stop("network_error"),
       capture("after-block"),
     ];
-    const { refreshes, executions } = scripted(() => outcomes.shift()!);
+    const { refreshes, executions } = scripted(() => outcomes.shift()!, {
+      loginFailuresBeforeAttention: 1,
+    });
     const invoker = inProcessInvoker(
       createApplication(db, { refreshes: ownerRefreshes(refreshes) }),
     );
@@ -2495,8 +2829,9 @@ describe("soft provider stops, attention retries and login pacing", () => {
   });
 
   it("admits one manual retry past an attention block across services, whatever their interleaving", async () => {
-    const { refreshes: blocker } = scripted(() =>
-      stop("authentication_failed"),
+    const { refreshes: blocker } = scripted(
+      () => stop("authentication_failed"),
+      { loginFailuresBeforeAttention: 1 },
     );
     expect((await scheduled(blocker)).refresh?.requiresAttention).toBe(true);
     await age(120);
@@ -2565,7 +2900,9 @@ describe("soft provider stops, attention retries and login pacing", () => {
 
   it("commits a finished refresh's status and attention in one write", async () => {
     const outcomes = [stop("authentication_failed"), stop("network_error")];
-    const { refreshes } = scripted(() => outcomes.shift()!);
+    const { refreshes } = scripted(() => outcomes.shift()!, {
+      loginFailuresBeforeAttention: 1,
+    });
     await scheduled(refreshes);
     await age(120);
     // Any write adding attention after the finish fails, as a crash there would.
@@ -2588,7 +2925,9 @@ describe("soft provider stops, attention retries and login pacing", () => {
       stop("rate_limited"),
       stop("rate_limited"),
     ];
-    const { refreshes, executions } = scripted(() => outcomes.shift()!);
+    const { refreshes, executions } = scripted(() => outcomes.shift()!, {
+      loginFailuresBeforeAttention: 1,
+    });
     await scheduled(refreshes);
     await age(120);
     for (let skip = 0; skip < 55; skip++) {

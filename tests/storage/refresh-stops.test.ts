@@ -20,10 +20,10 @@ import {
 } from "../helpers/storage-harness.js";
 
 const stoppingCases = [
-  ["authentication_failed", true],
-  ["authentication_challenge", true],
-  ["rate_limited", false],
-  ["budget_exhausted", false],
+  "authentication_failed",
+  "authentication_challenge",
+  "rate_limited",
+  "budget_exhausted",
 ] as const;
 
 for (const backend of backends) {
@@ -233,8 +233,8 @@ for (const backend of backends) {
     });
 
     it.each(stoppingCases)(
-      "commits %s before a runtime checkpoint and keeps attention=%s",
-      async (code, attention) => {
+      "commits %s before a runtime checkpoint, leaving attention to the finish",
+      async (code) => {
         await refresh("refresh");
         const input = failure("stop", "refresh", code);
         expect(await db.ingestRun(input, synthetic)).toMatchObject({
@@ -247,7 +247,7 @@ for (const backend of backends) {
             status: "running",
             finishedAt: null,
             providerStopReason: code,
-            requiresAttention: attention,
+            requiresAttention: false,
             counts: { ...emptyCounts(), failures: 1 },
           });
           expect(presentRefresh(stored)).not.toHaveProperty(
@@ -256,7 +256,7 @@ for (const backend of backends) {
           const wire = presentRefreshDetail(stored);
           expect(wire).not.toHaveProperty("providerStopReason");
           expect(refreshOutputSchema.parse(wire)).toMatchObject({
-            requiresAttention: attention,
+            requiresAttention: false,
           });
         } finally {
           await peer.close();
@@ -268,7 +268,7 @@ for (const backend of backends) {
         });
         expect(await db.getRefresh("refresh")).toMatchObject({
           providerStopReason: code,
-          requiresAttention: attention,
+          requiresAttention: false,
           counts: { ...emptyCounts(), failures: 1 },
         });
       },
