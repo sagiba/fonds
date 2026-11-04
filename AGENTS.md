@@ -44,7 +44,8 @@ SQLite; the hosted service runs on any Node host with PostgreSQL.
   and independent tests. Passing tests alone do not establish correctness.
   Change an intended contract explicitly; otherwise fix the implementation.
 - The [add-provider skill](.claude/skills/add-provider/SKILL.md) owns the procedure
-  for capturing, analyzing and implementing a provider.
+  for capturing, analyzing and implementing a provider. It loads only on request:
+  `/add-provider` in Claude Code, `$add-provider` in Codex.
 - [Reference models](docs/reference-models.md) records naming rationale and
   external precedents; the API owns the resulting public conventions.
 

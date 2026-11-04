@@ -1,6 +1,7 @@
 ---
 name: add-provider
 description: Add a new bank or card provider to Fonds, or a new endpoint to an existing one. Use for capturing and analyzing provider traffic (HAR files, Proxyman, mitmproxy, DevTools), building synthetic fixtures, writing collectors and mappings, and deciding whether a private provider API is a viable source.
+disable-model-invocation: true
 ---
 
 # Add a provider
