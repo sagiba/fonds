@@ -569,10 +569,10 @@ export type LedgerFlags = {
  * statements within the driver's bound-parameter limit.
  *
  * - `accounts`: every row of these accounts in these statuses, every linked
- *   row, every undated row, every row whose provider text could state an
- *   identity a narrow read cannot see (a legacy identity, or any backslash,
- *   which can respell any key) and every row whose alias text holds a
- *   backslash, which `alias` could not match;
+ *   row, every undated row, every row whose provider document mentions an
+ *   identity a narrow read cannot see, and every row whose provider,
+ *   identity or alias text holds an escape another writer could spell a key
+ *   with (`SPELLING_ESCAPES`), which `alias` and `base` could not match;
  * - `window`: rows of one account dated within inclusive bounds, on
  *   `coalesce(transaction_date, booking_date)` or on `billing_date`;
  * - `keys`: rows with these source keys;
@@ -599,11 +599,27 @@ export type LedgerClause =
   | { kind: "dependents"; ids: string[] }
   | { kind: "date"; sourceScope: string; transactionDate: string };
 
+/**
+ * Escapes that let equal JSON strings differ as text. These columns are
+ * written by `JSON.stringify`, as is the text `alias` and `base` search for.
+ * It spells `"` and `\\` one way, never writes `\/`, and writes `\u` only
+ * for control characters and lone surrogates; another writer could use
+ * either escape for any character, so a substring search cannot decide on
+ * a document that holds one. Escaped quotes, as in keys that embed JSON,
+ * decide.
+ */
+const SPELLING_ESCAPES = ["\\u", "\\/"];
+
 /** Parameters a disjunct binds. */
 export function clauseParameters(clause: LedgerClause): number {
   switch (clause.kind) {
     case "accounts":
-      return clause.accounts.length + clause.statuses.length + 4;
+      return (
+        clause.accounts.length +
+        clause.statuses.length +
+        1 +
+        3 * SPELLING_ESCAPES.length
+      );
     case "window":
       return 3;
     case "keys":
@@ -644,7 +660,6 @@ export function ledgerSelection(
   },
   clauses: readonly LedgerClause[],
 ): SQL {
-  const backslash = "\\";
   return or(
     ...clauses.map((clause) => {
       switch (clause.kind) {
@@ -654,9 +669,13 @@ export function ledgerSelection(
             sql`(${columns.postingLink} is not null and ${columns.postingLink} <> 'null')`,
             sql`(${columns.transactionDate} is null and ${columns.bookingDate} is null and ${columns.billingDate} is null)`,
             holdsText(columns.provider, "identity"),
-            holdsText(columns.provider, backslash),
-            holdsText(columns.providerIdentity, backslash),
-            holdsText(columns.sourceAliases, backslash),
+            ...[
+              columns.provider,
+              columns.providerIdentity,
+              columns.sourceAliases,
+            ].flatMap((column) =>
+              SPELLING_ESCAPES.map((escape) => holdsText(column, escape)),
+            ),
           )}))`;
         case "window":
           return sql`(${columns.sourceScope} = ${clause.sourceScope} and ${

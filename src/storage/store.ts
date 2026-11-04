@@ -1113,7 +1113,10 @@ function buildStore<Db>(
           return [
             ...chunks(
               clause.accounts,
-              Math.max(1, budget - clause.statuses.length - 4),
+              Math.max(
+                1,
+                budget - clauseParameters({ ...clause, accounts: [] }),
+              ),
             ),
           ].map((accounts) => ({ ...clause, accounts }));
         case "keys":

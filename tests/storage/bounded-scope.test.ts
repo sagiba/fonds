@@ -803,7 +803,7 @@ describe.each(backends)("%s bounded sync scope", (backend) => {
     });
   });
 
-  it("reads every old row whose alias text holds a backslash, named or not", async () => {
+  it("reads every old row whose alias text spells a solidus as an escape, named or not", async () => {
     await capture("escaped-alias-1", "2040-07-01T12:00:00Z", [
       row("named", { transactionDate: "2030-01-01", merchantName: "Named" }),
       row("unnamed", { transactionDate: "2030-01-02", merchantName: "Other" }),
@@ -826,9 +826,10 @@ describe.each(backends)("%s bounded sync scope", (backend) => {
     });
   });
 
-  it("reads only the rows near a one-row capture of a ledger whose every row carries an old key", async () => {
+  it("reads only the rows near a one-row capture of a ledger whose every row carries an old key embedding JSON", async () => {
     // Thirty posted rows, a week apart from 2039-01-01, then two in the
-    // capture's window; every one keeps the key it had before re-keying.
+    // capture's window; every one keeps the key it had before re-keying,
+    // which embeds JSON, so its alias text escapes quotes.
     const dates = [
       ...Array.from({ length: 30 }, (_, index) =>
         new Date(Date.UTC(2039, 0, 1) + index * 7 * 86_400_000)
@@ -846,9 +847,12 @@ describe.each(backends)("%s bounded sync scope", (backend) => {
       ),
     );
     await db.raw(
-      "UPDATE transactions SET source_aliases_json = '[\"old-' || source_key || '\"]' WHERE connection_id = ?",
+      `UPDATE transactions SET source_aliases_json = '["old:[\\"' || source_key || '\\"]"]' WHERE connection_id = ?`,
       [connectionId],
     );
+    expect(await db.getTransaction(await idOf("row-0"))).toMatchObject({
+      sourceAliases: ['old:["row-0"]'],
+    });
     const report = createSyncDiagnosticReport();
     await db.ingestRun(
       {
@@ -932,6 +936,83 @@ describe.each(backends)("%s bounded sync scope", (backend) => {
     expect(await db.getTransaction(await idOf("far"))).toMatchObject({
       lastSeenRunId: "many-1",
     });
+  });
+
+  /** A row whose provider declares `baseKey` as its identity base. */
+  const based = (key: string, baseKey: string, transactionDate: string) =>
+    row(key, {
+      transactionDate,
+      merchantName: `Shop ${key}`,
+      details: {
+        ...emptyDetails(),
+        provider: { cal: { identity: { baseKey } } },
+      },
+    });
+
+  it("decides on identity text whose keys embed JSON, reading only the base an observation declares", async () => {
+    const voucher = (number: string) =>
+      `isracard:posted:voucher:${JSON.stringify(["account", number])}`;
+    // Dated apart, beyond the padding around one another.
+    await capture(
+      "json-1",
+      "2040-07-01T12:00:00Z",
+      [
+        based("v-1", voucher("1"), "2030-01-01"),
+        based("v-2", voucher("2"), "2031-06-01"),
+        based("v-3", voucher("3"), "2032-06-01"),
+      ],
+      { adapter: declaring },
+    );
+    const first = await idOf("v-1");
+    const [stored] = await db.raw(
+      "SELECT provider_identity_json FROM transaction_reconciliation WHERE transaction_id = ?",
+      [first],
+    );
+    expect(stored!.provider_identity_json).toBe(
+      '{"cal":{"baseKey":"isracard:posted:voucher:[\\"account\\",\\"1\\"]"}}',
+    );
+    // A historical row with another key and the first row's base is that
+    // known identity, never a second transaction.
+    const result = await capture(
+      "json-2",
+      "2040-07-10T12:00:00Z",
+      [based("v-1-renamed", voucher("1"), "2040-07-09")],
+      { adapter: declaring, scope: { kind: "history" } },
+    );
+    expect(result.created).toBe(0);
+    expect(await rowCount()).toBe(3);
+    expect(loadedIds()).toEqual([first]);
+  });
+
+  it("reads every row whose identity text spells a character as an escape, matching or not", async () => {
+    await capture(
+      "unicode-1",
+      "2040-07-01T12:00:00Z",
+      [
+        row("accented", { transactionDate: "2030-01-01", merchantName: "A" }),
+        row("other", { transactionDate: "2031-06-01", merchantName: "B" }),
+      ],
+      { adapter: declaring },
+    );
+    const accented = await idOf("accented");
+    const other = await idOf("other");
+    // Another writer's spelling of "café" and of "été".
+    const writeIdentity = (id: string, text: string) =>
+      db.raw(
+        "UPDATE transaction_reconciliation SET provider_identity_json = ? WHERE transaction_id = ?",
+        [text, id],
+      );
+    await writeIdentity(accented, '{"cal":{"baseKey":"caf\\u00e9"}}');
+    await writeIdentity(other, '{"cal":{"baseKey":"\\u00e9t\\u00e9"}}');
+    const result = await capture(
+      "unicode-2",
+      "2040-07-10T12:00:00Z",
+      [based("cafe-renamed", "café", "2040-07-09")],
+      { adapter: declaring, scope: { kind: "history" } },
+    );
+    expect(result.created).toBe(0);
+    expect(await rowCount()).toBe(2);
+    expect(loadedIds().sort()).toEqual([accented, other].sort());
   });
 
   it("finds identities a substring search cannot see in their stored text", async () => {
