@@ -42,12 +42,13 @@
 
 [CONTRIBUTING.md](../CONTRIBUTING.md) covers the change workflow and [documentation discipline](../CONTRIBUTING.md#documentation-discipline). [SUPPORT.md](../SUPPORT.md), [SECURITY.md](../SECURITY.md) and the [code of conduct](../CODE_OF_CONDUCT.md) cover help, vulnerability reports and participation.
 
-| Internal reference                                  | Purpose                                                  |
-| --------------------------------------------------- | -------------------------------------------------------- |
-| [Repository layout](internals/repository-layout.md) | Module ownership, imports, style and generated artifacts |
-| [HTTP API internals](internals/http-api.md)         | Route table, request parsing and the API description     |
-| [Acceptance scenarios](internals/acceptance.md)     | Financial behaviors that must remain correct             |
-| [Authentication storage](internals/auth-storage.md) | Hosted identity and bridge table inventory and ownership |
-| [Storage tests](internals/storage-testing.md)       | Reproduce actual-driver verification                     |
-| [Experimental D1](internals/d1-storage.md)          | Maintained experimental adapter; not a deployed service  |
-| [Releasing](../RELEASING.md)                        | Cut, verify and recover a release                        |
+| Internal reference                                        | Purpose                                                  |
+| --------------------------------------------------------- | -------------------------------------------------------- |
+| [Repository layout](internals/repository-layout.md)       | Module ownership, imports, style and generated artifacts |
+| [Add a provider](../.claude/skills/add-provider/SKILL.md) | Capturing, analyzing and implementing a new provider     |
+| [HTTP API internals](internals/http-api.md)               | Route table, request parsing and the API description     |
+| [Acceptance scenarios](internals/acceptance.md)           | Financial behaviors that must remain correct             |
+| [Authentication storage](internals/auth-storage.md)       | Hosted identity and bridge table inventory and ownership |
+| [Storage tests](internals/storage-testing.md)             | Reproduce actual-driver verification                     |
+| [Experimental D1](internals/d1-storage.md)                | Maintained experimental adapter; not a deployed service  |
+| [Releasing](../RELEASING.md)                              | Cut, verify and recover a release                        |
