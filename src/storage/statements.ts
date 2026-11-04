@@ -358,6 +358,12 @@ export interface Statements<Db> {
     page: RefreshPageInput,
   ): PromiseLike<RefreshRow[]>;
   lastExecutedRefresh(db: Db, connectionId: string): PromiseLike<RefreshRow[]>;
+  /** The last `limit` executed refreshes a rate limit did not stop, newest first. */
+  loginStreakRefreshes(
+    db: Db,
+    connectionId: string,
+    limit: number,
+  ): PromiseLike<Pick<RefreshRow, "providerStopReason">[]>;
   activeRefresh(db: Db, connectionId: string): PromiseLike<RefreshRow[]>;
   activeRefreshes(db: Db): PromiseLike<RefreshRow[]>;
   occurrenceRefresh(

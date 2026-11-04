@@ -416,6 +416,7 @@ describe("Neon configuration", () => {
         "FONDS_CONNECTION_ID",
         "FONDS_CONNECTION_PROVIDER",
         "FONDS_GOOGLE_OWNER_EMAIL",
+        "FONDS_LOGIN_FAILURES_BEFORE_ATTENTION",
         "FONDS_NEON_GOOGLE_AUTH_URL",
         "FONDS_OWNER_ID",
         "FONDS_PUBLIC_API_DESCRIPTION",
@@ -587,6 +588,53 @@ describe("Neon configuration", () => {
         );
         expect(error?.message, JSON.stringify(invalid)).toBe(
           "FONDS_SYNC_SCOPE_DAYS must be a whole number of days from 1 to 3660",
+        );
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
+  it("always declares the login failures before attention, 2 unless set", async () => {
+    for (const name of [
+      "FONDS_PUBLIC_ORIGIN",
+      "FONDS_OWNER_ID",
+      "FONDS_AUTH_SECRET",
+      "FONDS_CONNECTION_ID",
+      "FONDS_CONNECTION_PROVIDER",
+      "FONDS_REFRESH_SECRET",
+      "FONDS_NEON_GOOGLE_AUTH_URL",
+      "FONDS_GOOGLE_OWNER_EMAIL",
+    ]) {
+      vi.stubEnv(name, `synthetic-${name}`);
+    }
+    vi.stubEnv("FONDS_CONNECTION_CREDENTIALS_FILE", undefined);
+    vi.stubEnv("FONDS_CREDENTIALS_KEY", undefined);
+    try {
+      // Neon keeps an omitted variable, so the default is declared.
+      for (const [value, declared] of [
+        [undefined, "2"],
+        ["1", "1"],
+        ["5", "5"],
+      ] as const) {
+        vi.stubEnv("FONDS_LOGIN_FAILURES_BEFORE_ATTENTION", value);
+        vi.resetModules();
+        const { default: config } = await import("../../../neon.js");
+        expect(
+          config.functions?.fonds?.env?.FONDS_LOGIN_FAILURES_BEFORE_ATTENTION,
+          String(value),
+        ).toBe(declared);
+      }
+      for (const invalid of ["", "0", "6", "02", "1.5"]) {
+        vi.stubEnv("FONDS_LOGIN_FAILURES_BEFORE_ATTENTION", invalid);
+        vi.resetModules();
+        const error = await import("../../../neon.js").then(
+          () => undefined,
+          (rejection: unknown) => rejection as Error,
+        );
+        expect(error?.message, JSON.stringify(invalid)).toBe(
+          "FONDS_LOGIN_FAILURES_BEFORE_ATTENTION must be a whole number from 1 to 5",
         );
       }
     } finally {

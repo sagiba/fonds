@@ -663,7 +663,7 @@ values. `summary` appears on `sync.baseline` events as `{transactionCount, histo
 | `transaction.review_required`, `transaction.review_resolved`       | Review state changed.                                                                                                               |
 | `annotation.updated`                                               | The owner changed an annotation, or undid a change.                                                                                 |
 | `refresh.failed`                                                   | A refresh finished `partial` or `failed`.                                                                                           |
-| `refresh.attention_required`                                       | Its connection began needing attention: scheduled refreshes wait for a completed retry.                                             |
+| `refresh.attention_required`                                       | Its connection began needing attention: scheduled refreshes retry daily until one completes.                                        |
 | `refresh.recovered`                                                | A retry completed, ending that wait.                                                                                                |
 
 Events are thin. They identify records to refetch in their current state, and carry
@@ -689,7 +689,7 @@ exclude SQL, credentials and financial data. Success never adds a `success` flag
 | 404         | `not_found`           | Missing record, connection or route. Optional capabilities may have no route.                         |
 | 409         | `conflict`            | Stale version, invalid lifecycle state or conflicting decision. Reread before retrying.               |
 | 409         | `refresh_in_progress` | A refresh of the connection is already pending or running; read it with `list_refreshes`.             |
-| 409         | `requires_attention`  | The provider needs the owner; ordinary refreshes wait for an operator retry.                          |
+| 409         | `requires_attention`  | The provider needs the owner; refreshes slow until a retry completes.                                 |
 | 413         | `too_large`           | HTTP request body over 64 KiB.                                                                        |
 | 413         | `output_too_large`    | The result exceeds an output bound or the 256 KiB response budget.                                    |
 | 500         | `internal_error`      | Unexpected operation or output validation failure.                                                    |

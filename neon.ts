@@ -11,6 +11,7 @@ import {
 
 import { defineConfig } from "@neon/config/v1";
 
+import { LOGIN_FAILURES_BEFORE_ATTENTION } from "./src/application/refreshes.js";
 import { parseCredentials } from "./src/domain/credentials.js";
 import { SYNC_SCOPE_DAYS } from "./src/domain/plans/sync-scope.js";
 import {
@@ -18,6 +19,10 @@ import {
   utcCron,
 } from "./src/runtime/collection-schedule.js";
 import { parseCredentialsKey } from "./src/runtime/credential-vault.js";
+import {
+  LOGIN_FAILURES_INVALID,
+  loginFailuresSchema,
+} from "./src/runtime/login-failures.js";
 import { runtimeProvider } from "./src/runtime/providers.js";
 import {
   SYNC_SCOPE_DAYS_INVALID,
@@ -94,6 +99,15 @@ if (!syncScopeDaysSchema.safeParse(syncScope).success) {
   throw new Error(SYNC_SCOPE_DAYS_INVALID);
 }
 env.FONDS_SYNC_SCOPE_DAYS = syncScope;
+
+// Always declared, likewise.
+const loginFailures =
+  process.env.FONDS_LOGIN_FAILURES_BEFORE_ATTENTION ??
+  String(LOGIN_FAILURES_BEFORE_ATTENTION);
+if (!loginFailuresSchema.safeParse(loginFailures).success) {
+  throw new Error(LOGIN_FAILURES_INVALID);
+}
+env.FONDS_LOGIN_FAILURES_BEFORE_ATTENTION = loginFailures;
 
 // Provider credentials are uploaded only when explicitly supplied. Neon merges
 // omitted Function variables, so ordinary deploys keep stored credentials.

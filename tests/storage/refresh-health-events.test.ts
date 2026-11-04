@@ -24,7 +24,7 @@ for (const backend of backends) {
     /** A running refresh whose one run failed with `code`. */
     async function failedRun(
       id: string,
-      code: "authentication_failed" | "network_error",
+      code: "authentication_failed" | "network_error" | "rate_limited",
     ) {
       await db.admitRefresh(
         {
@@ -60,13 +60,19 @@ for (const backend of backends) {
       );
     }
 
+    /** Finishes a refresh; one refused login blocks unless a policy says otherwise. */
     function finish(
       id: string,
       finishedAt: string,
       status: "failed" | "completed" = "failed",
+      loginFailuresBeforeAttention = 1,
     ) {
       return db.withCollectionLock(connectionId, (locked) =>
-        locked.updateRefresh(id, { status, finishedAt }),
+        locked.updateRefresh(
+          id,
+          { status, finishedAt },
+          { loginFailuresBeforeAttention },
+        ),
       );
     }
 
@@ -140,6 +146,42 @@ for (const backend of backends) {
       // A repeated terminal write finds the refresh already finished.
       await finish("blocked", "2040-01-01T10:02:00.000Z");
       expect(await healthEvents()).toHaveLength(2);
+    });
+
+    it("announces attention at the second refused login in a row, which a completion resets and a rate limit does not", async () => {
+      const finishAt = (id: string, hour: number, status?: "completed") =>
+        finish(
+          id,
+          `2040-01-01T${String(hour).padStart(2, "0")}:00:00.000Z`,
+          status,
+          2,
+        );
+      await failedRun("first", "authentication_failed");
+      await finishAt("first", 8);
+      await failedRun("completed", "network_error");
+      await finishAt("completed", 9, "completed");
+      await failedRun("after-completion", "authentication_failed");
+      await finishAt("after-completion", 10);
+      expect((await db.getRefresh("after-completion"))!.requiresAttention).toBe(
+        false,
+      );
+      await failedRun("limited", "rate_limited");
+      await finishAt("limited", 11);
+      await failedRun("second", "authentication_failed");
+      await finishAt("second", 12);
+      expect((await db.getRefresh("second"))!.requiresAttention).toBe(true);
+      expect(
+        (await healthEvents()).map((event) => [
+          event.type,
+          (event.after as { refreshId: string }).refreshId,
+        ]),
+      ).toEqual([
+        ["refresh.failed", "first"],
+        ["refresh.failed", "after-completion"],
+        ["refresh.failed", "limited"],
+        ["refresh.failed", "second"],
+        ["refresh.attention_required", "second"],
+      ]);
     });
 
     it("keeps the block through a retry short of completion and ends it when one completes", async () => {

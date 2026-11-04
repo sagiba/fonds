@@ -25,6 +25,7 @@ use the [image](docker.md#the-hosted-stack).
 | `FONDS_REFRESH_TIMEZONE`                                                           | The IANA time zone of the scheduled hours, such as `Asia/Jerusalem`; default `UTC`.                                                                                                                                                                                          |
 | `FONDS_REFRESH_TIME`                                                               | `HH:MM`; generated once per installation; see [scheduling](#scheduling).                                                                                                                                                                                                     |
 | `FONDS_SYNC_SCOPE_DAYS`                                                            | Days around a capture's requested dates that reconciliation reads ([scope](../design.md#collection-and-evidence)): `1`–`3660`, default `40`.                                                                                                                                 |
+| `FONDS_LOGIN_FAILURES_BEFORE_ATTENTION`                                            | Authentication stops in a row before [attention](#refresh-and-scheduling): `1`–`5`, default `2`; refused logins can lock the provider account.                                                                                                                               |
 | `FONDS_CONNECTION_ID`, `FONDS_CONNECTION_PROVIDER`, `FONDS_CONNECTION_CREDENTIALS` | Optional, all or none: one connection whose credentials come from the environment (Neon's configuration). Others use `connect`.                                                                                                                                              |
 | `FONDS_GOOGLE_CLIENT_ID`/`_SECRET`, `FONDS_GITHUB_CLIENT_ID`/`_SECRET`             | Optional owner-linked sign-in providers, each a complete pair.                                                                                                                                                                                                               |
 | `FONDS_PUBLIC_API_DESCRIPTION`                                                     | `1` serves the [API description](../api.md#operations) without authentication; `0` or unset does not. It holds no owner data.                                                                                                                                                |
@@ -150,11 +151,14 @@ continue an active refresh; a scheduler tick, trigger call, `resume_refresh` or
 schedule, only a resume continues it or records its expiry.
 
 A rate limit, or a login refused without a credential verdict, stops the
-refresh as `rate_limited`: scheduled refreshes skip as `cooldown` for six hours,
-the next retries, and a second such stop in a row needs attention, as an
-authentication failure or challenge does at once. Attention blocks scheduled
-refreshes until a retry completes; [events](../api.md#events) announce the
-block and its end. Owners may retry manually once an hour, or POST `{}` to
+refresh as `rate_limited`, an authentication failure or challenge as itself;
+scheduled refreshes skip as `cooldown` for six hours, then retry. A second
+`rate_limited` stop in a row, or `FONDS_LOGIN_FAILURES_BEFORE_ATTENTION`
+authentication stops in a row (rate limits aside), needs attention, which slows
+refreshing without stopping it: scheduled refreshes retry once a day until one
+completes; [events](../api.md#events) announce the block and its end. Each
+skipped scheduled connection logs `fonds_refresh` with `skipReason` and `retryAt`.
+Owners may retry manually once an hour, or POST `{}` to
 `/internal/refresh/recent` on the public origin with
 `Authorization: Bearer <FONDS_REFRESH_SECRET>`, or run
 `fonds refresh --connection …`. That route refreshes every target past the

@@ -108,6 +108,8 @@ export interface BackendSession {
   credentials: CredentialStore;
   eventSubscriptions: EventSubscriptionStore;
   credentialsKey: CredentialsKey;
+  /** The environment's refused logins before attention; the default when absent. */
+  loginFailuresBeforeAttention?: number;
   close(): Promise<void>;
 }
 
@@ -580,6 +582,7 @@ export const operatorCommands: readonly OperatorCommand[] = [
             range,
             ...(diagnostics && { log: diagnostics.log }),
             ...(debugArchiveDays !== undefined && { debugArchiveDays }),
+            loginFailuresBeforeAttention: session.loginFailuresBeforeAttention,
           });
           session.verify?.();
           return collectionSummary(results, discovery.failures);
@@ -657,6 +660,7 @@ export const operatorCommands: readonly OperatorCommand[] = [
               failures: 0,
             }),
             refreshId,
+            loginFailuresBeforeAttention: session.loginFailuresBeforeAttention,
           });
           session.verify?.();
           return resumed;

@@ -10,6 +10,8 @@ import {
   isNull,
   lt,
   max,
+  ne,
+  or,
   type SQL,
   sql,
 } from "drizzle-orm";
@@ -1055,6 +1057,26 @@ export const lastExecutedRefresh = (db: Executor, connectionId: string) =>
     .where(and(eq(refreshTable.connectionId, connectionId), executed))
     .orderBy(desc(refreshTable.finishedAt), desc(refreshTable.id))
     .limit(1);
+export const loginStreakRefreshes = (
+  db: Executor,
+  connectionId: string,
+  limit: number,
+) =>
+  db
+    .select({ providerStopReason: refreshTable.providerStopReason })
+    .from(refreshTable)
+    .where(
+      and(
+        eq(refreshTable.connectionId, connectionId),
+        executed,
+        or(
+          isNull(refreshTable.providerStopReason),
+          ne(refreshTable.providerStopReason, "rate_limited"),
+        ),
+      ),
+    )
+    .orderBy(desc(refreshTable.finishedAt), desc(refreshTable.id))
+    .limit(limit);
 export const activeRefresh = (db: Executor, connectionId: string) =>
   db
     .select()

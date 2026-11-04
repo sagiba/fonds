@@ -21,6 +21,7 @@ import {
   localStateDirectory,
   openSqliteSession,
 } from "./runtime/local-ledger.js";
+import { loginFailuresBeforeAttention } from "./runtime/login-failures.js";
 import { CommandInputError } from "./runtime/operation-cli.js";
 import { STATE_FILE, StateError } from "./runtime/state.js";
 import { syncScopeDays } from "./runtime/sync-scope.js";
@@ -188,6 +189,10 @@ export async function startServer(args: string[], seams: ServerSeams = {}) {
   }
   const session = await openSqliteSession(databasePath, installation, {
     syncScopeDays: syncScopeDays(
+      env,
+      (message) => new CommandInputError(message),
+    ),
+    loginFailuresBeforeAttention: loginFailuresBeforeAttention(
       env,
       (message) => new CommandInputError(message),
     ),

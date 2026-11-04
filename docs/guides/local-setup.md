@@ -230,9 +230,11 @@ The server offers [refreshes](../api.md#refreshes) on HTTP and stdio, and
 [hosted service](hosted-service.md#refresh-and-scheduling) does. Only
 connections with credentials `connect` stored refresh (read at each refresh, so
 `connect` needs no restart); others answer `not_found`. An authentication block
-clears only when an operator `refresh` succeeds. Refreshing calls the provider,
-so give the token, or a stdio host, only to a client you trust to do that;
-provider credentials and the token stay outside tool inputs and results.
+starts after `FONDS_LOGIN_FAILURES_BEFORE_ATTENTION` (default 2, at most 5)
+authentication stops in a row and ends when any retry completes; the schedule
+retries daily. Refreshing calls the provider, so give the token, or a stdio
+host, only to a client you trust to do that; provider credentials and the token
+stay outside tool inputs and results.
 
 Over HTTP the server also serves
 [MCP Events](hosted-service.md#mcp-events-and-webhook-delivery) webhooks; the
