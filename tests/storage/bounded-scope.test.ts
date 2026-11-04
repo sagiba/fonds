@@ -893,7 +893,7 @@ describe.each(backends)("%s bounded sync scope", (backend) => {
       ...["k-0", "k-1", "k-2"].map((key) =>
         row(key, { transactionDate: "2030-01-01", merchantName: "Old" }),
       ),
-      // Beyond the 40 days padded around the named rows' stored date.
+      // Beyond the candidate distance around the named rows' stored date.
       row("far", { transactionDate: "2031-06-01", merchantName: "Far" }),
     ]);
     // Each key is also its own identity base, and each names an alias:
@@ -1303,11 +1303,8 @@ describe.each(backends)("%s configured sync scope", (backend) => {
     expect(results[1]).toStrictEqual(results[0]);
   });
 
-  it("pads a named row's stored date by the configured days, not only the candidate distance", async () => {
-    for (const [days, read] of [
-      [undefined, true],
-      [1, false],
-    ] as const) {
+  it("pads a named row's stored date by the candidate distance, whatever the configured days", async () => {
+    for (const days of [undefined, 1]) {
       const db = await opened(days);
       await db.ingestRun(
         run("named-1", "2040-07-05T12:00:00Z", [
@@ -1319,26 +1316,27 @@ describe.each(backends)("%s configured sync scope", (backend) => {
         "SELECT id FROM cards WHERE connection_id = ?",
         [connectionId],
       );
-      // A posted neighbour 19 days later: beyond the candidate distance,
-      // within the default padding.
-      await insertTransactionFixture(db, [
-        storedRow(connectionId, "q", {
+      // Posted neighbours 6 and 19 days later: within and beyond the
+      // candidate distance, both within the default padding.
+      const neighbour = (id: string, transactionDate: string) =>
+        storedRow(connectionId, id, {
           cardId: card!.id as string,
           merchantName: "Merchant",
           amountMinor: -100,
-          transactionDate: "2040-03-20",
+          transactionDate,
           lastSeenRunId: "named-1",
           lastSeenAt: "2040-07-05T12:00:00.000Z",
-          details: { ...storedRow(connectionId, "q").details, provider: {} },
-        }),
+          details: { ...storedRow(connectionId, id).details, provider: {} },
+        });
+      await insertTransactionFixture(db, [
+        neighbour("q6", "2040-03-07"),
+        neighbour("q19", "2040-03-20"),
       ]);
       // Another origin's older capture names the authorization, which keeps
       // its stored date and is only marked seen.
       await db.ingestRun(
         {
-          ...run("named-2", "2040-07-03T12:00:00Z", [
-            authorization("p", { transactionDate: "2040-06-20" }),
-          ]),
+          ...run("named-2", "2040-07-03T12:00:00Z", []),
           responses: [
             {
               accountKey: "account",
@@ -1352,16 +1350,25 @@ describe.each(backends)("%s configured sync scope", (backend) => {
         },
         pendingOnly,
       );
+      const label = String(days);
       const ids = loadingComparisons.at(-1)!.narrowRows.map(({ id }) => id);
-      expect(ids.includes("q"), String(days)).toBe(read);
       const p = await idOf(db, "p");
-      expect(ids, String(days)).toContain(p);
-      // Nineteen days is no candidate distance, whatever was read.
+      expect(ids, label).toContain(p);
+      expect(ids, label).toContain("q6");
+      expect(ids, label).not.toContain("q19");
+      // The seen authorization is suggested with its six-day neighbour; the
+      // nineteen-day one can never be a candidate.
       const stored = (await db.getTransaction(p))!;
-      expect(stored.transactionDate, String(days)).toBe("2040-03-01");
-      expect(stored.details.pendingPostingCandidates, String(days)).toBe(
-        undefined,
-      );
+      expect(stored.transactionDate, label).toBe("2040-03-01");
+      expect(stored.details.pendingPostingCandidates, label).toEqual(["q6"]);
+      expect(
+        (await db.getTransaction("q6"))!.details.pendingPostingCandidates,
+        label,
+      ).toEqual([p]);
+      expect(
+        (await db.getTransaction("q19"))!.details.pendingPostingCandidates,
+        label,
+      ).toBe(undefined);
     }
   });
 
