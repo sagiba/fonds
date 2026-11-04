@@ -522,8 +522,8 @@ async function commitInOrder<
 /** Installation settings every store of a database shares. */
 export interface StoreOptions {
   /**
-   * Days around each capture's requested dates and observations that its
-   * application reads: a whole number from 1 to 3660, by default 40.
+   * Days around each capture's requested dates that its application reads:
+   * a whole number from 1 to 3660, by default 40.
    */
   syncScopeDays?: number;
 }
@@ -1167,7 +1167,7 @@ function buildStore<Db>(
    * - supersession, both ways, and purchase families: the purchase of every
    *   billed line and every line of every purchase;
    * - stored pending-to-posted candidate lists, both ways;
-   * - the observation radius around every named row, and the exact-date
+   * - the candidate distance around every named row, and the exact-date
    *   group of every row a decision can move between groups (pending and
    *   covered rows, named rows and rows whose identity is in doubt);
    * - then supersession, purchase families and candidates again.
@@ -1315,7 +1315,6 @@ function buildStore<Db>(
               accounts.has(row.sourceScope) && (doubt || named(row)),
           )
           .map(({ row }) => row),
-        scope.radius,
       ).filter(
         (window) =>
           !scope.windows.some(

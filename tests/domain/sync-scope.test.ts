@@ -75,6 +75,29 @@ const transactionWindows = (scope: ReturnType<typeof syncScope>) =>
     .map(({ from, to }) => ({ from, to }));
 
 describe("sync scope windows", () => {
+  it("pads the requested dates by the configured days and an observation by the candidate distance", () => {
+    const scope = syncScope(
+      extraction({ kind: "recent" }, [observed("2040-03-10")]),
+      adapter,
+      40,
+    );
+    // Captured 2040-07-01: 40 days either side. The row observed on
+    // 2040-03-10 brings only the seven days either side of its date.
+    expect(scope.requestScope).toEqual({
+      from: "2040-05-22",
+      to: "2040-08-10",
+    });
+    expect(transactionWindows(scope)).toEqual([
+      { from: "2040-03-03", to: "2040-03-17" },
+      { from: "2040-05-22", to: "2040-08-10" },
+    ]);
+    expect(
+      scope.windows
+        .filter((window) => window.field === "billing")
+        .map(({ from, to }) => ({ from, to })),
+    ).toEqual([{ from: "2040-05-22", to: "2040-08-10" }]);
+  });
+
   it("keeps windows near the first calendar day within year 0001", () => {
     const scope = syncScope(
       extraction({ kind: "history", month: "0001-01" }, [
@@ -93,15 +116,12 @@ describe("sync scope windows", () => {
       { from: "0001-01-01", to: "0001-03-12" },
     ]);
     expect(
-      namedWindows(
-        [
-          {
-            sourceScope: "account",
-            transactionDate: "0001-01-03",
-          } as NarrowRow,
-        ],
-        7,
-      ),
+      namedWindows([
+        {
+          sourceScope: "account",
+          transactionDate: "0001-01-03",
+        } as NarrowRow,
+      ]),
     ).toEqual([
       {
         sourceScope: "account",
@@ -114,25 +134,23 @@ describe("sync scope windows", () => {
 
   it("keeps windows near the last calendar day within year 9999", () => {
     const scope = syncScope(
-      extraction({ kind: "history" }, [observed("9999-12-20")]),
+      extraction({ kind: "history" }, [observed("9999-12-28")]),
       adapter,
       40,
     );
+    // An observation is padded by the candidate distance, clamped at the
+    // last calendar day.
     expect(scope.requestScope).toBeUndefined();
-    expect(scope.radius).toBe(40);
     expect(transactionWindows(scope)).toEqual([
-      { from: "9999-11-10", to: "9999-12-31" },
+      { from: "9999-12-21", to: "9999-12-31" },
     ]);
     expect(
-      namedWindows(
-        [
-          {
-            sourceScope: "account",
-            transactionDate: "9999-12-28",
-          } as NarrowRow,
-        ],
-        7,
-      ),
+      namedWindows([
+        {
+          sourceScope: "account",
+          transactionDate: "9999-12-28",
+        } as NarrowRow,
+      ]),
     ).toEqual([
       {
         sourceScope: "account",

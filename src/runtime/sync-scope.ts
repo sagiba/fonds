@@ -7,7 +7,7 @@ import {
 
 /**
  * `FONDS_SYNC_SCOPE_DAYS`: the days around each capture's requested dates
- * and observations that applying it reads, a whole number from 1 to 3660.
+ * that applying it reads, a whole number from 1 to 3660.
  */
 export const syncScopeDaysSchema = z
   .string()
