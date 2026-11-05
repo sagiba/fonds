@@ -303,7 +303,7 @@ money unknown.
   conservative gates. Merchant IDs are optional because pending rows lack them;
   timestamps, wallet descriptions, billing dates, posted-only IDs and the
   first-payment equality are not gates. The equalities are observations, not
-  issuer invariants.
+  issuer invariants; only type 8 vetoes exact matches.
 - **Checks:** [posting evidence tests]; [auto posting].
 
 [auto posting]: ../../../tests/storage/auto-posting.test.ts

@@ -993,6 +993,7 @@ describe("CAL automatic posting capability", () => {
     expect(calAdapter.automaticPosting).toEqual({
       compatibleGroups: expect.any(Function),
       exactNameHeuristic: true,
+      exactNameContradiction: expect.any(Function),
       pendingAmountBasis: "authorization",
       postedAmountBasis: "purchase_commitment",
     });

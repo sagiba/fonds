@@ -5,7 +5,10 @@ import {
   retainCalEvidence,
 } from "./evidence.js";
 import { extractCal } from "./extract.js";
-import { compatibleCalPostingGroups } from "./posting-evidence.js";
+import {
+  calInstallmentSource,
+  compatibleCalPostingGroups,
+} from "./posting-evidence.js";
 import { normalizeCalScope, validateCalScope } from "./scope.js";
 
 // Hypothesis-based margin inside the asserted 90 days; governing dates are unvalidated.
@@ -23,6 +26,7 @@ export const calAdapter: SourceAdapter = {
   pendingPostingCandidates: true,
   automaticPosting: {
     exactNameHeuristic: true,
+    exactNameContradiction: calInstallmentSource,
     compatibleGroups: compatibleCalPostingGroups,
     pendingAmountBasis: "authorization",
     postedAmountBasis: "purchase_commitment",
