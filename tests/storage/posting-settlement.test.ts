@@ -60,41 +60,33 @@ const unknown = (fields: Partial<TransactionInput> = {}) => {
 };
 
 describe("settled merchant comparison", () => {
-  it("keeps every substantive name token and punctuation by default", () => {
-    expect(
-      settledMerchantMatch(
-        "  Synthetic   River Store ",
-        "SYNTHETIC RIVER STORE",
-      ),
-    ).toBe(true);
-    for (const [left, right] of [
-      ["ABC & Sons", "ABC Sons"],
-      ["Shop+Go", "Shop Go"],
-      ["example.com/uk", "example.com/us"],
-      ["PAYPAL EX River Ltd EX", "PAYPAL EX River Ltd"],
-      ["River Shop", "Shop River"],
-      ["---", "---"],
-    ]) {
-      expect(settledMerchantMatch(left!, right!)).toBe(false);
-    }
+  it.each([
+    ["case and spacing", "  Synthetic   River Store ", "SYNTHETIC RIVER STORE"],
+    ["a location suffix", "EXAMPLE RIDE PASS LISBON PRT", "Example Ride Pass"],
+    ["one short token", "RIVERPAY >lisbon PRT", "RIVERPAY"],
+    [
+      "a repeated terminal token",
+      "PAYMENT EX RIVER LTD EX",
+      "PAYMENT EX RIVER LTD",
+    ],
+    [
+      "a name cut at the source length",
+      "EXAMPLE MARKETPLACE FOR TI",
+      "EXAMPLE MARKETPLACE FOR TICKETS",
+    ],
+  ])("accepts %s", (_label, left, right) => {
+    expect(settledMerchantMatch(left, right)).toBe(true);
+    expect(settledMerchantMatch(right, left)).toBe(true);
   });
-  it("requires explicit opt-in for one repeated terminal token and retains other distinctions", () => {
-    expect(
-      settledMerchantMatch(
-        "PAYPAL EX River Ltd EX",
-        "PAYPAL EX River Ltd",
-        true,
-      ),
-    ).toBe(true);
-    for (const [left, right] of [
-      ["PAYPAL EX River Ltd UK", "PAYPAL EX River Ltd"],
-      ["EX River EX", "EX River"],
-      ["PAYPAL EX River Ltd EX EX", "PAYPAL EX River Ltd"],
-      ["PAYPAL EX River Ltd", "PAYPAL EX River Co"],
-      ["PAYPAL EX River Ltd", "PAYPAL River EX Ltd"],
-    ]) {
-      expect(settledMerchantMatch(left!, right!, true)).toBe(false);
-    }
+  it.each([
+    ["different words", "River Shop", "Shop River"],
+    ["a prefix inside a word", "RIVERSIDE CAFE", "RIVER"],
+    ["a short cut name", "EXAMPLE MARK", "EXAMPLE MARKET"],
+    ["too little to identify", "AB CAFE", "AB"],
+    ["punctuation only", "---", "---"],
+    ["an unknown name", null, "Example"],
+  ])("rejects %s", (_label, left, right) => {
+    expect(settledMerchantMatch(left, right)).toBe(false);
   });
 });
 
@@ -188,7 +180,7 @@ describe.each(backends)("%s settled identity heuristic", (backend) => {
     const witness = (await clock(pending.id))!;
     expect(witness).toMatchObject({
       capturedAt: "2040-07-04T12:00:00.000Z",
-      settlement: { comparison: "merchant-presentation-v1" },
+      settlement: { comparison: "merchant-variant-v1" },
     });
     await h.capture(5, [unknown()], settled, {
       runId: "before-24-hours",
@@ -225,7 +217,7 @@ describe.each(backends)("%s settled identity heuristic", (backend) => {
       policyVersion: "settled-similarity-v1",
       settlement: {
         startedAt: "2040-07-04T12:00:00.000Z",
-        comparison: "merchant-presentation-v1",
+        comparison: "merchant-variant-v1",
         observedLedgerOnly: true,
       },
     });
@@ -346,6 +338,37 @@ describe.each(backends)("%s settled identity heuristic", (backend) => {
       await noLink(pending.id);
     },
   );
+  it.each([
+    ["a location suffix", { merchantName: "Merchant LISBON PRT" }, {}],
+    ["a posting dated a day later", {}, { transactionDate: "2040-07-02" }],
+    ["a posting dated a day earlier", { transactionDate: "2040-07-02" }, {}],
+  ] satisfies [string, Partial<TransactionInput>, Partial<TransactionInput>][])(
+    "links despite %s",
+    async (_label, pendingFields, postedFields) => {
+      await h.capture(2, [authorization("pending", pendingFields)], settled);
+      const pending = await h.byKey("pending");
+      await h.capture(3, [unknown(postedFields)], settled);
+      await noLink(pending.id);
+      await h.capture(4, [unknown(postedFields)], settled);
+      expect((await h.byKey("posted")).id).toBe(pending.id);
+    },
+  );
+  it("does not link across two days", async () => {
+    await h.capture(2, [authorization()], settled);
+    const pending = await h.byKey("pending");
+    const later = { transactionDate: "2040-07-03" };
+    await h.capture(3, [unknown(later)], settled);
+    await h.capture(5, [unknown(later)], settled);
+    await noLink(pending.id);
+  });
+  it("leaves a repeat purchase the same day unpaired", async () => {
+    await h.capture(2, [authorization()], settled);
+    const pending = await h.byKey("pending");
+    const twins = [unknown(), unknown({ sourceKey: "repeat" })];
+    await h.capture(3, twins, settled);
+    await h.capture(5, twins, settled);
+    await noLink(pending.id);
+  });
   it("is not blocked by an unrelated foreign purchase nearby", async () => {
     const { pending } = await start();
     await h.capture(

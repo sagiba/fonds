@@ -190,7 +190,8 @@ reviewable; no conversion or guessed rates are used.
 A deployment can enable settlement ([`FONDS_SETTLED_POSTING`](guides/hosted-service.md#configuration),
 off by default). A unique pair whose posting arrived after its authorization links
 on a fresh capture 24 hours after arrival and accepted absence, preserving unknown
-facts. Every check repeats then from retained rows, so failed or partial captures
+facts. Dates may differ by a day, and a name may be a whole-word prefix of the other
+or cut at the length sources truncate it. Every check repeats then from retained rows, so failed or partial captures
 only delay it. Competitors, corrections, reappearance or posted annotations veto
 it, and purchases past 40 days are left to owner repair. An unseen purchase can
 still be misattributed. An inferred link whose authorization returns stays linked

@@ -4,10 +4,7 @@ import { SETTLED_POSTING_MODES } from "../domain/plans/posting-settlement.js";
 import type { StoreOptions } from "../storage/store.js";
 import { runtimeProvider, supportedProviders } from "./providers.js";
 
-/**
- * `FONDS_SETTLED_POSTING`: `off`, `on`, or `terminal-token`, which also lets a
- * posted name match after dropping one repeated terminal token.
- */
+/** `FONDS_SETTLED_POSTING`: `off` or `on`. */
 export const settledPostingSchema = z.enum(SETTLED_POSTING_MODES);
 
 /** Names the variable, never its value. */

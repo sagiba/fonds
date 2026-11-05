@@ -2,6 +2,7 @@ import type { JsonObject, TransactionFacts } from "../../domain/model.js";
 import { decimalToMinor } from "../../domain/money.js";
 import { currentSourceRows } from "../../domain/provider-evidence.js";
 import { isracardEvidenceGeneration } from "./evidence.js";
+import { legacyCurrency } from "./extract.js";
 
 function object(value: unknown): value is JsonObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -254,45 +255,39 @@ export function compatibleIsracardSettledPair(
     !object(observations[0]) ||
     observations[0].generation !== "legacy" ||
     typeof observations[0].path !== "string" ||
-    !observations[0].path.includes(".txnIsrael[")
+    !/\.txn(?:Israel|Abroad)\[/u.test(observations[0].path)
   ) {
     return false;
   }
   const row = rows[0];
+  // Legacy keeps a domestic row's facts in plain fields and an abroad-section
+  // row's in `Outbound` fields, even when that row is stated in local currency.
+  const abroad = observations[0].path.includes(".txnAbroad[");
+  const payment = abroad ? row.paymentSumOutbound : row.paymentSum;
+  const deal = abroad ? row.dealSumOutbound : row.dealSum;
+  const name = abroad ? row.fullSupplierNameOutbound : row.fullSupplierNameHeb;
   const empty = (value: unknown) =>
     value === undefined || value === null || value === "";
+  const local = (value: unknown) => legacyCurrency(value) === "ILS";
   if (
-    typeof row.voucherNumberRatz !== "string" ||
-    !row.voucherNumberRatz.trim() ||
-    row.currencyId !== "ILS" ||
-    row.currentPaymentCurrency !== "ILS" ||
-    ![
-      row.moreInfo,
-      row.dealSumType,
-      row.paymentSumOutbound,
-      row.dealSumOutbound,
-      row.fullPurchaseDateOutbound,
-    ].every(empty) ||
-    !(empty(row.kodMatbeaMekori) || row.kodMatbeaMekori === "ILS") ||
+    !local(row.currencyId) ||
+    !(empty(row.currentPaymentCurrency) || local(row.currentPaymentCurrency)) ||
+    !(empty(row.kodMatbeaMekori) || local(row.kodMatbeaMekori)) ||
+    !empty(row.moreInfo) ||
+    !empty(row.dealSumType) ||
     !(empty(row.paymentSumSign) || row.paymentSumSign === "+") ||
-    merchant(row.fullSupplierNameHeb) !== merchant(posted.merchantName)
+    (!abroad && !empty(row.paymentSumOutbound)) ||
+    (!abroad && !empty(row.dealSumOutbound)) ||
+    merchant(name) !== merchant(posted.merchantName)
   ) {
-    return false;
-  }
-  const date =
-    typeof row.fullPurchaseDate === "string"
-      ? row.fullPurchaseDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/u)
-      : null;
-  if (!date || posted.transactionDate !== `${date[3]}-${date[2]}-${date[1]}`) {
     return false;
   }
   try {
     return (
-      typeof row.paymentSum === "string" &&
-      typeof row.dealSum === "string" &&
-      -decimalToMinor(row.paymentSum, "ILS") === posted.amountMinor &&
-      decimalToMinor(row.paymentSum, "ILS") ===
-        decimalToMinor(row.dealSum, "ILS")
+      typeof payment === "string" &&
+      typeof deal === "string" &&
+      -decimalToMinor(payment, "ILS") === posted.amountMinor &&
+      decimalToMinor(payment, "ILS") === decimalToMinor(deal, "ILS")
     );
   } catch {
     return false;

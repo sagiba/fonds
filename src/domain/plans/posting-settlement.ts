@@ -19,12 +19,13 @@ export const SETTLEMENT_HORIZON_DAYS = 40;
 export const SETTLEMENT_MAX_ROWS = 2000;
 export const SETTLEMENT_EVIDENCE_BYTES = 65536;
 
-export const SETTLED_POSTING_MODES = ["off", "on", "terminal-token"] as const;
+/** Length at which an observed source cut a merchant name mid-word. */
+const CUT_NAME_LENGTH = 25;
+const SETTLEMENT_COMPARISON = "merchant-variant-v1";
+
+export const SETTLED_POSTING_MODES = ["off", "on"] as const;
 
 export type SettledPostingMode = (typeof SETTLED_POSTING_MODES)[number];
-
-export type SettlementComparison =
-  "merchant-presentation-v1" | "repeated-terminal-token-v1";
 
 export type SettlementContender = Pick<
   Transaction,
@@ -43,7 +44,6 @@ export type SettlementContender = Pick<
 
 /** Present only when the deployment enabled the policy and the capture was scanned. */
 export interface SettlementSnapshot {
-  comparison: SettlementComparison;
   accounts: ReadonlyMap<string, readonly SettlementContender[]>;
 }
 
@@ -56,11 +56,14 @@ export const settlementScanStart = (capturedAt: string) =>
 
 type Policy = NonNullable<AutomaticPostingCapability["settledHeuristic"]>;
 
-/** A heuristic comparison, never evidence of issuer identity or financial role. */
+/**
+ * A heuristic comparison, never evidence of issuer identity or financial role.
+ * Sources append a location to one presentation or cut the other short, so a
+ * name may be a whole-word prefix of the other, or a prefix at the cut length.
+ */
 export function settledMerchantMatch(
   left: string | null,
   right: string | null,
-  repeatedTerminalToken = false,
 ): boolean {
   const normalize = (name: string | null) =>
     name
@@ -70,30 +73,21 @@ export function settledMerchantMatch(
       .toUpperCase();
   const a = normalize(left);
   const b = normalize(right);
-  if (!a || !b || !/[\p{L}\p{N}]/u.test(a) || !/[\p{L}\p{N}]/u.test(b)) {
+  if (!a || !b) {
     return false;
   }
-  if (a === b) {
-    return true;
-  }
-  if (!repeatedTerminalToken) {
+  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+  if ((shorter.match(/[\p{L}\p{N}]/gu) ?? []).length < 3) {
     return false;
   }
-  // An explicit risk policy, not a claim that a suffix is redundant.
-  const shortened = (name: string) => {
-    const tokens = name.split(" ");
-    const last = tokens.pop()!;
-    return tokens.length >= 4 &&
-      new Set(tokens).size >= 4 &&
-      /^[\p{L}\p{N}]{2,4}$/u.test(last) &&
-      tokens.includes(last)
-      ? tokens.join(" ")
-      : undefined;
-  };
-  return shortened(a) === b || shortened(b) === a;
+  return (
+    shorter === longer ||
+    longer.startsWith(`${shorter} `) ||
+    (shorter.length >= CUT_NAME_LENGTH && longer.startsWith(shorter))
+  );
 }
 
-function eligible(row: LedgerRow): boolean {
+export function settlementEligible(row: LedgerRow): boolean {
   return (
     row.identityStrength === "native" &&
     !retiredFromMatching(row) &&
@@ -207,18 +201,14 @@ export function postingSettlementPairs(
   const merchant = (name: string | null) =>
     policy.merchantName ? policy.merchantName(name) : name;
   const sameMerchant = (left: string | null, right: string | null) =>
-    settledMerchantMatch(
-      merchant(left),
-      merchant(right),
-      snapshot.comparison === "repeated-terminal-token-v1",
-    );
+    settledMerchantMatch(merchant(left), merchant(right));
+  // Names are rechecked on every run: enrichment may legitimately re-present one.
   const fingerprint = (row: LedgerRow) =>
     canonicalJson([
       row.cardId,
       row.transactionDate,
       row.amountMinor,
       row.currency,
-      merchant(row.merchantName),
     ]);
   const horizon = daysBefore(capturedAt, SETTLEMENT_HORIZON_DAYS);
   const postedRows = rows.filter(
@@ -247,7 +237,11 @@ export function postingSettlementPairs(
       (posted) =>
         pending.cardId !== null &&
         pending.cardId === posted.cardId &&
-        pending.transactionDate === posted.transactionDate &&
+        posted.transactionDate !== null &&
+        Math.abs(
+          Date.parse(pending.transactionDate!) -
+            Date.parse(posted.transactionDate),
+        ) <= DAY &&
         pending.amountMinor !== null &&
         pending.amountMinor === posted.amountMinor &&
         pending.currency !== null &&
@@ -259,8 +253,8 @@ export function postingSettlementPairs(
     const posted = candidates.length === 1 ? candidates[0] : undefined;
     const usable =
       posted !== undefined &&
-      eligible(pending) &&
-      eligible(posted) &&
+      settlementEligible(pending) &&
+      settlementEligible(posted) &&
       pending.amountBasis === "authorization" &&
       (posted.amountBasis === "unknown" ||
         posted.amountBasis === "purchase_commitment") &&
@@ -313,7 +307,7 @@ export function postingSettlementPairs(
             postedFingerprint: fingerprint(posted),
             settlement: {
               policyVersion: SETTLED_POSTING_POLICY,
-              comparison: snapshot.comparison,
+              comparison: SETTLEMENT_COMPARISON,
               ...(held ? { arrival: held } : {}),
             },
           },

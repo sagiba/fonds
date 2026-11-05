@@ -201,10 +201,7 @@ const postingMatchSchema = z
     settlement: z
       .object({
         startedAt: textSchema,
-        comparison: z.enum([
-          "merchant-presentation-v1",
-          "repeated-terminal-token-v1",
-        ]),
+        comparison: z.literal("merchant-variant-v1"),
         observedLedgerOnly: z.literal(true),
       })
       .strict()

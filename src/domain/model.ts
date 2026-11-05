@@ -462,10 +462,7 @@ const postingOverlapSchema = postingWitnessSchema.extend({
   settlement: z
     .object({
       policyVersion: z.literal("settled-similarity-v1"),
-      comparison: z.enum([
-        "merchant-presentation-v1",
-        "repeated-terminal-token-v1",
-      ]),
+      comparison: z.literal("merchant-variant-v1"),
       invalidatedAt: z.string().optional(),
       arrival: postingWitnessSchema.optional(),
     })

@@ -1,6 +1,5 @@
 import type { JsonObject, TransactionFacts } from "../../domain/model.js";
 import { canonicalJson } from "../../domain/observations.js";
-import { exactMerchantPostingGroups } from "../../domain/plans/auto-posting.js";
 import { currentSourceRows } from "../../domain/provider-evidence.js";
 
 /** Opaque CAL discriminators; null is missing evidence, never false or zero. */
@@ -156,7 +155,10 @@ function installmentSource(row: Pick<TransactionFacts, "details">): boolean {
   );
 }
 
-/** Facts both rows state differently; absent metadata is not a contradiction. */
+/**
+ * A contradiction only where both rows state it. `abroad` is excluded: observed
+ * pairs for one purchase state it differently, so it says nothing about identity.
+ */
 export function calExactContradiction(
   pending: Pick<TransactionFacts, "details">,
   posted: Pick<TransactionFacts, "details">,
@@ -165,22 +167,15 @@ export function calExactContradiction(
     return true;
   }
   // Decoded alone: another missing field must not hide a stated difference.
-  const stated = (
-    row: Pick<TransactionFacts, "details">,
-    read: (raw: JsonObject) => unknown,
-  ) =>
+  const merchantIds = (row: Pick<TransactionFacts, "details">) =>
     currentSourceRows(row.details.provider.cal ?? {}).flatMap((raw) => {
-      const value = object(raw) ? read(raw) : undefined;
+      const value = object(raw)
+        ? aliases(raw, ["merchantId"], identifier)
+        : undefined;
       return value === null || value === undefined ? [] : [value];
     });
-  return [
-    (raw: JsonObject) =>
-      aliases(raw, ["isAbroadApproval", "isAbroadTransaction"], boolean),
-    (raw: JsonObject) => aliases(raw, ["merchantId"], identifier),
-  ].some((read) =>
-    stated(pending, read).some((left) =>
-      stated(posted, read).some((right) => left !== right),
-    ),
+  return merchantIds(pending).some((left) =>
+    merchantIds(posted).some((right) => left !== right),
   );
 }
 
@@ -257,8 +252,22 @@ export function compatibleCalPostingGroups(
   );
 }
 
+/** Name variants are settlement's to judge; this keeps roles and stated facts. */
+function compatibleCalSettledPair(
+  pending: TransactionFacts,
+  posted: TransactionFacts,
+): boolean {
+  return (
+    (pending.kind === "unknown" || pending.kind === "purchase") &&
+    posted.kind === "purchase" &&
+    [pending, posted].every((row) =>
+      row.details.issues.every(
+        (issue) => issue === "possible_pending_posted_match",
+      ),
+    ) &&
+    !calExactContradiction(pending, posted)
+  );
+}
+
 /** Applies only where the deployment enables settled posting. */
-export const calSettlementPolicy = {
-  compatiblePair: (pending: TransactionFacts, posted: TransactionFacts) =>
-    exactMerchantPostingGroups([pending], [posted], calExactContradiction),
-};
+export const calSettlementPolicy = { compatiblePair: compatibleCalSettledPair };

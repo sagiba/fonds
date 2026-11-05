@@ -290,6 +290,22 @@ describe.each(backends)("%s continuation notifications", (backend) => {
       transactionId: other.id,
     });
   });
+  it("qualifies a posting dated a day from an authorization already seen", async () => {
+    await h.capture(1, []);
+    await h.capture(2, [authorization()]);
+    await h.capture(3, [
+      authorization(),
+      row("other", {
+        merchantName: "Another presentation",
+        transactionDate: "2040-07-02",
+      }),
+    ]);
+    const other = await h.byKey("other");
+    expect((await discoveries()).at(-1)).toMatchObject({
+      type: "transaction.posting_candidate",
+      transactionId: other.id,
+    });
+  });
   it("does not qualify a posting against a pending row first seen with it", async () => {
     await h.capture(1, []);
     await h.capture(2, [authorization(), row("posted")]);

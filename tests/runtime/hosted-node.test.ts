@@ -195,7 +195,6 @@ describe("trusted client address", () => {
     expect(parse()).toBeUndefined();
     expect(parse("off")).toBe("off");
     expect(parse("on")).toBe("on");
-    expect(parse("terminal-token")).toBe("terminal-token");
     expect(() => parse("always")).toThrow(/FONDS_SETTLED_POSTING/);
   });
 

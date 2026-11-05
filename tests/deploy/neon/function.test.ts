@@ -595,7 +595,7 @@ describe("Neon configuration", () => {
       vi.stubEnv("FONDS_SETTLED_POSTING", "always");
       vi.resetModules();
       await expect(import("../../../neon.js")).rejects.toThrow(
-        "FONDS_SETTLED_POSTING must be one of off, on, terminal-token",
+        "FONDS_SETTLED_POSTING must be one of off, on",
       );
       vi.stubEnv("FONDS_SETTLED_POSTING", undefined);
       for (const invalid of ["", "0", "3661", "040", "7.5"]) {
