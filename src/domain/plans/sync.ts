@@ -67,11 +67,17 @@ import {
   UNVERIFIED_LEGACY_IDENTITY,
 } from "./legacy-identity.js";
 import {
+  LINKED_AUTHORIZATION_RETURNED,
+  OWNER_EXACT_REPAIR_POLICY,
   planPosting,
   postingRejected,
   refreshDuplicatePlans,
 } from "./lifecycle.js";
 import { postingOverlapPairs } from "./posting-overlap.js";
+import {
+  postingSettlementPairs,
+  SETTLED_POSTING_POLICY,
+} from "./posting-settlement.js";
 import {
   acceptCollectionHealth,
   partitionKey,
@@ -500,7 +506,10 @@ function retainEvidence(
     ];
   }
   const persistentIssues = earlier.issues.filter(
-    (issue) => issue === "ambiguous_identity" || issue === POSTING_MATCH_ISSUE,
+    (issue) =>
+      issue === "ambiguous_identity" ||
+      issue === POSTING_MATCH_ISSUE ||
+      issue === LINKED_AUTHORIZATION_RETURNED,
   );
   input.details.issues = [
     ...new Set([...input.details.issues, ...persistentIssues]),
@@ -1365,6 +1374,7 @@ function reconcileLinkedComponents({
       continue;
     }
     let pending = structuredClone(link.pending);
+    let returned = false;
     const authorizations = inputs.filter(
       (input) =>
         input.status === "pending" &&
@@ -1447,6 +1457,7 @@ function reconcileLinkedComponents({
           lastSeenAt: response.capturedAt,
           lastSeenRunId: runId,
         };
+        returned = !sourceAbsence && inferredLink(link);
       }
     } else if (pending.presence !== "removed" && absence.covers(pending)) {
       pending.presence = "not_returned";
@@ -1468,9 +1479,58 @@ function reconcileLinkedComponents({
               ),
             }
           : {}),
+        ...(returned
+          ? {
+              issues: [
+                ...new Set([
+                  ...row.details.issues,
+                  LINKED_AUTHORIZATION_RETURNED,
+                ]),
+              ],
+            }
+          : {}),
         postingLink: { ...link, pending },
       },
     });
+  }
+}
+
+/** Every link not confirmed by the owner rests on an inference a return can contradict. */
+function inferredLink(link: NonNullable<TransactionDetails["postingLink"]>) {
+  return link.automatic || link.policyVersion === OWNER_EXACT_REPAIR_POLICY;
+}
+
+/**
+ * A discovery that may continue an authorization already observed is announced
+ * as what it is. The row and its event remain: nothing here decides identity.
+ */
+function qualifyContinuationDiscoveries(
+  plan: FinancialPlan,
+  accountKey: string,
+  runId: string,
+) {
+  for (const entry of plan.events) {
+    if (
+      entry.type !== "transaction.created" ||
+      entry.runId !== runId ||
+      !entry.transactionId
+    ) {
+      continue;
+    }
+    const row = plan.transaction(entry.transactionId);
+    if (
+      row?.sourceScope === accountKey &&
+      row.status === "posted" &&
+      row.details.pendingPostingCandidates?.some((id) => {
+        const candidate = plan.transaction(id);
+        return (
+          candidate?.status === "pending" &&
+          candidate.firstSeenAt < row.firstSeenAt
+        );
+      })
+    ) {
+      entry.type = "transaction.posting_candidate";
+    }
   }
 }
 
@@ -2710,6 +2770,56 @@ export function planRun(
         updated++;
       }
     }
+    if (
+      adapter.automaticPosting?.settledHeuristic &&
+      !result.historical &&
+      !baselineAccounts.has(response.accountKey) &&
+      result.partitions.every((part) => part.success) &&
+      freshPostingCapture(adapter, result, response, history)
+    ) {
+      const pairs = postingSettlementPairs({
+        plan,
+        before: current,
+        accountKey: response.accountKey,
+        policy: adapter.automaticPosting.settledHeuristic,
+        runId,
+        capturedAt: response.capturedAt,
+        absent: (row) =>
+          !seenIds.has(row.id) &&
+          absence.covers(row) &&
+          !history.historical(row) &&
+          row.lastSeenAt < response.capturedAt,
+      });
+      for (const [posted, pending] of pairs) {
+        planPosting(
+          plan,
+          {
+            pendingId: pending.id,
+            postedId: posted.id,
+            expectedPendingVersion: pending.version,
+            expectedPostedVersion: posted.version,
+            expectedPendingAnnotationVersion:
+              plan.annotation(pending.id)?.version ?? 0,
+            expectedPostedAnnotationVersion:
+              plan.annotation(posted.id)?.version ?? 0,
+            actor: "system",
+            reason:
+              "Heuristic identity link after 24-hour recheck; no competitor in observed ledger, not verified issuer identity",
+          },
+          now,
+          {
+            policyVersion: SETTLED_POSTING_POLICY,
+            runId,
+            capturedAt: response.capturedAt,
+            overlap: pending.details.postingOverlap!,
+          },
+        );
+        purchases.add(plan.transaction(pending.id)!);
+        markSeen(pending.id);
+        markSeen(posted.id);
+        updated++;
+      }
+    }
     reconcileLinkedComponents({
       plan,
       adapter,
@@ -2769,6 +2879,7 @@ export function planRun(
       adapter.automaticPosting !== undefined,
       recentCutoff,
     );
+    qualifyContinuationDiscoveries(plan, response.accountKey, runId);
   }
   // Accepted rows of a failed partition still change lines, so every parent is reevaluated.
   refreshInstallmentParents(plan);

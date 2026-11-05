@@ -22,6 +22,7 @@ import {
 } from "../domain/model.js";
 import { minorToDecimal } from "../domain/money.js";
 import { canonicalJson } from "../domain/observations.js";
+import { HEURISTIC_POSTING_POLICIES } from "../domain/plans/lifecycle.js";
 import type {
   totalsFromParts,
   TransactionListView,
@@ -196,6 +197,18 @@ const postingMatchSchema = z
     supersededTransactionId: idSchema,
     automatic: z.boolean(),
     policyVersion: textSchema,
+    heuristic: z.literal(true).optional(),
+    settlement: z
+      .object({
+        startedAt: textSchema,
+        comparison: z.enum([
+          "merchant-presentation-v1",
+          "repeated-terminal-token-v1",
+        ]),
+        observedLedgerOnly: z.literal(true),
+      })
+      .strict()
+      .optional(),
     evidence: z
       .object({ runId: idSchema, capturedAt: textSchema })
       .strict()
@@ -407,6 +420,18 @@ export function presentWireTransaction(
           supersededTransactionId: link.postedId,
           automatic: link.automatic,
           policyVersion: link.policyVersion,
+          ...(HEURISTIC_POSTING_POLICIES.includes(link.policyVersion)
+            ? { heuristic: true as const }
+            : {}),
+          ...(link.evidence?.overlap?.settlement
+            ? {
+                settlement: {
+                  startedAt: link.evidence.overlap.capturedAt,
+                  comparison: link.evidence.overlap.settlement.comparison,
+                  observedLedgerOnly: true as const,
+                },
+              }
+            : {}),
           evidence: link.evidence
             ? {
                 runId: link.evidence.runId,

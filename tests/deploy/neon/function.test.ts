@@ -422,6 +422,7 @@ describe("Neon configuration", () => {
         "FONDS_PUBLIC_API_DESCRIPTION",
         "FONDS_PUBLIC_ORIGIN",
         "FONDS_REFRESH_SECRET",
+        "FONDS_SETTLED_POSTING",
         "FONDS_SYNC_SCOPE_DAYS",
       ]);
     } finally {
@@ -579,6 +580,24 @@ describe("Neon configuration", () => {
           String(value),
         ).toBe(declared);
       }
+      vi.stubEnv("FONDS_SYNC_SCOPE_DAYS", undefined);
+      for (const [value, declared] of [
+        [undefined, "off"],
+        ["on", "on"],
+      ] as const) {
+        vi.stubEnv("FONDS_SETTLED_POSTING", value);
+        vi.resetModules();
+        const { default: config } = await import("../../../neon.js");
+        expect(config.functions?.fonds?.env?.FONDS_SETTLED_POSTING).toBe(
+          declared,
+        );
+      }
+      vi.stubEnv("FONDS_SETTLED_POSTING", "always");
+      vi.resetModules();
+      await expect(import("../../../neon.js")).rejects.toThrow(
+        "FONDS_SETTLED_POSTING must be one of off, on, terminal-token",
+      );
+      vi.stubEnv("FONDS_SETTLED_POSTING", undefined);
       for (const invalid of ["", "0", "3661", "040", "7.5"]) {
         vi.stubEnv("FONDS_SYNC_SCOPE_DAYS", invalid);
         vi.resetModules();

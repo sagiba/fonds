@@ -8,6 +8,10 @@ import {
 } from "../domain/model.js";
 import type { editSchema } from "../domain/plans/annotation.js";
 import type {
+  ExactPostingRepair,
+  RepairPair,
+} from "../domain/plans/exact-posting-repair.js";
+import type {
   postingSchema,
   PostingSplit,
   removalSchema,
@@ -230,6 +234,9 @@ export interface FinancialStore {
   ): Promise<Refresh[]>;
   editAnnotation(input: z.input<typeof editSchema>): Promise<Annotation>;
   undoAnnotation(input: UndoAnnotationInput): Promise<Annotation>;
+  repairExactPostings(
+    input: ExactPostingRepair,
+  ): Promise<{ pairs: RepairPair[]; mode: "preview" | "apply" }>;
   linkPendingTransaction(
     input: z.input<typeof postingSchema>,
   ): Promise<Transaction>;

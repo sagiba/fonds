@@ -1,4 +1,8 @@
-import { isBilledLine, type TransactionFacts } from "../model.js";
+import {
+  isBilledLine,
+  type TransactionDetails,
+  type TransactionFacts,
+} from "../model.js";
 import { canonicalJson } from "../observations.js";
 import type { Transaction } from "../records.js";
 import type { AutomaticPostingCapability } from "../source-adapter.js";
@@ -23,6 +27,26 @@ function fingerprint(
     postingMoney(row),
     row.merchantName,
   ]);
+}
+
+type Witness = NonNullable<TransactionDetails["postingOverlap"]>;
+
+function withWitness(
+  details: TransactionDetails,
+  witness: Witness | undefined,
+): TransactionDetails {
+  const { postingOverlap: held, ...rest } = details;
+  if (held?.settlement) {
+    const { arrival: _replaced, ...settlement } = held.settlement;
+    return {
+      ...rest,
+      postingOverlap: {
+        ...held,
+        settlement: { ...settlement, ...(witness ? { arrival: witness } : {}) },
+      },
+    };
+  }
+  return witness ? { ...rest, postingOverlap: witness } : rest;
 }
 
 interface OverlapOptions {
@@ -108,7 +132,9 @@ export function postingOverlapPairs({
   for (const pending of rows.filter((row) => row.status === "pending")) {
     const posted = singleton.get(pending.id);
     const previous = old.get(pending.id);
-    let witness = pending.details.postingOverlap;
+    // A settlement clock may hold an overlap witness; it never replaces one.
+    const held = pending.details.postingOverlap;
+    let witness = held?.settlement ? held.settlement.arrival : held;
     const usable =
       posted !== undefined &&
       [pending, posted].every(
@@ -136,9 +162,9 @@ export function postingOverlapPairs({
         witness.postedFingerprint !== fingerprint(posted!) ||
         (previous?.presence === "not_returned" && observed(pending)))
     ) {
-      const { postingOverlap: _discarded, ...details } =
-        plan.full(pending).details;
-      plan.updateTransaction(pending.id, { details });
+      plan.updateTransaction(pending.id, {
+        details: withWitness(plan.full(pending).details, undefined),
+      });
       witness = undefined;
     }
     if (!usable) {
@@ -168,7 +194,7 @@ export function postingOverlapPairs({
         postedFingerprint: fingerprint(posted!),
       };
       plan.updateTransaction(pending.id, {
-        details: { ...plan.full(pending).details, postingOverlap: witness },
+        details: withWitness(plan.full(pending).details, witness),
       });
     }
     if (
@@ -193,7 +219,10 @@ export function postingOverlapPairs({
       capability,
     );
     if (decision.pairs.has(completePosted)) {
-      pairs.set(completePosted, completePending);
+      pairs.set(completePosted, {
+        ...completePending,
+        details: { ...completePending.details, postingOverlap: witness },
+      });
     }
   }
   return pairs;

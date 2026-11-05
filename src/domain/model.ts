@@ -448,7 +448,7 @@ const splitReceiptSchema = z
   })
   .strict();
 
-const postingOverlapSchema = z
+const postingWitnessSchema = z
   .object({
     postedId: z.string().min(1),
     runId: z.string().min(1).max(RESOURCE_ID_MAX_LENGTH),
@@ -457,6 +457,21 @@ const postingOverlapSchema = z
     postedFingerprint: z.string().min(1),
   })
   .strict();
+const postingOverlapSchema = postingWitnessSchema.extend({
+  /** Marks this document as a settlement clock; `arrival` keeps an overlap witness. */
+  settlement: z
+    .object({
+      policyVersion: z.literal("settled-similarity-v1"),
+      comparison: z.enum([
+        "merchant-presentation-v1",
+        "repeated-terminal-token-v1",
+      ]),
+      invalidatedAt: z.string().optional(),
+      arrival: postingWitnessSchema.optional(),
+    })
+    .strict()
+    .optional(),
+});
 
 const postingLinkSchema = z
   .object({

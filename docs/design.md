@@ -178,14 +178,24 @@ without views.
 
 Automatic matching is reversible and provider-opted-in. A disappearing authorization
 can retain its ID when a compatible new posting arrives in a fresh comparable
-capture. A unique witness can preserve that opportunity until later evidence is
+capture. A unique witness preserves that opportunity until evidence is
 usable. Changed facts, competitors or owner decisions invalidate witnesses.
 
 A unique first arrival can also link by exact merchant, date, card and signed
-purchase money, verified bases and compatible roles, when provider metadata differs. This heuristic does not prove
-identity: a canceled authorization and another identical purchase can be
-misattributed. Existing unwitnessed pairs remain reviewable. Ambiguous groups
-remain reviewable; no conversion or guessed rates are used.
+purchase money when provider metadata differs, never against a stated
+contradiction. This heuristic does not prove identity: a canceled authorization
+and another identical purchase can be misattributed. Ambiguous groups stay
+reviewable; no conversion or guessed rates are used.
+
+A deployment can enable settlement ([`FONDS_SETTLED_POSTING`](guides/hosted-service.md#configuration),
+off by default). A unique pair whose posting arrived after its authorization links
+on a fresh capture 24 hours after arrival and accepted absence, preserving unknown
+facts. Every check repeats then from retained rows, so failed or partial captures
+only delay it. Competitors, corrections, reappearance or posted annotations veto
+it, and purchases past 40 days are left to owner repair. An unseen purchase can
+still be misattributed. An inferred link whose authorization returns stays linked
+and asks for review.
+
 Same-capture twins may pair in fixed arbitrary order only when owner annotations
 are equivalent. Absence changes
 presence, never history or annotations. Linked authorizations accept corrections
@@ -197,8 +207,8 @@ Owner decisions carry the current transaction and annotation versions and a
 reason ([API](api.md#pending-to-posted-matching)):
 
 - **Link** keeps the pending ID. Conflicting nonempty annotations block it; equal
-  ones survive, or the posted one moves to an empty survivor. Automatic links leave
-  annotations unchanged, so dependent approvals can become stale.
+  ones survive, or the posted one moves to an empty survivor. Automatic links and
+  owner-run repair leave annotations unchanged, so dependent approvals can become stale.
 - **Unlink** restores both rows on their own IDs with their annotations, and the
   pair is never suggested or matched automatically again. Unchanged retries are
   quiet.

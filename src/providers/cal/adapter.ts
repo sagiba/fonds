@@ -6,7 +6,8 @@ import {
 } from "./evidence.js";
 import { extractCal } from "./extract.js";
 import {
-  calInstallmentSource,
+  calExactContradiction,
+  calSettlementPolicy,
   compatibleCalPostingGroups,
 } from "./posting-evidence.js";
 import { normalizeCalScope, validateCalScope } from "./scope.js";
@@ -26,7 +27,8 @@ export const calAdapter: SourceAdapter = {
   pendingPostingCandidates: true,
   automaticPosting: {
     exactNameHeuristic: true,
-    exactNameContradiction: calInstallmentSource,
+    exactNameContradiction: calExactContradiction,
+    settledHeuristic: calSettlementPolicy,
     compatibleGroups: compatibleCalPostingGroups,
     pendingAmountBasis: "authorization",
     postedAmountBasis: "purchase_commitment",

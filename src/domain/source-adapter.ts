@@ -52,10 +52,24 @@ export interface AutomaticPostingCapability {
   /** Opt in to the unique exact-merchant first-arrival heuristic. */
   exactNameHeuristic?: boolean;
   /**
+   * Delayed heuristic identity linkage for a deployment that enables it. Facts
+   * stay as the source stated them; `merchantName` only normalizes presentation.
+   */
+  settledHeuristic?: {
+    merchantName?(name: string | null): string | null;
+    compatiblePair(
+      pending: TransactionFacts,
+      posted: TransactionFacts,
+    ): boolean;
+  };
+  /**
    * Source roles the exact heuristic must not override. Missing metadata may
    * relax `compatibleGroups`; a stated contradiction never does.
    */
-  exactNameContradiction?(row: TransactionFacts): boolean;
+  exactNameContradiction?(
+    pending: TransactionFacts,
+    posted: TransactionFacts,
+  ): boolean;
   /**
    * Pure source interpretation for a whole plausible component, applied before
    * the exact heuristic. Reject unknown

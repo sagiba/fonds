@@ -209,7 +209,7 @@ export function exactMerchantPostingGroups(
   }
   const left = pending[0]!;
   const right = posted[0]!;
-  if (contradiction?.(left) || contradiction?.(right)) {
+  if (contradiction?.(left, right)) {
     return false;
   }
   const normalized = (name: string | null) =>

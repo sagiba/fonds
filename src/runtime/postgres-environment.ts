@@ -28,6 +28,7 @@ import {
 import { loginFailuresBeforeAttention } from "./login-failures.js";
 import { CommandInputError } from "./operation-cli.js";
 import type { BackendSession } from "./operator-cli.js";
+import { postingOptions } from "./settled-posting.js";
 import { STATE_SECRETS, StateError } from "./state.js";
 import { syncScopeDays } from "./sync-scope.js";
 
@@ -204,6 +205,7 @@ export async function openPostgresSession(
         env,
         (message) => new CommandInputError(message),
       ),
+      ...postingOptions(env, (message) => new CommandInputError(message)),
     },
   );
   try {

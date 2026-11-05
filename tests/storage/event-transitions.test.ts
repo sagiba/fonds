@@ -141,6 +141,21 @@ describe("ledger event transitions", () => {
       await typesOf(() => harness.capture(9, [corrected, posted])),
     ).toEqual(["sync.recovered"]);
 
+    // A discovery beside an authorization already seen is qualified, not new spending.
+    const seen = authorization("seen", {
+      merchantName: "Twin",
+      amountMinor: -400,
+    });
+    const beside = row("beside", { merchantName: "Twin", amountMinor: -400 });
+    expect(
+      await typesOf(() => harness.capture(10, [corrected, posted, seen])),
+    ).toEqual(["transaction.created"]);
+    const qualified = await typesOf(() =>
+      harness.capture(11, [corrected, posted, seen, beside]),
+    );
+    expect(qualified).toContain("transaction.posting_candidate");
+    expect(qualified).not.toContain("transaction.created");
+
     // Refresh health: an attention block starts with a failure, then lifts.
     async function finishRefresh(
       id: string,

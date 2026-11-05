@@ -838,6 +838,7 @@ function diagnosticLine(
     ...(entry.reason ? [words(entry.reason)] : []),
     ...(entry.failureCategory ? [words(entry.failureCategory)] : []),
     ...(entry.requiresAttention ? ["needs attention"] : []),
+    ...(entry.settlement ? [`settlement=${entry.settlement}`] : []),
     ...counts,
     ...(entry.durationMs !== undefined ? [`${entry.durationMs}ms`] : []),
   ].join(" ");

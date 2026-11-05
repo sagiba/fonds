@@ -773,3 +773,59 @@ export function backfillOutcomeRank(
       and ${refresh.status} in ('pending', 'running') then 2
     else 1 end`;
 }
+
+type RepairColumns = Record<string, AnyColumn>;
+
+type Dialect = "sqlite" | "postgres";
+
+/** Bound each returned value in the database, before a driver decodes it. */
+export function repairColumns<T extends RepairColumns>(
+  columns: T,
+  dialect: Dialect,
+  limit: number,
+) {
+  return Object.fromEntries(
+    Object.entries(columns).map(([name, column]) => [
+      name,
+      sql`case when ${repairLength(column, dialect)} <= ${sql.raw(String(limit))} then ${column} else null end`.mapWith(
+        column,
+      ),
+    ]),
+  ) as unknown as T;
+}
+
+function repairLength(column: AnyColumn, dialect: Dialect) {
+  return dialect === "sqlite"
+    ? sql`coalesce(length(cast(${column} as blob)), 0)`
+    : sql`coalesce(octet_length(cast(${column} as text)), 0)`;
+}
+
+export interface RepairBound {
+  columns: RepairColumns;
+  limit: number;
+}
+
+/** Flag any replaced value so callers abort rather than using a truncated projection. */
+export function repairOversized(groups: RepairBound[], dialect: Dialect) {
+  const tests = groups.flatMap(({ columns, limit }) =>
+    Object.values(columns).map(
+      (column) =>
+        sql`${repairLength(column, dialect)} > ${sql.raw(String(limit))}`,
+    ),
+  );
+  return sql<number>`case when ${sql.join(tests, sql` or `)} then 1 else 0 end`.mapWith(
+    Number,
+  );
+}
+
+/** Sum column byte lengths in SQL; no provider JSON leaves the database for this gate. */
+export function settlementHydrationSafe(
+  columns: AnyColumn[],
+  dialect: Dialect,
+  limit: number,
+) {
+  return sql<number>`case when ${sql.join(
+    columns.map((column) => repairLength(column, dialect)),
+    sql` + `,
+  )} <= ${sql.raw(String(limit))} then 1 else 0 end`.mapWith(Number);
+}

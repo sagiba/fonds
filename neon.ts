@@ -25,6 +25,10 @@ import {
 } from "./src/runtime/login-failures.js";
 import { runtimeProvider } from "./src/runtime/providers.js";
 import {
+  SETTLED_POSTING_INVALID,
+  settledPostingSchema,
+} from "./src/runtime/settled-posting.js";
+import {
   SYNC_SCOPE_DAYS_INVALID,
   syncScopeDaysSchema,
 } from "./src/runtime/sync-scope.js";
@@ -99,6 +103,13 @@ if (!syncScopeDaysSchema.safeParse(syncScope).success) {
   throw new Error(SYNC_SCOPE_DAYS_INVALID);
 }
 env.FONDS_SYNC_SCOPE_DAYS = syncScope;
+
+// Always declared, likewise: a removed setting must return to its default.
+const settledPosting = process.env.FONDS_SETTLED_POSTING ?? "off";
+if (!settledPostingSchema.safeParse(settledPosting).success) {
+  throw new Error(SETTLED_POSTING_INVALID);
+}
+env.FONDS_SETTLED_POSTING = settledPosting;
 
 // Always declared, likewise.
 const loginFailures =
