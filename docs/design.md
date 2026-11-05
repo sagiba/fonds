@@ -186,7 +186,8 @@ purchase money, verified bases and compatible roles, when provider metadata diff
 identity: a canceled authorization and another identical purchase can be
 misattributed. Existing unwitnessed pairs remain reviewable. Ambiguous groups
 remain reviewable; no conversion or guessed rates are used.
-Same-capture twins may pair in fixed arbitrary order where allowed. Absence changes
+Same-capture twins may pair in fixed arbitrary order only when owner annotations
+are equivalent. Absence changes
 presence, never history or annotations. Linked authorizations accept corrections
 without changing posted money or link history; splitting restores both components.
 A link commits `transaction.posted` and `transaction.linked`; a witness alone

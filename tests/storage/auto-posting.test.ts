@@ -308,39 +308,226 @@ describe.each(backends)("%s automatic posting and split", (backend) => {
     ).toHaveLength(1);
   });
 
-  it("pairs two annotated twins deterministically across source permutations and replay", async () => {
+  type AnnotationPatch = Omit<
+    Parameters<Harness["editAnnotation"]>[0],
+    "transactionId" | "expectedVersion"
+  >;
+
+  const differingAnnotations: [
+    string,
+    AnnotationPatch,
+    AnnotationPatch | undefined,
+  ][] = [
+    ["notes", { notes: "Synthetic first" }, { notes: "Synthetic second" }],
+    ["categories", { category: "First" }, { category: "Second" }],
+    ["tags", { tags: ["first"] }, { tags: ["second"] }],
+    [
+      "metadata",
+      { metadata: { label: "first" } },
+      { metadata: { label: "second" } },
+    ],
+    [
+      "review",
+      { review: { status: "approved" } },
+      { review: { status: "needs_review" } },
+    ],
+    ["one annotation and none", { notes: "Synthetic first" }, undefined],
+  ];
+
+  it.each(differingAnnotations)(
+    "leaves twins with different %s in review without losing annotations",
+    async (_field, first, second) => {
+      await harness.capture(2, [authorization("p-b"), authorization("p-a")]);
+      const pending = await Promise.all(
+        ["p-a", "p-b"].map((key) => harness.byKey(key)),
+      );
+      for (const [index, patch] of [first, second].entries()) {
+        if (!patch) {
+          continue;
+        }
+        await db.editAnnotation({
+          transactionId: pending[index]!.id,
+          expectedVersion: 0,
+          expectedTransactionVersion: pending[index]!.version,
+          ...patch,
+        });
+      }
+      const annotations = await Promise.all(
+        pending.map(
+          async (item) => (await db.getTransaction(item.id))!.annotation,
+        ),
+      );
+      const cursor = await db.latestEventId();
+      await harness.capture(3, [row("s-b"), row("s-a")]);
+      const posted = await Promise.all(
+        ["s-a", "s-b"].map((key) => harness.byKey(key)),
+      );
+      for (const [index, item] of pending.entries()) {
+        const current = (await db.getTransaction(item.id))!;
+        expect(current).toMatchObject({
+          status: "pending",
+          presence: "not_returned",
+          annotation: annotations[index],
+        });
+        expect(new Set(current.pendingPostingCandidates)).toEqual(
+          new Set(posted.map((row) => row.id)),
+        );
+      }
+      for (const item of posted) {
+        expect(item).toMatchObject({ status: "posted", supersededById: null });
+        expect(new Set(item.pendingPostingCandidates)).toEqual(
+          new Set(pending.map((row) => row.id)),
+        );
+      }
+      const events = await db.listEvents({ after: cursor });
+      expect(
+        events.filter((event) =>
+          ["transaction.posted", "transaction.linked"].includes(event.type),
+        ),
+      ).toEqual([]);
+      const state = await harness.state();
+      expect(await harness.capture(3, [row("s-b"), row("s-a")])).toMatchObject({
+        replayed: true,
+      });
+      expect(await harness.state()).toEqual(state);
+      await harness.capture(4, [row("s-a"), row("s-b")]);
+      expect(
+        (await db.listEvents({ after: cursor })).filter((event) =>
+          ["transaction.posted", "transaction.linked"].includes(event.type),
+        ),
+      ).toEqual([]);
+      for (const [index, item] of pending.entries()) {
+        expect((await db.getTransaction(item.id))!.annotation).toEqual(
+          annotations[index],
+        );
+      }
+    },
+  );
+
+  it.each([
+    "none",
+    "empty and none",
+    "identical notes",
+    "canonical tags and metadata",
+    "identical review",
+    "identical review at different financial versions",
+  ])("still pairs twins when annotations are equivalent: %s", async (kind) => {
     await harness.capture(2, [authorization("p-b"), authorization("p-a")]);
+    if (kind.endsWith("versions")) {
+      await harness.capture(
+        2,
+        [
+          authorization("p-b"),
+          authorization("p-a", { description: "Synthetic correction" }),
+        ],
+        undefined,
+        { runId: "posting-2-correction", hour: "13" },
+      );
+    }
     const pending = await Promise.all(
       ["p-a", "p-b"].map((key) => harness.byKey(key)),
     );
-    for (const row of pending) {
+    if (kind === "empty and none") {
       await db.editAnnotation({
-        transactionId: row.id,
+        transactionId: pending[0]!.id,
         expectedVersion: 0,
-        notes: row.sourceKey,
+        notes: null,
       });
+    } else if (kind !== "none") {
+      for (const [index, item] of pending.entries()) {
+        const patch: AnnotationPatch =
+          kind === "identical notes"
+            ? { notes: "Synthetic shared" }
+            : kind.startsWith("identical review")
+              ? { review: { status: "approved" } }
+              : {
+                  tags: index ? ["b", "a"] : ["a", "b"],
+                  metadata: index ? { b: 2, a: 1 } : { a: 1, b: 2 },
+                };
+        await db.editAnnotation({
+          transactionId: item.id,
+          expectedVersion: 0,
+          expectedTransactionVersion: item.version,
+          ...patch,
+        });
+      }
     }
+    const annotations = await Promise.all(
+      pending.map(
+        async (item) => (await db.getTransaction(item.id))!.annotation,
+      ),
+    );
     await harness.capture(3, [row("s-b"), row("s-a")]);
     for (const [index, key] of ["s-a", "s-b"].entries()) {
       expect(await harness.byKey(key)).toMatchObject({
         id: pending[index]!.id,
-        annotation: { data: { notes: pending[index]!.sourceKey } },
+        annotation: annotations[index],
       });
     }
-    const changes = await db.listEvents();
-    await harness.capture(4, [row("s-a"), row("s-b")]);
-    expect(await db.listEvents()).toEqual(changes);
-    expect(await db.listTransactions()).toHaveLength(2);
-    expect(await db.listTransactions({ includeSuperseded: true })).toHaveLength(
-      4,
-    );
-    expect(await db.getTotals()).toMatchObject({
-      includedCount: 2,
-      totals: [{ amountMinor: -200 }],
-    });
+    expect(
+      (await db.listEvents()).filter(
+        (event) => event.type === "transaction.posted",
+      ),
+    ).toHaveLength(2);
+    const events = await db.listEvents();
     expect(await harness.capture(3, [row("s-b"), row("s-a")])).toMatchObject({
       replayed: true,
     });
+    expect(await db.listEvents()).toEqual(events);
+    expect(
+      await db.listTransactions({ connectionId: harness.connectionId }),
+    ).toHaveLength(2);
+    expect(
+      await db.listTransactions({
+        connectionId: harness.connectionId,
+        includeSuperseded: true,
+      }),
+    ).toHaveLength(4);
+  });
+
+  it("rolls back a differentiated twin review if audit persistence fails", async () => {
+    await harness.capture(2, [authorization("p-a"), authorization("p-b")]);
+    const first = await harness.byKey("p-a");
+    const second = await harness.byKey("p-b");
+    await db.editAnnotation({
+      transactionId: first.id,
+      expectedVersion: 0,
+      notes: "Synthetic A",
+    });
+    await db.editAnnotation({
+      transactionId: second.id,
+      expectedVersion: 0,
+      notes: "Synthetic B",
+    });
+    const before = await harness.state();
+    if (backend === "postgres") {
+      await db.raw(
+        "CREATE FUNCTION reject_twin_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.type = 'transaction.unlisted' THEN RAISE EXCEPTION 'synthetic audit failure'; END IF; RETURN NEW; END $$",
+      );
+      await db.raw(
+        "CREATE TRIGGER reject_twin_audit BEFORE INSERT ON events FOR EACH ROW EXECUTE FUNCTION reject_twin_audit()",
+      );
+    } else {
+      await db.raw(
+        "CREATE TRIGGER reject_twin_audit BEFORE INSERT ON events WHEN NEW.type = 'transaction.unlisted' BEGIN SELECT RAISE(ABORT, 'synthetic audit failure'); END",
+      );
+    }
+    await expect(
+      harness.capture(3, [row("s-a"), row("s-b")]),
+    ).rejects.toThrow();
+    expect(await harness.state()).toEqual(before);
+    await db.raw(
+      backend === "postgres"
+        ? "DROP TRIGGER reject_twin_audit ON events"
+        : "DROP TRIGGER reject_twin_audit",
+    );
+    await db.applyRun("posting-3", postingAdapter);
+    expect(
+      (await db.listEvents()).filter(
+        (event) => event.type === "transaction.posted",
+      ),
+    ).toEqual([]);
+    expect(await db.listTransactions()).toHaveLength(4);
   });
 
   it.each([
@@ -791,6 +978,93 @@ describe.each(backends)("%s automatic posting and split", (backend) => {
     ).toEqual([]);
     expect(await db.listTransactions()).toHaveLength(2);
   });
+
+  it.each([false, true])(
+    "honors annotation distinctions through actual CAL extraction: different %s",
+    async (different) => {
+      const first = JSON.parse(fixture("recent-01"));
+      const second = JSON.parse(fixture("recent-02"));
+      const authorization = first.result.clearanceRequests.find(
+        (source: Record<string, unknown>) =>
+          source.transactionID === "SYNTHETIC-AUTH-PENDING-POSTED",
+      );
+      const posted = second.result.transactions.find(
+        (source: Record<string, unknown>) =>
+          source.trnIntId === "SYNTHETIC-TXN-PENDING-POSTED",
+      );
+      Object.assign(posted, {
+        trnPurchaseDate: authorization.trnPurchaseDate,
+        transCardPresentInd: authorization.transCardPresentInd,
+        amountForDisplay: authorization.trnAmt,
+        trnAmt: authorization.trnAmt,
+        transactionTypeCode: 5,
+        numOfPayments: 0,
+        curPaymentNum: 0,
+      });
+      first.result.transactions = [];
+      first.result.clearanceRequests = ["A", "B"].map((suffix) => ({
+        ...structuredClone(authorization),
+        transactionID: `SYNTHETIC-TWIN-AUTH-${suffix}`,
+      }));
+      second.result.transactions = ["A", "B"].map((suffix, index) => ({
+        ...structuredClone(posted),
+        trnIntId: `SYNTHETIC-TWIN-POSTED-${suffix}`,
+        trnNumaretor: 91001 + index,
+      }));
+      second.result.clearanceRequests = [];
+      const capture = async (runId: string, day: number, envelope: unknown) =>
+        db.ingestRun(
+          {
+            connectionId: harness.connectionId,
+            runId,
+            responses: [
+              {
+                accountKey: "account",
+                endpoint: "synthetic:cal/recent",
+                capturedAt: `2040-08-0${day}T12:00:00Z`,
+                responseText: JSON.stringify(envelope),
+              },
+            ],
+          },
+          calAdapter,
+        );
+      await capture("synthetic-cal-twins-first", 1, first);
+      const pending = (await db.listTransactions()).filter(
+        (item) => item.status === "pending",
+      );
+      expect(pending).toHaveLength(2);
+      for (const [index, item] of pending.entries()) {
+        await db.editAnnotation({
+          transactionId: item.id,
+          expectedVersion: 0,
+          notes: different && index ? "Synthetic B" : "Synthetic A",
+        });
+      }
+      const before = await Promise.all(
+        pending.map(
+          async (item) => (await db.getTransaction(item.id))!.annotation,
+        ),
+      );
+      await capture("synthetic-cal-twins-second", 2, second);
+      for (const [index, item] of pending.entries()) {
+        expect((await db.getTransaction(item.id))!.annotation).toEqual(
+          before[index],
+        );
+      }
+      const events = (await db.listEvents()).filter(
+        (event) => event.type === "transaction.posted",
+      );
+      expect(events).toHaveLength(different ? 0 : 2);
+      expect(await db.listTransactions()).toHaveLength(different ? 4 : 2);
+      if (different) {
+        for (const item of pending) {
+          expect(
+            (await db.getTransaction(item.id))!.pendingPostingCandidates,
+          ).toHaveLength(2);
+        }
+      }
+    },
+  );
 
   it.each([0, 1])(
     "keeps ordinary CAL ordinal %i conservative when its source installment count is zero",

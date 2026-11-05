@@ -1,7 +1,13 @@
-import { isBilledLine, type TransactionFacts } from "../model.js";
+import {
+  type AnnotationData,
+  isBilledLine,
+  type TransactionFacts,
+} from "../model.js";
 import { canonicalJson, compareStrings } from "../observations.js";
 import type { Transaction } from "../records.js";
 import type { AutomaticPostingCapability } from "../source-adapter.js";
+import { canonicalAnnotation } from "./annotation.js";
+import { meaningfulAnnotation } from "./lifecycle.js";
 
 /** The facts posting groups and eligibility read, complete or narrow. */
 export type PostingFacts = Pick<
@@ -127,6 +133,7 @@ export function automaticPostingPairs(
   disappearing: ReadonlyMap<TransactionFacts, Transaction>,
   capability: AutomaticPostingCapability,
   newPosted = new Set(posted),
+  annotationFor?: (transactionId: string) => AnnotationData | undefined,
 ) {
   const pairs = new Map<TransactionFacts, Transaction>();
   for (const group of postingComponents(pending, posted)) {
@@ -150,10 +157,32 @@ export function automaticPostingPairs(
     if (!capability.compatibleGroups(group.pending, group.posted)) {
       continue;
     }
-    // Owner accepts arbitrary attribution among indistinguishable twins.
     const disappearingPending = group.pending.map((row) =>
       disappearing.get(row)!,
     );
+    // Twin attribution may be arbitrary only when no owner distinction is lost.
+    // Callers without annotation access must not infer equivalence.
+    if (disappearingPending.length > 1) {
+      if (!annotationFor) {
+        continue;
+      }
+      const annotations = disappearingPending.map((row) => {
+        const data = annotationFor(row.id);
+        if (!meaningfulAnnotation(data)) {
+          return null;
+        }
+        // A review's financial version rebases with its row; only its verdict
+        // and basis distinguish twins.
+        const { review, ...owner } = canonicalAnnotation(data!);
+        return canonicalJson({
+          ...owner,
+          review: review && { status: review.status, basis: review.basis },
+        });
+      });
+      if (new Set(annotations).size !== 1) {
+        continue;
+      }
+    }
     disappearingPending.sort(
       (left, right) =>
         compareStrings(left.firstSeenAt, right.firstSeenAt) ||

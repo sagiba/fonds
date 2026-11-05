@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  type AnnotationData,
   collectionFailureCodeSchema,
   isBilledLine,
   isCityName,
@@ -227,7 +228,7 @@ export interface SyncResult {
 }
 
 /** Bump when shared reconciliation rules change, independently of archived parser versions. */
-export const RECONCILIATION_POLICY_VERSION = "source-presence-v15";
+export const RECONCILIATION_POLICY_VERSION = "source-presence-v16";
 
 export function reconciliationFailure(warnings: readonly string[]) {
   const failureCode = reconciliationFailureCodeSchema.options.find((code) =>
@@ -806,6 +807,7 @@ interface PostingContinuationOptions {
   comparableAbsence: (row: LedgerRow) => boolean;
   baseline: boolean;
   full: (row: LedgerRow) => Transaction;
+  annotationFor: (transactionId: string) => AnnotationData | undefined;
 }
 
 function freshPostingCapture(
@@ -850,6 +852,7 @@ function planPostingContinuations({
   comparableAbsence,
   baseline,
   full,
+  annotationFor,
 }: PostingContinuationOptions) {
   const empty = {
     pairs: new Map<TransactionFacts, Transaction>(),
@@ -967,6 +970,7 @@ function planPostingContinuations({
     disappearingComplete,
     adapter.automaticPosting,
     newPosted,
+    annotationFor,
   );
   const heuristic = new Set<TransactionFacts>();
   if (adapter.automaticPosting.exactNameHeuristic) {
@@ -984,6 +988,7 @@ function planPostingContinuations({
           ),
       },
       newPosted,
+      annotationFor,
     );
     for (const [posted, pending] of exact) {
       if (!pairs.has(posted)) {
@@ -2027,6 +2032,7 @@ export function planRun(
       comparableAbsence: absence.covers,
       baseline: baselineAccounts.has(response.accountKey),
       full,
+      annotationFor: (id) => plan.annotation(id)?.data,
     });
     const markSeen = (id: string, observed = true) => {
       seenIds.add(id);
