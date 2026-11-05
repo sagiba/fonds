@@ -57,6 +57,8 @@ export interface Partition {
 export interface ConnectionConfig {
   schemaVersion: 1;
   changeCursors?: Record<string, number> | undefined;
+  /** Opaque safety fence for optional settlement inference; null disables it. */
+  settlementEpoch?: string | null;
   [key: string]: unknown;
 }
 

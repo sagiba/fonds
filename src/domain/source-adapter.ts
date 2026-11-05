@@ -51,6 +51,18 @@ export interface AutomaticPostingCapability {
   postedAmountBasis: TransactionInput["amountBasis"];
   /** Opt in to the unique exact-merchant first-arrival heuristic. */
   exactNameHeuristic?: boolean;
+  /** Opt in to delayed, explicitly heuristic identity linkage without changing financial facts. */
+  settledHeuristic?: {
+    /** Explicitly riskier name comparison; absent/false preserves every terminal token. */
+    repeatedTerminalToken?: boolean;
+    /** Explicit historical probation; old invalidations cannot be reconstructed. */
+    existingPairRecheck?: boolean;
+    merchantName?(row: TransactionFacts): string | null;
+    compatiblePair(
+      pending: TransactionFacts,
+      posted: TransactionFacts,
+    ): boolean;
+  };
   /**
    * Pure source interpretation for a whole plausible component. Reject unknown
    * kinds/issues or insufficient source evidence unless explicitly supported by

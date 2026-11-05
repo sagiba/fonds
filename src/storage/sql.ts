@@ -773,3 +773,51 @@ export function backfillOutcomeRank(
       and ${refresh.status} in ('pending', 'running') then 2
     else 1 end`;
 }
+
+/** Limit returned scalar bytes before a driver decodes optional settlement projections. */
+export function settlementColumns<T extends Record<string, AnyColumn>>(
+  columns: T,
+  dialect: "sqlite" | "postgres",
+  limit: number,
+): T {
+  return Object.fromEntries(
+    Object.entries(columns).map(([name, column]) => [
+      name,
+      sql`case when ${settlementLength(column, dialect)} <= ${sql.raw(String(limit))} then ${column} else null end`.mapWith(
+        column,
+      ),
+    ]),
+  ) as unknown as T;
+}
+
+function settlementLength(column: AnyColumn, dialect: "sqlite" | "postgres") {
+  return dialect === "sqlite"
+    ? sql`coalesce(length(cast(${column} as blob)), 0)`
+    : sql`coalesce(octet_length(cast(${column} as text)), 0)`;
+}
+
+export function settlementOversized(
+  columns: Record<string, AnyColumn>,
+  dialect: "sqlite" | "postgres",
+  limit: number,
+) {
+  return sql<number>`case when ${sql.join(
+    Object.values(columns).map(
+      (column) =>
+        sql`${settlementLength(column, dialect)} > ${sql.raw(String(limit))}`,
+    ),
+    sql` or `,
+  )} then 1 else 0 end`.mapWith(Number);
+}
+
+/** Sum column byte lengths in SQL; no provider JSON leaves the database for this gate. */
+export function settlementHydrationSafe(
+  columns: AnyColumn[],
+  dialect: "sqlite" | "postgres",
+  limit: number,
+) {
+  return sql<number>`case when ${sql.join(
+    columns.map((column) => settlementLength(column, dialect)),
+    sql` + `,
+  )} <= ${sql.raw(String(limit))} then 1 else 0 end`.mapWith(Number);
+}

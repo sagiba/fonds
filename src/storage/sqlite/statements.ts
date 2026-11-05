@@ -46,6 +46,9 @@ import {
   listColumns,
   planCondition,
   type PlanScope,
+  settlementColumns,
+  settlementHydrationSafe,
+  settlementOversized,
   totalsPartColumns,
   transactionFilter,
   transactionOrder,
@@ -1390,3 +1393,101 @@ export function* applyPlan(
       .where(eq(schema.syncRuns.id, runId));
   }
 }
+
+/** Existence only: no archived body or variable-size metadata reaches the driver. */
+export const hasOtherUnappliedRun = async (
+  db: Executor,
+  connectionId: string,
+  runId: string,
+) =>
+  (
+    await db
+      .select({ found: sql<number>`1` })
+      .from(schema.syncRuns)
+      .where(
+        and(
+          eq(schema.syncRuns.connectionId, connectionId),
+          isNull(schema.syncRuns.appliedAt),
+          sql`${schema.syncRuns.id} <> ${runId}`,
+        ),
+      )
+      .limit(1)
+  ).length > 0;
+
+/** A capped scalar-only competitor snapshot, never provider evidence or annotation JSON. */
+export const settlementContenders = async (
+  db: Executor,
+  connectionId: string,
+  accountKey: string,
+  limit: number,
+  fieldBytes: number,
+  evidenceBytes: number,
+) => {
+  const t = schema.transactions;
+  const columns = {
+    id: t.id,
+    cardId: t.cardId,
+    transactionDate: t.transactionDate,
+    amountMinor: t.amountMinor,
+    currency: t.currency,
+    originalAmountMinor: t.originalAmountMinor,
+    originalCurrency: t.originalCurrency,
+    supersededById: t.supersededById,
+    purchaseId: t.purchaseId,
+    installmentNumber: t.installmentNumber,
+  };
+  const result = await db
+    .select({
+      row: settlementColumns(columns, "sqlite", fieldBytes),
+      oversized: settlementOversized(columns, "sqlite", fieldBytes),
+      hydrationSafe: settlementHydrationSafe(
+        [
+          ...Object.values(getTableColumns(t)),
+          ...Object.values(getTableColumns(schema.transactionObservations)),
+          ...Object.values(getTableColumns(schema.transactionReconciliation)),
+          ...Object.values(getTableColumns(schema.transactionPostingLinks)),
+        ],
+        "sqlite",
+        evidenceBytes,
+      ),
+      missing:
+        sql<number>`case when ${schema.transactionObservations.transactionId} is null or ${schema.transactionReconciliation.transactionId} is null or ${schema.transactionPostingLinks.transactionId} is null then 1 else 0 end`.mapWith(
+          Number,
+        ),
+    })
+    .from(t)
+    .leftJoin(
+      schema.transactionObservations,
+      eq(schema.transactionObservations.transactionId, t.id),
+    )
+    .leftJoin(
+      schema.transactionReconciliation,
+      eq(schema.transactionReconciliation.transactionId, t.id),
+    )
+    .leftJoin(
+      schema.transactionPostingLinks,
+      eq(schema.transactionPostingLinks.transactionId, t.id),
+    )
+    .where(and(eq(t.connectionId, connectionId), eq(t.sourceScope, accountKey)))
+    .limit(limit);
+  if (result.some((item) => item.oversized || item.missing)) {
+    return undefined;
+  }
+  return result.map((item) => ({
+    ...item.row,
+    hydrationSafe: item.hydrationSafe === 1,
+  }));
+};
+
+/** Patch only the bounded fence; unrelated private config never round-trips through this write. */
+export const setSettlementEpoch = (
+  db: Executor,
+  connectionId: string,
+  epoch: string | null,
+) =>
+  db
+    .update(schema.connections)
+    .set({
+      config: sql`json_set(${schema.connections.config}, '$.settlementEpoch', ${epoch})`,
+    })
+    .where(eq(schema.connections.id, connectionId));

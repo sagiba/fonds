@@ -19,6 +19,7 @@ import type {
 import type { Account } from "../domain/accounts.js";
 import type { Card } from "../domain/cards.js";
 import type { RefreshFailureCode } from "../domain/model.js";
+import type { SettlementContender } from "../domain/plans/posting-settlement.js";
 import type {
   PriorRun,
   RunHistoryDocument,
@@ -142,6 +143,24 @@ export type TotalsPartRow = Omit<TotalsPart, "amountMinor" | "fxFeeMinor"> & {
 
 /** Unexecuted Drizzle statements. The driver owns execution and transactions. */
 export interface Statements<Db> {
+  setSettlementEpoch(
+    db: Db,
+    connectionId: string,
+    epoch: string | null,
+  ): PromiseLike<unknown>;
+  hasOtherUnappliedRun(
+    db: Db,
+    connectionId: string,
+    runId: string,
+  ): PromiseLike<boolean>;
+  settlementContenders(
+    db: Db,
+    connectionId: string,
+    accountKey: string,
+    limit: number,
+    fieldBytes: number,
+    evidenceBytes: number,
+  ): PromiseLike<SettlementContender[] | undefined>;
   cards(db: Db, connectionId: string): PromiseLike<Card[]>;
   card(db: Db, id: string): PromiseLike<Card[]>;
   cardPage(db: Db, input: CatalogQuery): PromiseLike<Card[]>;

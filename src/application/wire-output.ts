@@ -196,6 +196,19 @@ const postingMatchSchema = z
     supersededTransactionId: idSchema,
     automatic: z.boolean(),
     policyVersion: textSchema,
+    heuristic: z.literal(true).optional(),
+    settlement: z
+      .object({
+        startedAt: textSchema,
+        origin: z.enum(["first_arrival", "existing_pair_recheck"]),
+        comparison: z.enum([
+          "merchant-presentation-v1",
+          "repeated-terminal-token-v1",
+        ]),
+        observedLedgerOnly: z.literal(true),
+      })
+      .strict()
+      .optional(),
     evidence: z
       .object({ runId: idSchema, capturedAt: textSchema })
       .strict()
@@ -407,6 +420,19 @@ export function presentWireTransaction(
           supersededTransactionId: link.postedId,
           automatic: link.automatic,
           policyVersion: link.policyVersion,
+          ...(link.policyVersion === "settled-similarity-v1"
+            ? { heuristic: true as const }
+            : {}),
+          ...(link.evidence?.overlap?.settlement
+            ? {
+                settlement: {
+                  startedAt: link.evidence.overlap.capturedAt,
+                  origin: link.evidence.overlap.settlement.origin,
+                  comparison: link.evidence.overlap.settlement.comparison,
+                  observedLedgerOnly: true as const,
+                },
+              }
+            : {}),
           evidence: link.evidence
             ? {
                 runId: link.evidence.runId,

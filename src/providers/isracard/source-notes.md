@@ -178,12 +178,13 @@ generations; a fresh component replaces its earlier evidence.
   zeros. DigitalV3 is preferred, and legacy fills what it omits, notably standing
   orders (`isHoraatKeva`). Approvals use the card-qualified full detail tuple as
   native identity; missing or colliding tuples never become trusted unique rows.
-- **Continuation policy:** there is no demonstrated shared approval/voucher ID.
-  The adapter narrows the [shared heuristic][matching-design] to a unique
-  approval and verified posted purchase with exact merchant equality and known
-  original money. Pending kind remains unknown; posted evidence supplies the
-  purchase classification. Opaque codes add no invented meaning. Cancellation
-  followed by an unrelated identical purchase remains a possible false link.
+- **Continuation policy:** No shared approval/voucher ID is demonstrated. The
+  [shared heuristic][matching-design] requires a unique approval and
+  verified purchase. Default-off settlement preserves unknown legacy facts, not
+  proof of issuer identity or posted completeness. Normalization preserves
+  submerchant punctuation. Terminal-token removal and historical rechecks require
+  separate opt-in. Account histories exceeding 1,000 rows are excluded. Canceled
+  approvals and identical purchases can be misattributed.
 - **Checks:** [extraction] "prefers DigitalV3, joins unique voucher evidence…",
   "joins equal numeric voucher lexemes and flags numeric-equivalent mismatches…",
   "preserves all duplicate voucher occurrences…", "keeps card and transaction

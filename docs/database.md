@@ -1,10 +1,9 @@
 # Database reference
 
-The database holds declared financial evidence, current transactions, independent
-owner annotations, the durable event feed and operational state. This page owns
-table ownership, relationships, commit boundaries, the reasons for dialect
-differences, migration compatibility, the installation binding and backup and
-recovery. The [API reference](api.md) owns what clients see.
+The database holds evidence, transactions, annotations, events and
+state. It covers tables, relationships, commits, dialects,
+migrations, binding, backup and recovery. The [API reference](api.md)
+defines output.
 
 ## Ownership and physical layout
 
@@ -83,7 +82,9 @@ Candidate IDs and source references inside JSON are references, not foreign keys
 ## What the financial tables hold
 
 - **`connections`** hold provider, label and open, versioned configuration with
-  internal cursors. Unknown configuration keys survive.
+  internal cursors. Unknown configuration keys survive. Settlement epochs are
+  internal: config updates cannot replace them. Never restore old config alone;
+  out-of-band repairs must disable settlement or discard its witnesses first.
 - **`accounts` and `cards`** are unique by connection and private provider key.
   Card attributes are private, allowlisted facts.
 - **`sync_runs`** hold receipts: scope, times, versions, coverage, warnings, input

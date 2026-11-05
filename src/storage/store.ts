@@ -45,6 +45,7 @@ import {
 import {
   elapsedMs,
   syncCorrelationIds,
+  type SyncDiagnostic,
   syncDiagnostics,
   type SyncDiagnosticSink,
 } from "../application/sync-diagnostics.js";
@@ -70,6 +71,15 @@ import {
   postingSchema,
   removalSchema,
 } from "../domain/plans/lifecycle.js";
+import {
+  SETTLEMENT_EVIDENCE_BYTES,
+  SETTLEMENT_FIELD_BYTES,
+  SETTLEMENT_MAX_ACCOUNTS,
+  SETTLEMENT_MAX_ROWS,
+  settlementEpoch,
+  settlementEvidenceFits,
+  type SettlementSnapshot,
+} from "../domain/plans/posting-settlement.js";
 import {
   copyRunHistory,
   decodeRunHistory,
@@ -1391,6 +1401,127 @@ function buildStore<Db>(
   }
 
   /**
+   * Optional bounded preflight under the financial-planning lock. The collector
+   * recovers unapplied runs before continuing. Out-of-order captures or another
+   * unapplied run fence this policy; raw database restore is outside that proof.
+   */
+  async function loadSettlement(
+    tx: Db,
+    connection: Connection,
+    scope: SyncScope,
+    extraction: ReturnType<typeof extractRun>,
+    ledger: LedgerLoad[],
+    latestCapture: string | undefined,
+    unappliedGap: boolean,
+  ): Promise<{
+    snapshot: SettlementSnapshot;
+    changed: boolean;
+    status: NonNullable<SyncDiagnostic["settlement"]>;
+  }> {
+    const initial = settlementEpoch(connection.config.settlementEpoch);
+    const accounts = new Map<
+      string,
+      import("../domain/plans/posting-settlement.js").SettlementContender[]
+    >();
+    let remaining = SETTLEMENT_MAX_ROWS;
+    let status: NonNullable<SyncDiagnostic["settlement"]> = "ready";
+    if (initial === null) {
+      status = "disabled";
+    } else if (
+      unappliedGap ||
+      (latestCapture !== undefined &&
+        extraction.extracted.some(
+          ({ response }) =>
+            !Number.isFinite(Date.parse(response.capturedAt)) ||
+            !Number.isFinite(Date.parse(latestCapture)) ||
+            Date.parse(response.capturedAt) <= Date.parse(latestCapture),
+        )) ||
+      extraction.status !== "completed" ||
+      extraction.warnings.length > 0 ||
+      extraction.extracted.length === 0 ||
+      !extraction.extracted.every(
+        ({ result }) =>
+          !result.historical &&
+          result.warnings.length === 0 &&
+          result.partitions.every((p) => p.success) &&
+          (["pending", "posted"] as const).every((kind) =>
+            result.partitions.some(
+              (p) =>
+                p.status === kind &&
+                p.success &&
+                (kind === "posted" || p.comparable),
+            ),
+          ),
+      )
+    ) {
+      status = "incomplete_capture";
+    } else if (
+      scope.accounts.length > SETTLEMENT_MAX_ACCOUNTS ||
+      extraction.extracted.reduce(
+        (sum, { result }) => sum + result.transactions.length,
+        0,
+      ) > SETTLEMENT_MAX_ROWS
+    ) {
+      status = "row_budget";
+    } else if (
+      !extraction.extracted.every(({ result }) =>
+        result.transactions.every(settlementEvidenceFits),
+      )
+    ) {
+      status = "evidence_budget";
+    }
+    if (status === "ready") {
+      for (const account of scope.accounts) {
+        if (account.length > SETTLEMENT_FIELD_BYTES) {
+          status = "evidence_budget";
+          break;
+        }
+        const rows = await statements.settlementContenders(
+          tx,
+          connection.id,
+          account,
+          remaining + 1,
+          SETTLEMENT_FIELD_BYTES,
+          SETTLEMENT_EVIDENCE_BYTES,
+        );
+        if (!rows || rows.length > remaining) {
+          status = !rows ? "incomplete_capture" : "row_budget";
+          break;
+        }
+        remaining -= rows.length;
+        accounts.set(account, rows);
+      }
+    }
+    if (status === "ready") {
+      const safe = new Map(
+        [...accounts.values()].flatMap((rows) =>
+          rows.map((row) => [row.id, row.hydrationSafe] as const),
+        ),
+      );
+      const safeWitnesses = ledger.every(
+        ({ row }) =>
+          !row.details.postingOverlap?.settlement ||
+          (safe.get(row.id) === true &&
+            safe.get(row.details.postingOverlap.postedId) === true),
+      );
+      if (!safeWitnesses) {
+        status = "evidence_budget";
+      }
+    }
+    const complete = status === "ready";
+    const epoch = complete
+      ? (initial ?? crypto.randomUUID())
+      : initial === null
+        ? null
+        : crypto.randomUUID();
+    return {
+      snapshot: { epoch, accounts: complete ? accounts : new Map() },
+      changed: connection.config.settlementEpoch !== epoch,
+      status,
+    };
+  }
+
+  /**
    * Plans one application from narrow rows, hydrating the rows the plan
    * needs complete. A round whose plan demanded hydration is speculative:
    * its result, and any planner error, is discarded, the demanded rows are
@@ -1416,6 +1547,7 @@ function buildStore<Db>(
       adapter: SourceAdapter;
       now: string;
       onRead: (reading: boolean) => void;
+      settlement?: SettlementSnapshot;
     },
   ) {
     const { connection, adapter } = input;
@@ -1460,6 +1592,7 @@ function buildStore<Db>(
       }
       const plan = new FinancialPlan({
         connection,
+        ...(input.settlement ? { settlement: input.settlement } : {}),
         rows: ledger.map(({ row }) => complete.get(row.id) ?? row),
         annotations,
         priorRuns: history.priorRuns,
@@ -1584,6 +1717,9 @@ function buildStore<Db>(
   ) {
     const { adapter, history, runHistory } = dependent;
     const plan = await loadPlan(tx, connection, undefined, [], true);
+    if (dependent.plan.snapshot.settlement) {
+      plan.snapshot.settlement = dependent.plan.snapshot.settlement;
+    }
     let replayed = 0;
     const result = planRun(
       plan,
@@ -1880,6 +2016,29 @@ function buildStore<Db>(
           adapter,
           ledger.map(({ row }) => row),
         );
+        const settlement = adapter.automaticPosting?.settledHeuristic
+          ? await loadSettlement(
+              tx,
+              locked,
+              scope,
+              extraction,
+              ledger,
+              loadedHistory.runHistory.latestCapture,
+              (loadedHistory.latest !== undefined &&
+                loadedHistory.runHistory.latestCapture === undefined) ||
+                (await statements.hasOtherUnappliedRun(tx, connection.id, id)),
+            )
+          : locked.config.settlementEpoch !== undefined
+            ? (() => {
+                const current = settlementEpoch(locked.config.settlementEpoch);
+                const epoch = current === null ? null : crypto.randomUUID();
+                return {
+                  snapshot: { epoch, accounts: new Map() },
+                  changed: locked.config.settlementEpoch !== epoch,
+                  status: "disabled" as const,
+                };
+              })()
+            : undefined;
         const removals = await statements.removals(tx, connection.id);
         const catalog = await loadCatalog(tx, connection.id);
         phase = "reconciliation";
@@ -1897,12 +2056,14 @@ function buildStore<Db>(
           ...ids,
           stage: "reconciliation",
           outcome: "started",
+          settlement: settlement?.status ?? "disabled",
           ...(requestScope && { requestScope }),
           counts: loaded,
         });
         const now = new Date().toISOString();
         const planned = await planApplication(tx, {
           connection: locked,
+          ...(settlement ? { settlement: settlement.snapshot } : {}),
           ledger,
           bounds: { scope: bounded.scope, knownScopes: bounded.knownScopes },
           history: loadedHistory,
@@ -2031,6 +2192,15 @@ function buildStore<Db>(
           }
         }
         await savePlan(tx, plan, id, [
+          ...(settlement?.changed
+            ? [
+                statements.setSettlementEpoch(
+                  tx,
+                  connection.id,
+                  settlement.snapshot.epoch,
+                ),
+              ]
+            : []),
           ...(acceptedWindow
             ? [
                 statements.markRefreshWindowAccepted(
@@ -2150,7 +2320,13 @@ function buildStore<Db>(
       if (!row) {
         throw new NotFoundError("Connection not found");
       }
+      const originalEpoch = row.config.settlementEpoch;
       const config = configSchema.parse(change(configSchema.parse(row.config)));
+      if (config.settlementEpoch !== originalEpoch) {
+        throw new ConflictError(
+          "Settlement state is internal and cannot be replaced through configuration",
+        );
+      }
       await commit(tx, row, [statements.setConfig(tx, id, config)]);
       return config;
     });

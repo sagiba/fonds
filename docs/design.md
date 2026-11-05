@@ -178,14 +178,20 @@ without views.
 
 Automatic matching is reversible and provider-opted-in. A disappearing authorization
 can retain its ID when a compatible new posting arrives in a fresh comparable
-capture. A unique witness can preserve that opportunity until later evidence is
+capture. A unique witness preserves that opportunity until evidence is
 usable. Changed facts, competitors or owner decisions invalidate witnesses.
 
-A unique first arrival can also link by exact merchant, date, card and signed
+A first arrival can link by exact merchant, date, card and signed
 purchase money when provider metadata differs. This heuristic does not prove
 identity: a canceled authorization and another identical purchase can be
-misattributed. Existing unwitnessed pairs remain reviewable. Ambiguous groups
+misattributed. Unwitnessed pairs remain reviewable. Ambiguous groups
 remain reviewable; no conversion or guessed rates are used.
+A default-off settlement heuristic links on a fresh recheck 24 hours after
+absence, preserving unknown facts. Historical probation is opt-in.
+Competitors, corrections, reappearance or posted annotations veto it. Whole-account
+history is capped at 1,000 rows; overflow/incomplete scans atomically fence old
+windows. False links misattribute annotations.
+
 Same-capture twins may pair in fixed arbitrary order only when owner annotations
 are equivalent. Absence changes
 presence, never history or annotations. Linked authorizations accept corrections

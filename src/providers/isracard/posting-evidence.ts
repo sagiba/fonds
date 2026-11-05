@@ -168,3 +168,139 @@ export function compatibleIsracardPostingGroups(
   const name = approvalMerchant(approval);
   return name !== null && name === postedMerchant(purchase);
 }
+
+/** Processor presentation only; no submerchant token or punctuation is removed. */
+export function settledIsracardMerchant(row: TransactionFacts): string | null {
+  return (
+    row.merchantName
+      ?.normalize("NFC")
+      .replace(/\p{White_Space}+/gu, " ")
+      .trim()
+      .toUpperCase()
+      .replace(/^PAYPAL\s*\*\s*/u, "PAYPAL ") ?? null
+  );
+}
+
+/**
+ * Narrow identity-risk opt-in, not a new financial interpretation. Legacy rows
+ * retain unknown kind/basis and every warning. Explicit contradictions and
+ * unsupported source roles remain ineligible even when their names look alike.
+ */
+export function compatibleIsracardSettledPair(
+  pending: TransactionFacts,
+  posted: TransactionFacts,
+): boolean {
+  if (
+    pending.kind !== "unknown" ||
+    approvalMerchant(pending) === null ||
+    pending.details.issues.some(
+      (issue) =>
+        ![
+          "source_derived_amount_direction",
+          "possible_pending_posted_match",
+        ].includes(issue),
+    )
+  ) {
+    return false;
+  }
+  if (posted.kind === "purchase") {
+    return (
+      postedMerchant(posted) !== null &&
+      posted.details.issues.every((issue) =>
+        [
+          "source_derived_amount_direction",
+          "possible_pending_posted_match",
+        ].includes(issue),
+      )
+    );
+  }
+  if (
+    posted.kind !== "unknown" ||
+    posted.amountBasis !== "unknown" ||
+    posted.currency !== "ILS" ||
+    posted.providerTransactionCode !== null ||
+    posted.counterpartyName !== null ||
+    posted.description !== null ||
+    posted.originalAmountMinor !== null ||
+    posted.originalCurrency !== null ||
+    posted.details.issues.some(
+      (issue) =>
+        ![
+          "isracard_unverified_semantics",
+          "unsupported_transaction_type",
+          "unverified_amount_basis",
+          "source_derived_amount_direction",
+          "possible_pending_posted_match",
+        ].includes(issue),
+    ) ||
+    ![
+      "isracard_unverified_semantics",
+      "unsupported_transaction_type",
+      "unverified_amount_basis",
+      "source_derived_amount_direction",
+    ].every((issue) => posted.details.issues.includes(issue))
+  ) {
+    return false;
+  }
+  const namespace = posted.details.provider.isracard ?? {};
+  const rows = currentSourceRows(namespace);
+  const observations = namespace.observations;
+  if (
+    rows.length !== 1 ||
+    !object(rows[0]) ||
+    isracardEvidenceGeneration(rows[0]) !== "legacy" ||
+    !Array.isArray(observations) ||
+    observations.length !== 1 ||
+    !object(observations[0]) ||
+    observations[0].generation !== "legacy" ||
+    typeof observations[0].path !== "string" ||
+    !observations[0].path.includes(".txnIsrael[")
+  ) {
+    return false;
+  }
+  const row = rows[0];
+  const empty = (value: unknown) =>
+    value === undefined || value === null || value === "";
+  if (
+    typeof row.voucherNumberRatz !== "string" ||
+    !row.voucherNumberRatz.trim() ||
+    row.currencyId !== "ILS" ||
+    row.currentPaymentCurrency !== "ILS" ||
+    ![
+      row.moreInfo,
+      row.dealSumType,
+      row.paymentSumOutbound,
+      row.dealSumOutbound,
+      row.fullPurchaseDateOutbound,
+    ].every(empty) ||
+    !(empty(row.kodMatbeaMekori) || row.kodMatbeaMekori === "ILS") ||
+    !(empty(row.paymentSumSign) || row.paymentSumSign === "+") ||
+    merchant(row.fullSupplierNameHeb) !== merchant(posted.merchantName)
+  ) {
+    return false;
+  }
+  const date =
+    typeof row.fullPurchaseDate === "string"
+      ? row.fullPurchaseDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/u)
+      : null;
+  if (!date || posted.transactionDate !== `${date[3]}-${date[2]}-${date[1]}`) {
+    return false;
+  }
+  try {
+    return (
+      typeof row.paymentSum === "string" &&
+      typeof row.dealSum === "string" &&
+      -decimalToMinor(row.paymentSum, "ILS") === posted.amountMinor &&
+      decimalToMinor(row.paymentSum, "ILS") ===
+        decimalToMinor(row.dealSum, "ILS")
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Explicit opt-in candidate; the default adapter does not enable settlement inference. */
+export const isracardSettlementPolicy = {
+  compatiblePair: compatibleIsracardSettledPair,
+  merchantName: settledIsracardMerchant,
+};

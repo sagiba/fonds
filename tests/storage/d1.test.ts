@@ -6,8 +6,10 @@ import type {
 } from "@cloudflare/workers-types";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { createSyncDiagnosticReport } from "../../src/application/sync-diagnostics.js";
 import { ConflictError } from "../../src/domain/errors.js";
 import { emptyDetails } from "../../src/domain/model.js";
+import type { SourceAdapter } from "../../src/domain/source-adapter.js";
 import { sqliteMigrations } from "../../src/storage/sqlite/migration.js";
 import {
   d1Enabled,
@@ -75,7 +77,11 @@ function directWriteStore(direct: string[]) {
   } as D1Database);
 }
 
-function capture(store: Pick<Harness, "ingestRun">, runId: string) {
+function capture(
+  store: Pick<Harness, "ingestRun">,
+  runId: string,
+  adapter: SourceAdapter = synthetic,
+) {
   return store.ingestRun(
     {
       connectionId,
@@ -93,7 +99,7 @@ function capture(store: Pick<Harness, "ingestRun">, runId: string) {
         },
       ],
     },
-    synthetic,
+    adapter,
   );
 }
 
@@ -281,6 +287,79 @@ describe.skipIf(!d1Enabled)("guarded D1 write batches", () => {
       (await db.getTransaction(transaction!.id))?.annotation?.data,
     ).toMatchObject({ notes: "retried" });
   });
+
+  it.each(["config", "staged-run"])(
+    "guards the settlement epoch and applied marker against a concurrent %s",
+    async (race) => {
+      const stale = staleStore();
+      const adapter: SourceAdapter = {
+        ...synthetic,
+        automaticPosting: {
+          pendingAmountBasis: "authorization",
+          postedAmountBasis: "purchase_commitment",
+          compatibleGroups: () => false,
+          settledHeuristic: { compatiblePair: () => false },
+        },
+      };
+      pending.push(
+        async () => {},
+        async () => {
+          if (race === "config") {
+            await db.updateConfig(connectionId, (config) => ({
+              ...config,
+              edited: true,
+            }));
+          } else {
+            await expect(
+              capture(db, "competing-staged-run", {
+                ...adapter,
+                extract() {
+                  throw new Error("synthetic extraction failure");
+                },
+              }),
+            ).rejects.toThrow();
+            expect(
+              await db.raw("SELECT applied_at FROM sync_runs WHERE id = ?", [
+                "competing-staged-run",
+              ]),
+            ).toEqual([{ applied_at: null }]);
+          }
+        },
+      );
+      await expect(capture(stale, "settlement-run", adapter)).rejects.toThrow(
+        ConflictError,
+      );
+      expect(
+        (await db.getStoredConnection(connectionId))!.config.settlementEpoch,
+      ).toBeUndefined();
+      expect(
+        await db.raw("SELECT applied_at FROM sync_runs WHERE id = ?", [
+          "settlement-run",
+        ]),
+      ).toEqual([{ applied_at: null }]);
+      const report = createSyncDiagnosticReport();
+      await stale.applyRun("settlement-run", adapter, report.log);
+      const config = (await db.getStoredConnection(connectionId))!.config;
+      if (race === "config") {
+        expect(config.edited).toBe(true);
+      }
+      expect(
+        report
+          .report()
+          .entries.find(
+            (entry) =>
+              entry.stage === "reconciliation" && entry.outcome === "started",
+          )?.settlement,
+      ).toBe(race === "config" ? "ready" : "incomplete_capture");
+      expect(config.settlementEpoch).toMatch(/^[0-9a-f]{8}-[0-9a-f-]{27}$/u);
+      expect(await stale.applyRun("settlement-run", adapter)).toMatchObject({
+        replayed: true,
+      });
+      expect(
+        (await db.getStoredConnection(connectionId))!.config.settlementEpoch,
+      ).toBe(config.settlementEpoch);
+    },
+  );
 
   it("rejects a stale multi-statement run without applying any of it", async () => {
     const stale = staleStore();

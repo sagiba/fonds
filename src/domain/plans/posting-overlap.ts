@@ -127,6 +127,41 @@ export function postingOverlapPairs({
           !row.details.postingLink &&
           !row.details.rejectedPostingKeys?.length,
       );
+    if (witness?.settlement) {
+      // Stronger source evidence keeps its original first-arrival opportunity;
+      // a weaker settlement clock never replaces that evidence or its vetoes.
+      const arrival = witness.settlement.arrival;
+      if (
+        arrival &&
+        !witness.settlement.invalidatedAt &&
+        witness.settlement.epoch === plan.snapshot.settlement?.epoch &&
+        usable &&
+        fresh &&
+        arrival.postedId === posted!.id &&
+        arrival.pendingFingerprint === fingerprint(pending) &&
+        arrival.postedFingerprint === fingerprint(posted!) &&
+        validWitness(arrival.runId, arrival.capturedAt) &&
+        observed(posted!) &&
+        absent(pending) &&
+        !meaningfulAnnotation(plan.annotation(posted!.id)?.data)
+      ) {
+        const completePending = plan.full(pending);
+        const completePosted = plan.full(posted!);
+        const decision = automaticPostingPairs(
+          [completePending],
+          [completePosted],
+          new Map([[completePending, completePending]]),
+          capability,
+        );
+        if (decision.pairs.has(completePosted)) {
+          pairs.set(completePosted, {
+            ...completePending,
+            details: { ...completePending.details, postingOverlap: arrival },
+          });
+        }
+      }
+      continue;
+    }
     if (
       witness &&
       (!usable ||
@@ -138,7 +173,25 @@ export function postingOverlapPairs({
     ) {
       const { postingOverlap: _discarded, ...details } =
         plan.full(pending).details;
-      plan.updateTransaction(pending.id, { details });
+      plan.updateTransaction(pending.id, {
+        details: capability.settledHeuristic
+          ? {
+              ...details,
+              postingOverlap: {
+                ...witness,
+                settlement: {
+                  policyVersion: "settled-similarity-v1",
+                  origin: "first_arrival",
+                  comparison: "merchant-presentation-v1",
+                  invalidatedAt: capturedAt,
+                },
+              },
+            }
+          : details,
+      });
+      if (capability.settledHeuristic) {
+        continue;
+      }
       witness = undefined;
     }
     if (!usable) {

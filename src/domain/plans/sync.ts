@@ -73,6 +73,10 @@ import {
 } from "./lifecycle.js";
 import { postingOverlapPairs } from "./posting-overlap.js";
 import {
+  postingSettlementPairs,
+  SETTLED_POSTING_POLICY,
+} from "./posting-settlement.js";
+import {
   acceptCollectionHealth,
   partitionKey,
   type PriorRun,
@@ -893,6 +897,7 @@ function planPostingContinuations({
       .filter(
         (row) =>
           row.status === "pending" &&
+          !row.details.postingOverlap?.settlement &&
           !history.historical(row) &&
           row.presence === "seen" &&
           row.lastSeenAt < response.capturedAt &&
@@ -2694,6 +2699,77 @@ export function planRun(
           now,
           {
             policyVersion: RECONCILIATION_POLICY_VERSION,
+            runId,
+            capturedAt: response.capturedAt,
+            overlap: pending.details.postingOverlap!,
+          },
+        );
+        purchases.add(plan.transaction(pending.id)!);
+        markSeen(pending.id);
+        markSeen(posted.id);
+        updated++;
+      }
+    }
+    if (adapter.automaticPosting?.settledHeuristic) {
+      const pairs = postingSettlementPairs({
+        plan,
+        before: current,
+        accountKey: response.accountKey,
+        policy: adapter.automaticPosting.settledHeuristic,
+        runId,
+        capturedAt: response.capturedAt,
+        scope: canonicalJson([
+          resourceKey(adapter, response.endpoint),
+          scopeKey(adapter, response.scope),
+        ]),
+        fresh:
+          !result.historical &&
+          !baselineAccounts.has(response.accountKey) &&
+          result.warnings.length === 0 &&
+          result.partitions.every((part) => part.success) &&
+          freshPostingCapture(adapter, result, response, history),
+        validWitness: (witnessRunId, capturedAt) => {
+          const receipt = history.response(witnessRunId, response.accountKey);
+          return (
+            receipt !== undefined &&
+            receipt.capturedAt === capturedAt &&
+            receipt.scope?.kind !== "history" &&
+            resourceKey(adapter, receipt.endpoint) ===
+              resourceKey(adapter, response.endpoint) &&
+            scopeKey(adapter, receipt.scope) ===
+              scopeKey(adapter, response.scope)
+          );
+        },
+        observed: (row) =>
+          row.sourceAbsence === undefined &&
+          financiallyObservedIds.has(row.id) &&
+          row.lastSeenRunId === runId &&
+          row.lastSeenAt === response.capturedAt,
+        absent: (row) =>
+          !seenIds.has(row.id) &&
+          absence.covers(row) &&
+          !history.historical(row) &&
+          row.lastSeenAt < response.capturedAt,
+      });
+      for (const [posted, pending] of pairs) {
+        planPosting(
+          plan,
+          {
+            pendingId: pending.id,
+            postedId: posted.id,
+            expectedPendingVersion: pending.version,
+            expectedPostedVersion: posted.version,
+            expectedPendingAnnotationVersion:
+              plan.annotation(pending.id)?.version ?? 0,
+            expectedPostedAnnotationVersion:
+              plan.annotation(posted.id)?.version ?? 0,
+            actor: "system",
+            reason:
+              "Heuristic identity link after 24-hour recheck; no competitor in observed ledger, not verified issuer identity",
+          },
+          now,
+          {
+            policyVersion: SETTLED_POSTING_POLICY,
             runId,
             capturedAt: response.capturedAt,
             overlap: pending.details.postingOverlap!,
