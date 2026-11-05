@@ -428,7 +428,10 @@ describe("database byte readings", () => {
   });
 
   it("logs every read operation's bytes, statements outside transactions included", async () => {
-    const fake = fakePool(100);
+    // Transaction control acknowledgements are outside the measured body.
+    const fake = fakePool(100, (statement) =>
+      /^(begin|commit|rollback)\b/i.test(statement) ? { bytes: 0 } : {},
+    );
     const db = openPostgresDatabase(fake.pool);
     const entries: OperationLog[] = [];
     const application = createApplication(db, {
@@ -461,6 +464,14 @@ describe("database byte readings", () => {
       list_sync_runs: [scope],
       get_refresh: [{ refreshId: "synthetic-refresh" }],
       list_refreshes: [scope],
+      preview_exact_posting_repair: [
+        {
+          transactionId: "synthetic-transaction",
+          from: "2040-07-01",
+          to: "2040-07-31",
+          reason: "Synthetic byte-meter coverage",
+        },
+      ],
     };
     const reads = operationDefinitions
       .filter((definition) => definition.access === "read")
@@ -472,6 +483,13 @@ describe("database byte readings", () => {
         await operation.execute(input).catch(() => undefined);
         const sent = fake.takeSent();
         expect(sent, operation.name).toBeGreaterThan(0);
+        if (operation.name === "preview_exact_posting_repair") {
+          expect(
+            fake.received
+              .at(-1)
+              ?.some((statement) => /from "connections"/i.test(statement)),
+          ).toBe(true);
+        }
         expect(entries.at(-1)).toMatchObject({
           operation: operation.name,
           dbBytesRead: sent,
@@ -515,6 +533,32 @@ describe.skipIf(!postgresUrl)("PostgreSQL database byte readings", () => {
   afterEach(async () => {
     await db?.close();
     await database?.drop();
+  });
+
+  it("meters a successful exact-posting repair preview", async () => {
+    await db.ensureConnection({ id: "synthetic", provider: "cal" });
+    await ingest(db, "synthetic", ["preview-anchor"], "2040-07-02T00:00:00Z");
+    const page = await db.listTransactionPage({ connectionId: "synthetic" });
+    const entries: OperationLog[] = [];
+    const preview = createApplication(db, {
+      onOperation: (entry) => {
+        entries.push(entry);
+      },
+      meterDbBytes: db.meterDbBytes,
+    }).operations.find(({ name }) => name === "preview_exact_posting_repair")!;
+    const result = await preview.execute({
+      transactionId: page.transactions[0]!.id,
+      from: "2040-07-01",
+      to: "2040-07-31",
+      reason: "Synthetic byte-meter coverage",
+    });
+    expect(result).toEqual({ mode: "preview", pairs: [] });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      operation: "preview_exact_posting_repair",
+      outcome: "ok",
+    });
+    expect(entries[0]!.dbBytesRead).toBeGreaterThan(0);
   });
 
   it("reports the bytes a reconciliation read, growing with the ledger it loaded", async () => {
