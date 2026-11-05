@@ -177,24 +177,20 @@ without views.
 ## Pending-to-posted matching
 
 Automatic matching is reversible and provider-opted-in. A disappearing authorization
-retains its ID when a compatible new posted identity arrives in a fresh comparable
-capture. A unique witness preserves that opportunity when the posting first appears
-alongside the authorization or as comparable coverage establishes its absence.
-Later comparable absence and sufficient posted evidence can complete matching
-without relying on old similarity candidates. Changed facts, competitors or owner
-decisions invalidate witnesses; annotated postings require owner confirmation.
+can retain its ID when a compatible new posting arrives in a fresh comparable
+capture. A unique witness can preserve that opportunity until later evidence is
+usable. Changed facts, competitors or owner decisions invalidate witnesses.
 
-Both paths require equal purchase date, card and signed purchase money, verified
-bases and compatible roles. Shared code groups all plausible candidates before
-eligibility; provider evidence only narrows. Neither conversion nor guessed rates
-are used. Links retain evidence and reversibility but may misattribute expired
-authorizations to identical purchases. Same-capture twins may pair in fixed
-arbitrary order where allowed; delayed matching requires a singleton. Pending
-absence independently affects presence, never history or annotations. Unwitnessed
-existing rows stay reviewable. Linked authorizations accept fresh corrections
-without changing posted money or immutable link history; splitting restores both
-current components. A link commits `transaction.posted` and `transaction.linked`;
-creating a witness is not a financial transition.
+A unique first arrival can also link by exact merchant, date, card and signed
+purchase money, verified bases and compatible roles, when provider metadata differs. This heuristic does not prove
+identity: a canceled authorization and another identical purchase can be
+misattributed. Existing unwitnessed pairs remain reviewable. Ambiguous groups
+remain reviewable; no conversion or guessed rates are used.
+Same-capture twins may pair in fixed arbitrary order where allowed. Absence changes
+presence, never history or annotations. Linked authorizations accept corrections
+without changing posted money or link history; splitting restores both components.
+A link commits `transaction.posted` and `transaction.linked`; a witness alone
+does not.
 
 Owner decisions carry the current transaction and annotation versions and a
 reason ([API](api.md#pending-to-posted-matching)):

@@ -45,7 +45,11 @@ import {
   transactionContent,
 } from "../transaction-content.js";
 import { reviewState } from "./annotation.js";
-import { automaticPostingPairs, postingComponents } from "./auto-posting.js";
+import {
+  automaticPostingPairs,
+  exactMerchantPostingGroups,
+  postingComponents,
+} from "./auto-posting.js";
 import { purchaseResolver, resolveTransaction } from "./catalog.js";
 import { reconcileFinancialBundle } from "./financial-authority.js";
 import {
@@ -847,7 +851,10 @@ function planPostingContinuations({
   baseline,
   full,
 }: PostingContinuationOptions) {
-  const empty = new Map<TransactionFacts, Transaction>();
+  const empty = {
+    pairs: new Map<TransactionFacts, Transaction>(),
+    heuristic: new Set<TransactionFacts>(),
+  };
   if (!adapter.automaticPosting || result.historical || baseline) {
     return empty;
   }
@@ -944,19 +951,48 @@ function planPostingContinuations({
       group.posted.some((row) => newPosted.has(row as TransactionFacts)),
   );
   const pending = components.flatMap((group) => group.pending);
+  const completePending = pending.map(complete);
+  const completePosted = components
+    .flatMap((group) => group.posted)
+    .map(complete);
+  const disappearingComplete = new Map(
+    pending.flatMap((row) => {
+      const stored = "id" in row ? disappearing.get(row) : undefined;
+      return stored ? [[complete(row), full(stored)] as const] : [];
+    }),
+  );
   const { pairs } = automaticPostingPairs(
-    pending.map(complete),
-    components.flatMap((group) => group.posted).map(complete),
-    new Map(
-      pending.flatMap((row) => {
-        const stored = "id" in row ? disappearing.get(row) : undefined;
-        return stored ? [[complete(row), full(stored)] as const] : [];
-      }),
-    ),
+    completePending,
+    completePosted,
+    disappearingComplete,
     adapter.automaticPosting,
     newPosted,
   );
-  return pairs;
+  const heuristic = new Set<TransactionFacts>();
+  if (adapter.automaticPosting.exactNameHeuristic) {
+    const { pairs: exact } = automaticPostingPairs(
+      completePending,
+      completePosted,
+      disappearingComplete,
+      {
+        ...adapter.automaticPosting,
+        compatibleGroups: (pending, posted) =>
+          exactMerchantPostingGroups(
+            pending,
+            posted,
+            adapter.automaticPosting?.exactNameContradiction,
+          ),
+      },
+      newPosted,
+    );
+    for (const [posted, pending] of exact) {
+      if (!pairs.has(posted)) {
+        pairs.set(posted, pending);
+        heuristic.add(posted);
+      }
+    }
+  }
+  return { pairs, heuristic };
 }
 
 /** Same card, date and kind, with same-sign amounts in different currencies. */
@@ -2281,7 +2317,9 @@ export function planRun(
         };
       }
       const continuation =
-        !found && !absence.prior(input) ? continuations.get(input) : undefined;
+        !found && !absence.prior(input)
+          ? continuations.pairs.get(input)
+          : undefined;
       if (continuation) {
         // Retain an audit row without allocating a discovery identity or created event.
         recordPaymentContextConflicts(input, continuation.details);
@@ -2309,12 +2347,16 @@ export function planRun(
             expectedPendingAnnotationVersion:
               plan.annotation(continuation.id)?.version ?? 0,
             expectedPostedAnnotationVersion: 0,
-            reason: "Same-capture posting continuation",
+            reason: continuations.heuristic.has(input)
+              ? "Unique exact merchant, date, card and purchase amount heuristic"
+              : "Same-capture posting continuation",
             actor: "system",
           },
           now,
           {
-            policyVersion: RECONCILIATION_POLICY_VERSION,
+            policyVersion: continuations.heuristic.has(input)
+              ? "exact-unique-v1"
+              : RECONCILIATION_POLICY_VERSION,
             runId,
             capturedAt: response.capturedAt,
           },

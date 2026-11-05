@@ -49,8 +49,16 @@ export type FinancialAuthority =
 export interface AutomaticPostingCapability {
   pendingAmountBasis: TransactionInput["amountBasis"];
   postedAmountBasis: TransactionInput["amountBasis"];
+  /** Opt in to the unique exact-merchant first-arrival heuristic. */
+  exactNameHeuristic?: boolean;
   /**
-   * Pure source interpretation for a whole plausible component. Reject unknown
+   * Source roles the exact heuristic must not override. Missing metadata may
+   * relax `compatibleGroups`; a stated contradiction never does.
+   */
+  exactNameContradiction?(row: TransactionFacts): boolean;
+  /**
+   * Pure source interpretation for a whole plausible component, applied before
+   * the exact heuristic. Reject unknown
    * kinds/issues or insufficient source evidence unless explicitly supported by
    * the provider policy. Rejecting a member vetoes the component, never filters it.
    */

@@ -26,6 +26,7 @@ export const isracardAdapter: SourceAdapter = {
   sourceCoverage: { kind: "same_origin", statuses: ["pending"] },
   pendingPostingCandidates: true,
   automaticPosting: {
+    exactNameHeuristic: true,
     pendingAmountBasis: "authorization",
     postedAmountBasis: "purchase_commitment",
     compatibleGroups: compatibleIsracardPostingGroups,

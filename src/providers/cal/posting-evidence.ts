@@ -103,7 +103,6 @@ function rowEvidence(
     // Abroad and merchant ID may be missing (null), but not malformed.
     abroad === undefined ||
     merchantProviderId === undefined ||
-    // CAL type 8 is an installment even when its raw count is zero.
     sourceTypeCode === "8" ||
     paymentCount !== 0
   ) {
@@ -145,6 +144,17 @@ export function calPostingEvidence(
     )
     ? representative.evidence
     : null;
+}
+
+/** CAL type 8 is an installment even when its raw count is zero. */
+export function calInstallmentSource(
+  row: Pick<TransactionFacts, "details">,
+): boolean {
+  return currentSourceRows(row.details.provider.cal ?? {}).some(
+    (raw) =>
+      object(raw) &&
+      aliases(raw, ["trnTypeCode", "transactionTypeCode"], code) === "8",
+  );
 }
 
 /** NFC only: preserve case, punctuation, quotes and compatibility distinctions. */
