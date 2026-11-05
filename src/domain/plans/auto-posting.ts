@@ -168,9 +168,16 @@ export function automaticPostingPairs(
       }
       const annotations = disappearingPending.map((row) => {
         const data = annotationFor(row.id);
-        return meaningfulAnnotation(data)
-          ? canonicalJson(canonicalAnnotation(data!))
-          : null;
+        if (!meaningfulAnnotation(data)) {
+          return null;
+        }
+        // A review's financial version rebases with its row; only its verdict
+        // and basis distinguish twins.
+        const { review, ...owner } = canonicalAnnotation(data!);
+        return canonicalJson({
+          ...owner,
+          review: review && { status: review.status, basis: review.basis },
+        });
       });
       if (new Set(annotations).size !== 1) {
         continue;

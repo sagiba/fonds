@@ -410,8 +410,20 @@ describe.each(backends)("%s automatic posting and split", (backend) => {
     "identical notes",
     "canonical tags and metadata",
     "identical review",
+    "identical review at different financial versions",
   ])("still pairs twins when annotations are equivalent: %s", async (kind) => {
     await harness.capture(2, [authorization("p-b"), authorization("p-a")]);
+    if (kind.endsWith("versions")) {
+      await harness.capture(
+        2,
+        [
+          authorization("p-b"),
+          authorization("p-a", { description: "Synthetic correction" }),
+        ],
+        undefined,
+        { runId: "posting-2-correction", hour: "13" },
+      );
+    }
     const pending = await Promise.all(
       ["p-a", "p-b"].map((key) => harness.byKey(key)),
     );
@@ -426,7 +438,7 @@ describe.each(backends)("%s automatic posting and split", (backend) => {
         const patch: AnnotationPatch =
           kind === "identical notes"
             ? { notes: "Synthetic shared" }
-            : kind === "identical review"
+            : kind.startsWith("identical review")
               ? { review: { status: "approved" } }
               : {
                   tags: index ? ["b", "a"] : ["a", "b"],
@@ -457,6 +469,20 @@ describe.each(backends)("%s automatic posting and split", (backend) => {
         (event) => event.type === "transaction.posted",
       ),
     ).toHaveLength(2);
+    const events = await db.listEvents();
+    expect(await harness.capture(3, [row("s-b"), row("s-a")])).toMatchObject({
+      replayed: true,
+    });
+    expect(await db.listEvents()).toEqual(events);
+    expect(
+      await db.listTransactions({ connectionId: harness.connectionId }),
+    ).toHaveLength(2);
+    expect(
+      await db.listTransactions({
+        connectionId: harness.connectionId,
+        includeSuperseded: true,
+      }),
+    ).toHaveLength(4);
   });
 
   it("rolls back a differentiated twin review if audit persistence fails", async () => {
