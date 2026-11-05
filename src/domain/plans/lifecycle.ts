@@ -388,6 +388,7 @@ export function planPosting(
   input: z.input<typeof postingSchema>,
   now: string,
   automatic?: AutomaticPosting,
+  ownerPolicyVersion?: string,
 ): Transaction {
   const command = postingSchema.parse(input);
   // Both participants are written, so every check reads complete rows.
@@ -518,7 +519,10 @@ export function planPosting(
       ],
       postingLink: {
         schemaVersion: 1,
-        policyVersion: automatic?.policyVersion ?? "owner-confirmation-v1",
+        policyVersion:
+          automatic?.policyVersion ??
+          ownerPolicyVersion ??
+          "owner-confirmation-v1",
         automatic: automatic !== undefined,
         postedId: posted.id,
         pending: { ...pending, details: pendingDetails },

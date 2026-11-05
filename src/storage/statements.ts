@@ -256,7 +256,21 @@ export interface Statements<Db> {
     id: string,
     limit: number,
   ): PromiseLike<Pick<Run, "id" | "parserVersion">[]>;
+  repairLockConnectionOf(db: Db, id: string): PromiseLike<Connection[]>;
   planRows(db: Db, id: string, scope?: PlanScope): PromiseLike<PlanRow[]>;
+  repairLedgerRows(
+    db: Db,
+    id: string,
+    anchorId: string,
+    afterId: string | undefined,
+    limit: number,
+    fieldBytes: number,
+  ): PromiseLike<LedgerLoad[]>;
+  repairCompleteRows(
+    db: Db,
+    ids: string[],
+    fieldBytes: number,
+  ): PromiseLike<PlanRow[]>;
   /**
    * Narrow rows of the connection, every one or those `clauses` select, in
    * ingestion order.

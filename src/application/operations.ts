@@ -11,6 +11,11 @@ import {
   editShapeSchema,
   requireTransactionVersionForReview,
 } from "../domain/plans/annotation.js";
+import {
+  applyExactPostingRepairSchema,
+  previewExactPostingRepairSchema,
+  repairPairSchema,
+} from "../domain/plans/exact-posting-repair.js";
 import { postingSchema, removalSchema } from "../domain/plans/lifecycle.js";
 import type { CollectionRange } from "../domain/source-adapter.js";
 import {
@@ -611,6 +616,28 @@ const definitions = named({
     annotationWriteOutputSchema,
     "write",
   ),
+  preview_exact_posting_repair: define(
+    "Preview an owner-triggered heuristic for existing pending-to-posted pairs in one account and date range. A match is not proof of identity. At most 6,000 account rows (1,000 on D1) and 20 pairs are supported; field, byte and dependency limits also apply. Overflow fails without changes. Inspect the returned pairs before applying.",
+    previewExactPostingRepairSchema,
+    z
+      .object({
+        mode: z.literal("preview"),
+        pairs: z.array(repairPairSchema).max(20),
+      })
+      .strict(),
+    "read",
+  ),
+  apply_exact_posting_repair: define(
+    "Apply an owner-triggered exact pending-to-posted repair after inspecting its preview. Supply the complete returned pairs as expected; the repair fails without changes if the preview changed or bounds are exceeded. The returned pairs echo the accepted preview versions; reread records for current versions. Links retain audit history and can be unlinked.",
+    applyExactPostingRepairSchema,
+    z
+      .object({
+        mode: z.literal("apply"),
+        pairs: z.array(repairPairSchema).max(20),
+      })
+      .strict(),
+    "write",
+  ),
   link_pending_transaction: define(
     "Explicitly confirm that a pending transaction (transactionId, which survives) and a posted transaction (postedId, which is retired) are the same purchase. First get_transaction with detail=true for both and inspect their candidates and review reasons; then pass both transaction versions, both current annotation versions and a reason. Candidates suggest review, not proof of a pairing; review.truncated means the lists are incomplete, so never infer a unique pairing from a truncated list.",
     postingInputSchema,
@@ -977,6 +1004,20 @@ export function createApplication(
     undo_annotation: async (input) => ({
       annotation: presentAnnotationReceipt(await store.undoAnnotation(input)),
     }),
+    preview_exact_posting_repair: async (input) => {
+      const result = await store.repairExactPostings({
+        ...input,
+        mode: "preview",
+      });
+      return { mode: "preview" as const, pairs: result.pairs };
+    },
+    apply_exact_posting_repair: async (input) => {
+      const result = await store.repairExactPostings({
+        ...input,
+        mode: "apply",
+      });
+      return { mode: "apply" as const, pairs: result.pairs };
+    },
     link_pending_transaction: async (input) => {
       const row = await store.linkPendingTransaction(postingCommand(input));
       return { transaction: presentTransactionReceipt(row) };

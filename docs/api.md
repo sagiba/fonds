@@ -34,6 +34,8 @@ which runtimes offer refreshes.
 | `list_events`                                            | `GET /v1/events`                                                                     | Read   | Requires `connectionId`. [Event feed](#events).                                                                                                                                                    |
 | `update_annotation`                                      | `PATCH /v1/transactions/:id/annotation`                                              | Write  | [Partial update](#annotations), guarded by `expectedVersion`.                                                                                                                                      |
 | `undo_annotation`                                        | `POST /v1/annotations/undo`                                                          | Write  | Inputs `eventId` and `expectedVersion`.                                                                                                                                                            |
+| `preview_exact_posting_repair`                           | `POST /v1/transactions/:id/preview-exact-posting-repair`                             | Read   | Preview the owner-triggered heuristic. See [matching](#pending-to-posted-matching).                                                                                                                |
+| `apply_exact_posting_repair`                             | `POST /v1/transactions/:id/apply-exact-posting-repair`                               | Write  | Apply an inspected preview. See [matching](#pending-to-posted-matching).                                                                                                                           |
 | `link_pending_transaction`, `unlink_pending_transaction` | `POST /v1/transactions/:id/link-pending`, `POST /v1/transactions/:id/unlink-pending` | Write  | `:id` is the pending transaction, which survives. See [matching](#pending-to-posted-matching).                                                                                                     |
 | `confirm_removal`                                        | `POST /v1/transactions/:id/removal`                                                  | Write  | Needs a `reason` and `expectedTransactionVersion`. Absence from a capture is never enough.                                                                                                         |
 
@@ -585,6 +587,19 @@ corrected posted facts on the retained ID and keeps annotations where they are.
 Read both records before either action, because a truncated candidate list does
 not prove a unique pairing. When a match changes, billed lines that point at the
 retired purchase move to the surviving one in the same write.
+
+These repair operations offer an owner-triggered heuristic for existing records,
+not proof of identity. `transactionId` identifies any row in the account; `from` and
+`to` bound transaction dates. Call `preview_exact_posting_repair` with a `reason`, then
+inspect the returned `pairs`. To apply, call `apply_exact_posting_repair` and pass the complete
+returned array as `expected`. The operation rereads the account and refuses a
+changed preview, incompatible annotations, rejected pairs, ambiguous matches,
+or unsupported financial facts. It requires a source-confirmed absence for the
+pending record and a currently seen posted record. It fails without changes above 6,000 account
+rows (1,000 on D1) or 20 matching pairs. Projected fields over 2 KiB, hydrated
+fields over 16 KiB, and exceeded dependency or total-byte budgets also fail
+without changes. Each applied link retains evidence and audit history and can be unlinked. Apply echoes the accepted preview versions; reread records
+for current versions. Preview requires `financial:read`; apply requires `financial:write`.
 
 ## Annotations
 

@@ -5,6 +5,7 @@ import {
   desc,
   eq,
   getTableColumns,
+  gt,
   inArray,
   isNotNull,
   isNull,
@@ -26,6 +27,7 @@ import type {
   TransactionQuery,
 } from "../../application/query-inputs.js";
 import type { RefreshPageInput } from "../../application/refreshes.js";
+import { ConflictError } from "../../domain/errors.js";
 import type { RunHistoryDocument } from "../../domain/plans/run-history.js";
 import type { FinancialPlan } from "../../domain/plans/state.js";
 import type { Connection, ConnectionConfig } from "../../domain/records.js";
@@ -46,6 +48,8 @@ import {
   listColumns,
   planCondition,
   type PlanScope,
+  repairColumns,
+  repairOversized,
   totalsPartColumns,
   transactionFilter,
   transactionOrder,
@@ -137,6 +141,29 @@ export const connectionOfTransaction = (id: string) =>
   );
 export const lockConnectionOf = (db: Executor, id: string) =>
   db.select().from(schema.connections).where(connectionOfTransaction(id));
+/** Repair never reads or rewrites connection configuration. */
+export const repairLockConnectionOf = async (db: Executor, id: string) => {
+  const fields = {
+    id: schema.connections.id,
+    provider: schema.connections.provider,
+    displayName: schema.connections.displayName,
+    createdAt: schema.connections.createdAt,
+  };
+  const result = await db
+    .select({
+      ...repairColumns(fields, "sqlite", 2048),
+      oversized: repairOversized([{ columns: fields, limit: 2048 }], "sqlite"),
+    })
+    .from(schema.connections)
+    .where(connectionOfTransaction(id));
+  if (result.some((row) => row.oversized)) {
+    throw new ConflictError("Repair connection field exceeds byte limit");
+  }
+  return result.map(({ oversized: _oversized, ...row }) => ({
+    ...row,
+    config: { schemaVersion: 1 as const },
+  }));
+};
 export const connections = (db: Executor) =>
   db
     .select(connectionColumns(schema.connections))
@@ -734,6 +761,199 @@ export const ledgerRows = async (
     position: Number(input.position),
     annotation: input.annotation,
   }));
+/** Account facts are bounded by SQL CASE before the driver decodes any value. */
+export const repairLedgerRows = async (
+  db: Executor,
+  connectionId: string,
+  anchorId: string,
+  afterId: string | undefined,
+  limit: number,
+  fieldBytes: number,
+) => {
+  const row = ledgerColumns(schema.transactions);
+  const observation = {
+    lastSeenAt: schema.transactionObservations.lastSeenAt,
+    lastSeenRunId: schema.transactionObservations.lastSeenRunId,
+  };
+  const reconciliation = {
+    pendingPostingCandidates:
+      schema.transactionReconciliation.pendingPostingCandidates,
+    rejectedPostingKeys: schema.transactionReconciliation.rejectedPostingKeys,
+    postingOverlap: schema.transactionReconciliation.postingOverlap,
+    providerIdentity: schema.transactionReconciliation.providerIdentity,
+  };
+  const annotation = getTableColumns(schema.annotations);
+  const identity = {
+    sourceEvidence: schema.transactionReconciliation.sourceEvidence,
+    postingLink: schema.transactionPostingLinks.postingLink,
+  };
+  const groups = [
+    row,
+    observation,
+    reconciliation,
+    annotation,
+    { sourceEvidence: identity.sourceEvidence },
+  ].map((columns) => ({ columns, limit: fieldBytes }));
+  const safeIdentity = repairColumns(
+    { sourceEvidence: identity.sourceEvidence },
+    "sqlite",
+    fieldBytes,
+  );
+  const flags = ledgerFlags({
+    ...identity,
+    sourceEvidence: safeIdentity.sourceEvidence,
+    provider: schema.transactions.provider,
+  });
+  const result = await db
+    .select({
+      row: repairColumns(row, "sqlite", fieldBytes),
+      position: sql<number>`transactions.rowid`,
+      observation: repairColumns(observation, "sqlite", fieldBytes),
+      reconciliation: repairColumns(reconciliation, "sqlite", fieldBytes),
+      flags: {
+        ...flags,
+        providerIdentityMentions: sql<number>`0`.mapWith(Number),
+        providerEscapes: sql<number>`0`.mapWith(Number),
+      },
+      annotation: repairColumns(annotation, "sqlite", fieldBytes),
+      missing:
+        sql<number>`case when ${schema.transactionObservations.transactionId} is null or ${schema.transactionReconciliation.transactionId} is null or ${schema.transactionPostingLinks.transactionId} is null then 1 else 0 end`.mapWith(
+          Number,
+        ),
+      oversized: repairOversized(groups, "sqlite"),
+    })
+    .from(schema.transactions)
+    .leftJoin(
+      schema.transactionObservations,
+      eq(schema.transactionObservations.transactionId, schema.transactions.id),
+    )
+    .leftJoin(
+      schema.transactionReconciliation,
+      eq(
+        schema.transactionReconciliation.transactionId,
+        schema.transactions.id,
+      ),
+    )
+    .leftJoin(
+      schema.transactionPostingLinks,
+      eq(schema.transactionPostingLinks.transactionId, schema.transactions.id),
+    )
+    .leftJoin(
+      schema.annotations,
+      eq(schema.annotations.transactionId, schema.transactions.id),
+    )
+    .where(
+      and(
+        planCondition(schema.transactions, connectionId, {
+          accountOf: anchorId,
+        }),
+        afterId === undefined ? undefined : gt(schema.transactions.id, afterId),
+      ),
+    )
+    .orderBy(asc(schema.transactions.id))
+    .limit(limit);
+  if (result.some((item) => item.missing)) {
+    throw new ConflictError(
+      "Repair account contains incomplete transaction records",
+    );
+  }
+  if (result.some((item) => item.oversized)) {
+    throw new ConflictError("Repair narrow field exceeds byte limit");
+  }
+  return result.map((item) => {
+    if (!item.observation || !item.reconciliation) {
+      throw new ConflictError(
+        "Repair account contains incomplete transaction records",
+      );
+    }
+    return {
+      ...decodeLedgerRow(
+        {
+          ...item,
+          observation: item.observation,
+          reconciliation: item.reconciliation,
+        },
+        connectionId,
+      ),
+      position: Number(item.position),
+      annotation: item.annotation?.transactionId ? item.annotation : null,
+    };
+  });
+};
+
+/** Complete demands use a separate per-field bound before decoding. */
+export const repairCompleteRows = async (
+  db: Executor,
+  ids: string[],
+  fieldBytes: number,
+) => {
+  const row = transactionColumns;
+  const observation = getTableColumns(schema.transactionObservations);
+  const reconciliation = getTableColumns(schema.transactionReconciliation);
+  const posting = getTableColumns(schema.transactionPostingLinks);
+  const annotation = getTableColumns(schema.annotations);
+  const groups = [row, observation, reconciliation, posting, annotation].map(
+    (columns) => ({ columns, limit: fieldBytes }),
+  );
+  const result = await db
+    .select({
+      row: repairColumns(row, "sqlite", fieldBytes),
+      observation: repairColumns(observation, "sqlite", fieldBytes),
+      reconciliation: repairColumns(reconciliation, "sqlite", fieldBytes),
+      posting: repairColumns(posting, "sqlite", fieldBytes),
+      annotation: repairColumns(annotation, "sqlite", fieldBytes),
+      missing:
+        sql<number>`case when ${schema.transactionObservations.transactionId} is null or ${schema.transactionReconciliation.transactionId} is null or ${schema.transactionPostingLinks.transactionId} is null then 1 else 0 end`.mapWith(
+          Number,
+        ),
+      oversized: repairOversized(groups, "sqlite"),
+    })
+    .from(schema.transactions)
+    .leftJoin(
+      schema.transactionObservations,
+      eq(schema.transactionObservations.transactionId, schema.transactions.id),
+    )
+    .leftJoin(
+      schema.transactionReconciliation,
+      eq(
+        schema.transactionReconciliation.transactionId,
+        schema.transactions.id,
+      ),
+    )
+    .leftJoin(
+      schema.transactionPostingLinks,
+      eq(schema.transactionPostingLinks.transactionId, schema.transactions.id),
+    )
+    .leftJoin(
+      schema.annotations,
+      eq(schema.annotations.transactionId, schema.transactions.id),
+    )
+    .where(inArray(schema.transactions.id, ids));
+  if (result.some((item) => item.missing)) {
+    throw new ConflictError(
+      "Repair account contains incomplete transaction records",
+    );
+  }
+  if (result.some((item) => item.oversized)) {
+    throw new ConflictError("Repair hydrated field exceeds byte limit");
+  }
+  return result.map((item) => {
+    if (!item.observation || !item.reconciliation || !item.posting) {
+      throw new ConflictError(
+        "Repair account contains incomplete transaction records",
+      );
+    }
+    return {
+      row: decodeTransaction({
+        ...item,
+        observation: item.observation,
+        reconciliation: item.reconciliation,
+        posting: item.posting,
+      }),
+      annotation: item.annotation?.transactionId ? item.annotation : null,
+    };
+  });
+};
 /** IDs of the connection's rows that `clauses` select, in no particular order. */
 export const ledgerIds = (
   db: Executor,
