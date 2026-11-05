@@ -32,8 +32,8 @@
   "docs/providers/isracard.md": 1213,
   "docs/reference-models.md": 880,
   "docs/security-model.md": 956,
-  "src/providers/cal/source-notes.md": 2682,
-  "src/providers/isracard/source-notes.md": 3578,
+  "src/providers/cal/source-notes.md": 2690,
+  "src/providers/isracard/source-notes.md": 3586,
   "tests/providers/cal/fixtures/README.md": 469,
   "tests/providers/isracard/fixtures/README.md": 476
 }

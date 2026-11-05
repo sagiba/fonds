@@ -8,13 +8,14 @@ import {
   transactionDetailOutputSchema,
 } from "../../src/application/wire-output.js";
 import type { TransactionInput } from "../../src/domain/model.js";
-import {
-  settledMerchantMatch,
-  settlementCompetitor,
-} from "../../src/domain/plans/posting-settlement.js";
+import { settlementCompetitor } from "../../src/domain/plans/posting-settlement.js";
 import type { LedgerRow } from "../../src/domain/plans/state.js";
 import type { SourceAdapter } from "../../src/domain/source-adapter.js";
-import { calSettlementPolicy } from "../../src/providers/cal/posting-evidence.js";
+import {
+  calSettledMerchant,
+  calSettlementPolicy,
+} from "../../src/providers/cal/posting-evidence.js";
+import { settledIsracardMerchant } from "../../src/providers/isracard/posting-evidence.js";
 import {
   authorization,
   postingAdapter,
@@ -39,6 +40,7 @@ const settled: SourceAdapter = {
     exactNameHeuristic: false,
     compatibleGroups: () => false,
     settledHeuristic: {
+      sameMerchant: calSettledMerchant,
       compatiblePair: (pending, posted) =>
         [pending, posted].every((r) =>
           r.details.issues.every((i) =>
@@ -59,34 +61,77 @@ const unknown = (fields: Partial<TransactionInput> = {}) => {
   return result;
 };
 
-describe("settled merchant comparison", () => {
+describe("CAL settled merchant comparison", () => {
   it.each([
     ["case and spacing", "  Synthetic   River Store ", "SYNTHETIC RIVER STORE"],
-    ["a location suffix", "EXAMPLE RIDE PASS LISBON PRT", "Example Ride Pass"],
-    ["one short token", "RIVERPAY >lisbon PRT", "RIVERPAY"],
     [
-      "a repeated terminal token",
-      "PAYMENT EX RIVER LTD EX",
-      "PAYMENT EX RIVER LTD",
+      "a location ending in a country",
+      "EXAMPLE RIDE PASS LISBON PRT",
+      "EXAMPLE RIDE PASS",
     ],
+    ["one short token", "RIVERPAY >lisbon PRT", "RIVERPAY"],
+    ["a mixed-case location", "Example One Lisbon PRT", "Example One"],
     [
       "a name cut at the source length",
+      "EXAMPLE MARKETPLACE FOR T",
+      "EXAMPLE MARKETPLACE FOR TICKETS",
+    ],
+  ])("accepts %s", (_label, pending, posted) => {
+    expect(calSettledMerchant(pending, posted)).toBe(true);
+  });
+  it.each([
+    ["another business sharing a first word", "ACE", "ACE CAFE"],
+    ["the same, the other way round", "ACE CAFE", "ACE"],
+    ["a subscription product", "EXAMPLE ONE FAMILY", "EXAMPLE ONE"],
+    ["a suffix that is no country", "EXAMPLE SHOP XQZ", "EXAMPLE SHOP"],
+    [
+      "a location on the posted name",
+      "EXAMPLE SHOP",
+      "EXAMPLE SHOP LISBON PRT",
+    ],
+    [
+      "a cut one short of the length",
+      "EXAMPLE MARKETPLACE FOR ",
+      "EXAMPLE MARKETPLACE FOR TICKETS",
+    ],
+    [
+      "a longer prefix",
       "EXAMPLE MARKETPLACE FOR TI",
       "EXAMPLE MARKETPLACE FOR TICKETS",
     ],
-  ])("accepts %s", (_label, left, right) => {
-    expect(settledMerchantMatch(left, right)).toBe(true);
-    expect(settledMerchantMatch(right, left)).toBe(true);
-  });
-  it.each([
     ["different words", "River Shop", "Shop River"],
-    ["a prefix inside a word", "RIVERSIDE CAFE", "RIVER"],
-    ["a short cut name", "EXAMPLE MARK", "EXAMPLE MARKET"],
-    ["too little to identify", "AB CAFE", "AB"],
     ["punctuation only", "---", "---"],
     ["an unknown name", null, "Example"],
-  ])("rejects %s", (_label, left, right) => {
-    expect(settledMerchantMatch(left, right)).toBe(false);
+  ])("rejects %s", (_label, pending, posted) => {
+    expect(calSettledMerchant(pending, posted)).toBe(false);
+  });
+});
+
+describe("Isracard settled merchant comparison", () => {
+  it.each([
+    ["the processor mark", "PAYPAL *EX RIVER LTD", "PAYPAL EX RIVER LTD"],
+    [
+      "a repeated terminal token",
+      "PAYPAL *EX RIVER LTD EX",
+      "PAYPAL  EX RIVER LTD",
+    ],
+  ])("accepts %s", (_label, pending, posted) => {
+    expect(settledIsracardMerchant(pending, posted)).toBe(true);
+  });
+  it.each([
+    ["a prefix", "ACE", "ACE CAFE"],
+    [
+      "a different terminal token",
+      "PAYPAL EX RIVER LTD UK",
+      "PAYPAL EX RIVER LTD",
+    ],
+    [
+      "a token repeated on the posted name",
+      "PAYPAL EX RIVER LTD",
+      "PAYPAL EX RIVER LTD EX",
+    ],
+  ])("rejects %s", (_label, pending, posted) => {
+    expect(settledIsracardMerchant(pending, posted)).toBe(false);
   });
 });
 
@@ -120,6 +165,23 @@ describe("settlement competitors", () => {
     expect(
       settlementCompetitor(
         { ...candidate, merchantName: null },
+        pending,
+        posted,
+        same,
+      ),
+    ).toBe(true);
+  });
+  it("treats a visible reversal as a rival only under the same or an unknown name", () => {
+    const reversal = {
+      ...candidate,
+      currency: pending.currency,
+      amountMinor: -pending.amountMinor!,
+    };
+    const same = (name: string | null) => name === "Merchant";
+    expect(settlementCompetitor(reversal, pending, posted, same)).toBe(false);
+    expect(
+      settlementCompetitor(
+        { ...reversal, merchantName: "Merchant" },
         pending,
         posted,
         same,
@@ -353,6 +415,53 @@ describe.each(backends)("%s settled identity heuristic", (backend) => {
       expect((await h.byKey("posted")).id).toBe(pending.id);
     },
   );
+  it("does not link a different business that shares a first word", async () => {
+    await h.capture(
+      2,
+      [authorization("pending", { merchantName: "ACE" })],
+      settled,
+    );
+    const pending = await h.byKey("pending");
+    const cafe = { merchantName: "ACE CAFE", transactionDate: "2040-07-02" };
+    await h.capture(3, [unknown(cafe)], settled);
+    await h.capture(5, [unknown(cafe)], settled);
+    await noLink(pending.id);
+    expect((await clock(pending.id))?.settlement).toBeUndefined();
+  });
+  it("does not link when a refund of the money is visible", async () => {
+    await h.capture(2, [authorization()], settled);
+    const pending = await h.byKey("pending");
+    const refund = row("refund", {
+      kind: "refund",
+      amountMinor: 100,
+      transactionDate: "2040-07-03",
+    });
+    await h.capture(3, [unknown(), refund], settled);
+    await h.capture(5, [unknown(), refund], settled);
+    await noLink(pending.id);
+  });
+  it("leaves authorizations a day apart unpaired, annotated or not", async () => {
+    await h.capture(
+      2,
+      [
+        authorization("first"),
+        authorization("second", { transactionDate: "2040-07-02" }),
+      ],
+      settled,
+    );
+    const first = await h.byKey("first");
+    const second = await h.byKey("second");
+    await db.editAnnotation({
+      transactionId: first.id,
+      expectedVersion: 0,
+      notes: "Synthetic note",
+    });
+    const later = { transactionDate: "2040-07-02" };
+    await h.capture(3, [unknown(later)], settled);
+    await h.capture(5, [unknown(later)], settled);
+    await noLink(first.id);
+    expect((await db.getTransaction(second.id))!.status).toBe("pending");
+  });
   it("does not link across two days", async () => {
     await h.capture(2, [authorization()], settled);
     const pending = await h.byKey("pending");

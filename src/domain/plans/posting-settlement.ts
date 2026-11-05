@@ -19,8 +19,6 @@ export const SETTLEMENT_HORIZON_DAYS = 40;
 export const SETTLEMENT_MAX_ROWS = 2000;
 export const SETTLEMENT_EVIDENCE_BYTES = 65536;
 
-/** Length at which an observed source cut a merchant name mid-word. */
-const CUT_NAME_LENGTH = 25;
 const SETTLEMENT_COMPARISON = "merchant-variant-v1";
 
 export const SETTLED_POSTING_MODES = ["off", "on"] as const;
@@ -56,35 +54,14 @@ export const settlementScanStart = (capturedAt: string) =>
 
 type Policy = NonNullable<AutomaticPostingCapability["settledHeuristic"]>;
 
-/**
- * A heuristic comparison, never evidence of issuer identity or financial role.
- * Sources append a location to one presentation or cut the other short, so a
- * name may be a whole-word prefix of the other, or a prefix at the cut length.
- */
-export function settledMerchantMatch(
-  left: string | null,
-  right: string | null,
-): boolean {
-  const normalize = (name: string | null) =>
-    name
-      ?.normalize("NFC")
-      .replace(/\p{White_Space}+/gu, " ")
-      .trim()
-      .toUpperCase();
-  const a = normalize(left);
-  const b = normalize(right);
-  if (!a || !b) {
-    return false;
-  }
-  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
-  if ((shorter.match(/[\p{L}\p{N}]/gu) ?? []).length < 3) {
-    return false;
-  }
-  return (
-    shorter === longer ||
-    longer.startsWith(`${shorter} `) ||
-    (shorter.length >= CUT_NAME_LENGTH && longer.startsWith(shorter))
-  );
+/** Case and spacing never distinguish a merchant; `null` when nothing identifies one. */
+export function merchantPresentation(name: string | null): string | null {
+  const value = name
+    ?.normalize("NFC")
+    .replace(/\p{White_Space}+/gu, " ")
+    .trim()
+    .toUpperCase();
+  return value && /[\p{L}\p{N}]/u.test(value) ? value : null;
 }
 
 export function settlementEligible(row: LedgerRow): boolean {
@@ -113,7 +90,7 @@ type Competitor = Omit<SettlementContender, "hydrationSafe">;
 
 /**
  * Unknown fields cannot place a row outside the candidate's neighborhood. A row
- * in another currency could still be this purchase only under the same name.
+ * in another currency, or reversing this money, matters only under the same name.
  */
 export function settlementCompetitor(
   row: Competitor,
@@ -156,7 +133,12 @@ export function settlementCompetitor(
   ) {
     return true;
   }
+  // A visible reversal of this money means the authorization may have ended there.
+  const reversal =
+    row.currency === pending.currency &&
+    row.amountMinor === -pending.amountMinor!;
   const foreign =
+    reversal ||
     row.currency !== pending.currency ||
     (row.originalCurrency !== null &&
       row.originalCurrency !== pending.currency);
@@ -198,10 +180,6 @@ export function postingSettlementPairs(
   const old = new Set(before.map((row) => row.id));
   const safe = (row: LedgerRow) =>
     old.has(row.id) ? safety.get(row.id) === true : !isNarrow(row);
-  const merchant = (name: string | null) =>
-    policy.merchantName ? policy.merchantName(name) : name;
-  const sameMerchant = (left: string | null, right: string | null) =>
-    settledMerchantMatch(merchant(left), merchant(right));
   // Names are rechecked on every run: enrichment may legitimately re-present one.
   const fingerprint = (row: LedgerRow) =>
     canonicalJson([
@@ -248,7 +226,7 @@ export function postingSettlementPairs(
         pending.currency === posted.currency &&
         safe(pending) &&
         safe(posted) &&
-        sameMerchant(pending.merchantName, posted.merchantName),
+        policy.sameMerchant(pending.merchantName, posted.merchantName),
     );
     const posted = candidates.length === 1 ? candidates[0] : undefined;
     const usable =
@@ -263,7 +241,7 @@ export function postingSettlementPairs(
       !meaningfulAnnotation(plan.annotation(posted.id)?.data) &&
       ![...scanned, ...before, ...rows].some((row) =>
         settlementCompetitor(row, pending, posted, (name) =>
-          sameMerchant(name, pending.merchantName),
+          policy.sameMerchant(pending.merchantName, name),
         ),
       ) &&
       policy.compatiblePair(plan.full(pending), plan.full(posted));

@@ -304,7 +304,8 @@ money unknown.
   timestamps, wallet descriptions, billing dates, posted-only IDs and the
   first-payment equality are not gates. The equalities are observations, not
   issuer invariants; type 8 and differing merchant IDs veto exact and settled
-  matches. Pending names can gain a location or be cut at 25 characters.
+  matches. Settled names may differ by a pending location ending in a country code,
+  or a pending name cut at 25 characters.
 - **Checks:** [posting evidence tests]; [auto posting].
 
 [auto posting]: ../../../tests/storage/auto-posting.test.ts

@@ -97,9 +97,9 @@ describe("Isracard settled unknown identity policy", () => {
       amountMinor: -1250,
     });
     expect(compatibleIsracardSettledPair(pending, posted)).toBe(true);
-    expect(settledIsracardMerchant(pending.merchantName)).toBe(
-      "PAYPAL EX RIVER STORE",
-    );
+    expect(
+      settledIsracardMerchant(pending.merchantName, posted.merchantName),
+    ).toBe(true);
   });
   it.each([
     ["different stated money", { dealSum: "13.00" }],

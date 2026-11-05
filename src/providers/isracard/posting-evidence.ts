@@ -1,5 +1,6 @@
 import type { JsonObject, TransactionFacts } from "../../domain/model.js";
 import { decimalToMinor } from "../../domain/money.js";
+import { merchantPresentation } from "../../domain/plans/posting-settlement.js";
 import { currentSourceRows } from "../../domain/provider-evidence.js";
 import { isracardEvidenceGeneration } from "./evidence.js";
 import { legacyCurrency } from "./extract.js";
@@ -170,15 +171,32 @@ export function compatibleIsracardPostingGroups(
   return name !== null && name === postedMerchant(purchase);
 }
 
-/** Processor presentation only; no submerchant token or punctuation is removed. */
-export function settledIsracardMerchant(name: string | null): string | null {
+/**
+ * Observed processor presentation: an approval writes `PAYPAL *` and may repeat
+ * the merchant's short first token at its end. No other token is removed.
+ */
+export function settledIsracardMerchant(
+  pending: string | null,
+  posted: string | null,
+): boolean {
+  const presented = (name: string | null) =>
+    merchantPresentation(name)?.replace(/^PAYPAL\s*\*\s*/u, "PAYPAL ") ?? null;
+  const shortened = (name: string) => {
+    const tokens = name.split(" ");
+    const last = tokens.pop()!;
+    return tokens.length >= 4 &&
+      new Set(tokens).size >= 4 &&
+      /^[\p{L}\p{N}]{2,4}$/u.test(last) &&
+      tokens.includes(last)
+      ? tokens.join(" ")
+      : undefined;
+  };
+  const left = presented(pending);
+  const right = presented(posted);
   return (
-    name
-      ?.normalize("NFC")
-      .replace(/\p{White_Space}+/gu, " ")
-      .trim()
-      .toUpperCase()
-      .replace(/^PAYPAL\s*\*\s*/u, "PAYPAL ") ?? null
+    left !== null &&
+    right !== null &&
+    (left === right || shortened(left) === right)
   );
 }
 
@@ -297,5 +315,5 @@ export function compatibleIsracardSettledPair(
 /** Applies only where the deployment enables settled posting. */
 export const isracardSettlementPolicy = {
   compatiblePair: compatibleIsracardSettledPair,
-  merchantName: settledIsracardMerchant,
+  sameMerchant: settledIsracardMerchant,
 };

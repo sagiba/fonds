@@ -181,8 +181,8 @@ generations; a fresh component replaces its earlier evidence.
 - **Continuation policy:** No shared approval/voucher ID is demonstrated. The
   [shared heuristic][matching-design] requires a unique approval and
   verified purchase. Optional settlement preserves unknown legacy facts, not proof of issuer identity
-  or posted completeness. Normalization preserves submerchant punctuation; the shared
-  comparison judges name variants. A local-currency row can sit in the abroad section
+  or posted completeness. Names match after the `PAYPAL *` mark and a repeated
+  short terminal token; no other token is removed. A local-currency row can sit in the abroad section
   with `Outbound` fields, and domestic rows label the currency in Hebrew. A refresh's last-month capture
   states no pending coverage and is neutral. Canceled approvals and identical
   purchases can be misattributed.
