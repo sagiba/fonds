@@ -72,8 +72,13 @@ A client checks a refresh's outcome with `get_connection`.
 
 A notification says records changed. The receiving assistant or application
 must fetch and interpret them: a change may be a new transaction, a correction
-or an annotation, not necessarily another purchase. Notification timing depends
-on refresh and delivery schedules, not the time you used your card.
+or an annotation, not necessarily another purchase. Pending and posted observations
+may overlap or arrive with a gap. Before announcing new spending, check current
+link evidence and whether the pending observation was already reported. Report a
+confirmed continuation as a status update; qualify an unresolved candidate rather
+than asserting a second purchase or silently suppressing it. Retain delivery
+checkpoints separately from transaction identity. Notification timing depends on
+refresh and delivery schedules, not the time you used your card.
 
 Local stdio clients can read, annotate and refresh, but cannot create Events
 subscriptions. See [local refresh and Events](local-setup.md#refresh-and-events-on-the-server)
