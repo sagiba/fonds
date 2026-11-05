@@ -178,9 +178,10 @@ without views.
 
 Automatic matching is a reversible provider opt-in. A disappearing authorization
 retains its ID when a compatible new posted identity arrives in a fresh comparable
-capture. A unique observed overlap can preserve that opportunity: posting arrives
-later, both coexist, and a durable witness fixes attribution facts. Later
-comparable absence with sufficient posted evidence can complete matching without
+capture. A unique fresh witness can preserve that opportunity when the posting
+first appears alongside the authorization or as comparable coverage shows its
+absence. A later comparable capture with authorization absence and sufficient
+posted evidence can complete matching without
 relying on old similarity candidates. Changed facts, competitors or owner
 decisions invalidate witnesses; annotated posted rows require owner confirmation.
 
