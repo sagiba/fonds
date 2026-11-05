@@ -22,6 +22,7 @@ export const calAdapter: SourceAdapter = {
   normalizeScope: normalizeCalScope,
   pendingPostingCandidates: true,
   automaticPosting: {
+    exactNameHeuristic: true,
     compatibleGroups: compatibleCalPostingGroups,
     pendingAmountBasis: "authorization",
     postedAmountBasis: "purchase_commitment",

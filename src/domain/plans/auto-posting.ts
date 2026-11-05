@@ -168,3 +168,37 @@ export function automaticPostingPairs(
   }
   return { pairs };
 }
+
+/** Exact identity heuristic: conflicting or unknown financial semantics remain reviewable. */
+export function exactMerchantPostingGroups(
+  pending: readonly TransactionFacts[],
+  posted: readonly TransactionFacts[],
+): boolean {
+  if (pending.length !== 1 || posted.length !== 1) {
+    return false;
+  }
+  const left = pending[0]!;
+  const right = posted[0]!;
+  const normalized = (name: string | null) =>
+    name
+      ?.normalize("NFC")
+      .replace(/\p{White_Space}+/gu, " ")
+      .trim();
+  const name = normalized(left.merchantName);
+  return (
+    !!name &&
+    /[\p{L}\p{N}]/u.test(name) &&
+    name === normalized(right.merchantName) &&
+    (left.kind === "unknown" || left.kind === "purchase") &&
+    right.kind === "purchase" &&
+    left.installmentNumber === null &&
+    right.installmentNumber === null &&
+    [left, right].every((row) =>
+      row.details.issues.every(
+        (issue) =>
+          issue === "possible_pending_posted_match" ||
+          issue === "source_derived_amount_direction",
+      ),
+    )
+  );
+}

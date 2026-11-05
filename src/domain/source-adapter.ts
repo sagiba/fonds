@@ -49,6 +49,8 @@ export type FinancialAuthority =
 export interface AutomaticPostingCapability {
   pendingAmountBasis: TransactionInput["amountBasis"];
   postedAmountBasis: TransactionInput["amountBasis"];
+  /** Opt in to the unique exact-merchant first-arrival heuristic. */
+  exactNameHeuristic?: boolean;
   /**
    * Pure source interpretation for a whole plausible component. Reject unknown
    * kinds/issues or insufficient source evidence unless explicitly supported by
