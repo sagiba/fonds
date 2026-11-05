@@ -551,8 +551,8 @@ takes the posted facts, and the posted row is retired with `supersededById`. The
 match is one-to-one. Pending absence is independent: use `status=pending` and
 `presence=current` for retained authorizations without proven absence; explicit
 states and `all` expose history.
-Pending rows never enter spending totals. A witnessed overlap can link after later
-absence and sufficient evidence, but an annotated posted row requires owner review;
+Pending rows never enter spending totals. A witnessed posting arrival can link after
+later absence and sufficient evidence, but an annotated posted row requires owner review;
 automatic links never move annotation documents. Only providers that opt in take part (each provider guide
 says whether it does), and billed lines are never matched or linked. Shared
 safeguards govern every match; provider evidence can only narrow eligibility.

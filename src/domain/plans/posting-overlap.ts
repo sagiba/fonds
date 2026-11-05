@@ -174,6 +174,9 @@ export function postingOverlapPairs({
     if (
       !fresh ||
       !witness ||
+      // The capture that creates a witness never spends it: same-capture
+      // continuation owns that decision, including its sibling guards.
+      witness.runId === runId ||
       !validWitness(witness.runId, witness.capturedAt) ||
       !observed(posted!) ||
       !absent(pending) ||
