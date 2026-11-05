@@ -210,7 +210,8 @@ refresh. `refresh` calls the provider and prints a
 `list-refreshes` keeps individual results. Without dates it rereads recent data;
 `--from`/`--to` request backfill. Applying a capture reads the rows within
 `FONDS_SYNC_SCOPE_DAYS` (default 40, at most 3660) of its requested dates
-([scope](../design.md#collection-and-evidence)). `--credentials-fd`, `--history-mode`,
+([scope](../design.md#collection-and-evidence)); `FONDS_SETTLED_POSTING`
+[enables](hosted-service.md#configuration) delayed matching. `--credentials-fd`, `--history-mode`,
 `--search-window-months` and `--call-budget` need `--connection`. Without stored
 credentials it prompts secretly or reads the private descriptor; provider guides
 list the fields.

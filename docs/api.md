@@ -34,6 +34,8 @@ which runtimes offer refreshes.
 | `list_events`                                            | `GET /v1/events`                                                                     | Read   | Requires `connectionId`. [Event feed](#events).                                                                                                                                                    |
 | `update_annotation`                                      | `PATCH /v1/transactions/:id/annotation`                                              | Write  | [Partial update](#annotations), guarded by `expectedVersion`.                                                                                                                                      |
 | `undo_annotation`                                        | `POST /v1/annotations/undo`                                                          | Write  | Inputs `eventId` and `expectedVersion`.                                                                                                                                                            |
+| `preview_exact_posting_repair`                           | `POST /v1/transactions/:id/preview-exact-posting-repair`                             | Read   | Preview the owner-triggered heuristic. See [matching](#pending-to-posted-matching).                                                                                                                |
+| `apply_exact_posting_repair`                             | `POST /v1/transactions/:id/apply-exact-posting-repair`                               | Write  | Apply an inspected preview. See [matching](#pending-to-posted-matching).                                                                                                                           |
 | `link_pending_transaction`, `unlink_pending_transaction` | `POST /v1/transactions/:id/link-pending`, `POST /v1/transactions/:id/unlink-pending` | Write  | `:id` is the pending transaction, which survives. See [matching](#pending-to-posted-matching).                                                                                                     |
 | `confirm_removal`                                        | `POST /v1/transactions/:id/removal`                                                  | Write  | Needs a `reason` and `expectedTransactionVersion`. Absence from a capture is never enough.                                                                                                         |
 
@@ -550,7 +552,8 @@ matched conservatively and reversibly. The pending transaction keeps its ID and
 takes the posted facts, and the posted row is retired with `supersededById`. The
 match is one-to-one. Pending absence is independent: use `status=pending` and
 `presence=current` for retained authorizations without proven absence; explicit
-states and `all` expose history.
+states and `all` expose history. An inferred match whose authorization returns stays
+matched and keeps the review reason `linked_authorization_returned` until unlinked.
 Pending rows never enter spending totals. A witnessed posting arrival can link after
 later absence and sufficient evidence, but an annotated posted row requires owner review;
 automatic links never move annotation documents. Only providers that opt in take part (each provider guide
@@ -566,8 +569,10 @@ without claiming that the authorization stated its kind. The
 | Field                     | Meaning                                                               |
 | ------------------------- | --------------------------------------------------------------------- |
 | `supersededTransactionId` | The retired posted row.                                               |
-| `automatic`               | Matched by the service rather than confirmed by the owner.            |
+| `automatic`               | Matched by the service. False without `heuristic`: owner-confirmed.   |
 | `policyVersion`           | The policy that decided it.                                           |
+| `heuristic`               | True when the match rests on similarity, including owner-run repair.  |
+| `settlement`              | `{startedAt, comparison, observedLedgerOnly}` for a settlement match. |
 | `evidence`                | `{runId, capturedAt}` of the deciding capture, or null.               |
 | `unlinked`                | The owner split the pair, so it is never matched automatically again. |
 
@@ -585,6 +590,20 @@ corrected posted facts on the retained ID and keeps annotations where they are.
 Read both records before either action, because a truncated candidate list does
 not prove a unique pairing. When a match changes, billed lines that point at the
 retired purchase move to the surviving one in the same write.
+
+These repair operations offer an owner-triggered heuristic for existing records,
+not proof of identity. `transactionId` identifies any row in the account; `from` and
+`to` bound transaction dates. Call `preview_exact_posting_repair` with a `reason`, then
+inspect the returned `pairs`. To apply, call `apply_exact_posting_repair` and pass the complete
+returned array as `expected`. The operation rereads the account and refuses a
+changed preview, incompatible annotations, rejected pairs, ambiguous matches,
+or unsupported financial facts. It requires a source-confirmed absence for the
+pending record and a currently seen posted record that arrived after it. Applied
+links are `heuristic`, carry null `evidence` and leave approvals stale. It fails without changes above 6,000 account
+rows (1,000 on D1) or 20 matching pairs. Projected fields over 2 KiB (the refusal
+names the row), hydrated fields over 16 KiB, and exceeded dependency or total-byte
+budgets also fail without changes, with a stated refusal. Each applied link keeps audit history and can be unlinked. Apply echoes the accepted preview versions; reread records
+for current versions. Preview requires `financial:read`; apply requires `financial:write`.
 
 ## Annotations
 
@@ -656,6 +675,7 @@ values. `summary` appears on `sync.baseline` events as `{transactionCount, histo
 | `sync.partial`, `sync.failed`, `sync.recovered`                    | Sync run health.                                                                                                                    |
 | `transaction.imported`                                             | A discovery from an initial, historical or stale capture, or already contradicted by newer authoritative absence. Not new spending. |
 | `transaction.created`                                              | A discovery from a later fresh recent-window refresh, without newer authoritative absence.                                          |
+| `transaction.posting_candidate`                                    | A discovery that may continue an authorization already seen. Not a link, and not proof of new spending or of its absence.           |
 | `transaction.updated`                                              | A versioned field changed.                                                                                                          |
 | `transaction.posted`, `transaction.linked`, `transaction.unlinked` | Pending-to-posted transitions.                                                                                                      |
 | `transaction.removed`                                              | The owner confirmed removal.                                                                                                        |

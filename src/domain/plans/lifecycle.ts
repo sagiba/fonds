@@ -80,6 +80,8 @@ export const removalSchema = z
   .strict();
 
 const matchIssue = "possible_pending_posted_match";
+/** An inferred link's authorization came back: the inference needs review. */
+export const LINKED_AUTHORIZATION_RETURNED = "linked_authorization_returned";
 
 const duplicatePlanIssue = "possible_duplicate_plan";
 
@@ -382,12 +384,21 @@ function retargetLines(
   }
 }
 
+/** Links resting on similarity rather than provider evidence or owner confirmation. */
+export const OWNER_EXACT_REPAIR_POLICY = "owner-exact-repair-v1";
+export const HEURISTIC_POSTING_POLICIES: readonly string[] = [
+  "exact-unique-v1",
+  "settled-similarity-v1",
+  OWNER_EXACT_REPAIR_POLICY,
+];
+
 /** Shared posting transformation; ingestion supplies a validated automatic decision. */
 export function planPosting(
   plan: FinancialPlan,
   input: z.input<typeof postingSchema>,
   now: string,
   automatic?: AutomaticPosting,
+  ownerPolicyVersion?: string,
 ): Transaction {
   const command = postingSchema.parse(input);
   // Both participants are written, so every check reads complete rows.
@@ -518,7 +529,10 @@ export function planPosting(
       ],
       postingLink: {
         schemaVersion: 1,
-        policyVersion: automatic?.policyVersion ?? "owner-confirmation-v1",
+        policyVersion:
+          automatic?.policyVersion ??
+          ownerPolicyVersion ??
+          "owner-confirmation-v1",
         automatic: automatic !== undefined,
         postedId: posted.id,
         pending: { ...pending, details: pendingDetails },
@@ -570,7 +584,10 @@ export function planPosting(
   let survivorAnnotation = pendingAnnotation?.data;
   if (selected && !automatic) {
     const origin = selected === pendingAnnotation ? pending : posted;
-    const data = postingAnnotation(selected.data, origin, survivor);
+    // Repair is owner-invoked but unconfirmed: an approval goes stale, as on an automatic link.
+    const data = ownerPolicyVersion
+      ? canonicalAnnotation(annotationSchema.parse(selected.data))
+      : postingAnnotation(selected.data, origin, survivor);
     survivorAnnotation = data;
     if (
       !pendingAnnotation ||
@@ -774,6 +791,9 @@ export function planUnlinkPosting(
     sourceAliases: postedKeys.filter((key) => key !== survivor.sourceKey),
     details: {
       ...postedDetails,
+      issues: postedDetails.issues.filter(
+        (issue) => issue !== LINKED_AUTHORIZATION_RETURNED,
+      ),
       sourceRefs: survivor.details.sourceRefs.filter(
         (ref) => !pendingRefs.has(canonicalJson(ref)),
       ),

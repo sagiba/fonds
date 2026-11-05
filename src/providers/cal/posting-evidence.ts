@@ -1,5 +1,6 @@
 import type { JsonObject, TransactionFacts } from "../../domain/model.js";
 import { canonicalJson } from "../../domain/observations.js";
+import { exactMerchantPostingGroups } from "../../domain/plans/auto-posting.js";
 import { currentSourceRows } from "../../domain/provider-evidence.js";
 
 /** Opaque CAL discriminators; null is missing evidence, never false or zero. */
@@ -147,13 +148,39 @@ export function calPostingEvidence(
 }
 
 /** CAL type 8 is an installment even when its raw count is zero. */
-export function calInstallmentSource(
-  row: Pick<TransactionFacts, "details">,
-): boolean {
+function installmentSource(row: Pick<TransactionFacts, "details">): boolean {
   return currentSourceRows(row.details.provider.cal ?? {}).some(
     (raw) =>
       object(raw) &&
       aliases(raw, ["trnTypeCode", "transactionTypeCode"], code) === "8",
+  );
+}
+
+/** Facts both rows state differently; absent metadata is not a contradiction. */
+export function calExactContradiction(
+  pending: Pick<TransactionFacts, "details">,
+  posted: Pick<TransactionFacts, "details">,
+): boolean {
+  if (installmentSource(pending) || installmentSource(posted)) {
+    return true;
+  }
+  // Decoded alone: another missing field must not hide a stated difference.
+  const stated = (
+    row: Pick<TransactionFacts, "details">,
+    read: (raw: JsonObject) => unknown,
+  ) =>
+    currentSourceRows(row.details.provider.cal ?? {}).flatMap((raw) => {
+      const value = object(raw) ? read(raw) : undefined;
+      return value === null || value === undefined ? [] : [value];
+    });
+  return [
+    (raw: JsonObject) =>
+      aliases(raw, ["isAbroadApproval", "isAbroadTransaction"], boolean),
+    (raw: JsonObject) => aliases(raw, ["merchantId"], identifier),
+  ].some((read) =>
+    stated(pending, read).some((left) =>
+      stated(posted, read).some((right) => left !== right),
+    ),
   );
 }
 
@@ -229,3 +256,9 @@ export function compatibleCalPostingGroups(
     )
   );
 }
+
+/** Applies only where the deployment enables settled posting. */
+export const calSettlementPolicy = {
+  compatiblePair: (pending: TransactionFacts, posted: TransactionFacts) =>
+    exactMerchantPostingGroups([pending], [posted], calExactContradiction),
+};

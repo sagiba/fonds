@@ -19,6 +19,7 @@ import type {
 import type { Account } from "../domain/accounts.js";
 import type { Card } from "../domain/cards.js";
 import type { RefreshFailureCode } from "../domain/model.js";
+import type { SettlementContender } from "../domain/plans/posting-settlement.js";
 import type {
   PriorRun,
   RunHistoryDocument,
@@ -142,6 +143,14 @@ export type TotalsPartRow = Omit<TotalsPart, "amountMinor" | "fxFeeMinor"> & {
 
 /** Unexecuted Drizzle statements. The driver owns execution and transactions. */
 export interface Statements<Db> {
+  settlementContenders(
+    db: Db,
+    connectionId: string,
+    accountKey: string,
+    since: string,
+    limit: number,
+    evidenceBytes: number,
+  ): PromiseLike<SettlementContender[]>;
   cards(db: Db, connectionId: string): PromiseLike<Card[]>;
   card(db: Db, id: string): PromiseLike<Card[]>;
   cardPage(db: Db, input: CatalogQuery): PromiseLike<Card[]>;
@@ -256,7 +265,21 @@ export interface Statements<Db> {
     id: string,
     limit: number,
   ): PromiseLike<Pick<Run, "id" | "parserVersion">[]>;
+  repairLockConnectionOf(db: Db, id: string): PromiseLike<Connection[]>;
   planRows(db: Db, id: string, scope?: PlanScope): PromiseLike<PlanRow[]>;
+  repairLedgerRows(
+    db: Db,
+    id: string,
+    anchorId: string,
+    afterId: string | undefined,
+    limit: number,
+    fieldBytes: number,
+  ): PromiseLike<LedgerLoad[]>;
+  repairCompleteRows(
+    db: Db,
+    ids: string[],
+    fieldBytes: number,
+  ): PromiseLike<PlanRow[]>;
   /**
    * Narrow rows of the connection, every one or those `clauses` select, in
    * ingestion order.

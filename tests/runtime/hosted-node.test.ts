@@ -185,6 +185,20 @@ describe("trusted client address", () => {
     },
   );
 
+  it("accepts only the settled posting modes", () => {
+    const parse = (FONDS_SETTLED_POSTING?: string) =>
+      hostedNodeConfiguration({
+        ...base,
+        FONDS_DATABASE_URL: "postgresql://u:p@127.0.0.1/fonds",
+        ...(FONDS_SETTLED_POSTING !== undefined && { FONDS_SETTLED_POSTING }),
+      }).settledPosting;
+    expect(parse()).toBeUndefined();
+    expect(parse("off")).toBe("off");
+    expect(parse("on")).toBe("on");
+    expect(parse("terminal-token")).toBe("terminal-token");
+    expect(() => parse("always")).toThrow(/FONDS_SETTLED_POSTING/);
+  });
+
   it.each(["", "0", "3661", "040", "ten"])(
     "accepts sync scope days from 1 to 3660, not %o",
     (value) => {

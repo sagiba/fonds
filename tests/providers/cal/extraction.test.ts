@@ -994,6 +994,7 @@ describe("CAL automatic posting capability", () => {
       compatibleGroups: expect.any(Function),
       exactNameHeuristic: true,
       exactNameContradiction: expect.any(Function),
+      settledHeuristic: expect.any(Object),
       pendingAmountBasis: "authorization",
       postedAmountBasis: "purchase_commitment",
     });

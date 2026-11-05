@@ -179,4 +179,123 @@ describe.each(backends)("%s disappearance witness", (backend) => {
       (await db.listEvents()).filter((e) => e.type === "transaction.linked"),
     ).toHaveLength(1);
   });
+  it("flags an inferred link when its authorization returns", async () => {
+    await h.capture(2, [authorization()]);
+    const pending = await h.byKey("pending");
+    await h.capture(3, [row("posted")]);
+    const linked = (await db.getTransaction(pending.id))!;
+    expect(linked.details.issues).toEqual([]);
+    await h.capture(4, [authorization(), row("posted")]);
+    const flagged = (await db.getTransaction(pending.id))!;
+    expect(flagged.status).toBe("posted");
+    expect(flagged.details.issues).toContain("linked_authorization_returned");
+    expect(
+      (await db.listEvents()).filter(
+        (e) =>
+          e.type === "transaction.review_required" &&
+          e.transactionId === pending.id,
+      ),
+    ).toHaveLength(1);
+    await h.capture(5, [row("posted")]);
+    expect((await db.getTransaction(pending.id))!.details.issues).toContain(
+      "linked_authorization_returned",
+    );
+    const postedId = flagged.details.postingLink!.postedId;
+    await db.unlinkPendingTransaction(await h.command(pending.id, postedId));
+    expect((await db.getTransaction(postedId))!.details.issues).not.toContain(
+      "linked_authorization_returned",
+    );
+  });
+  it("does not flag a link the owner confirmed", async () => {
+    const { automaticPosting: _, ...manual } = postingAdapter;
+    await h.capture(2, [authorization()], manual);
+    const pending = await h.byKey("pending");
+    await h.capture(3, [row("posted")], manual);
+    const posted = await h.byKey("posted");
+    await db.linkPendingTransaction(await h.command(pending.id, posted.id));
+    await h.capture(4, [authorization(), row("posted")], manual);
+    expect((await db.getTransaction(pending.id))!.details.issues).not.toContain(
+      "linked_authorization_returned",
+    );
+  });
+});
+
+describe.each(backends)("%s continuation notifications", (backend) => {
+  let db: Harness;
+  let h: ReturnType<typeof postingHarness>;
+  beforeEach(async () => {
+    db = await open(backend);
+    h = postingHarness(db);
+    await db.ensureConnection({ id: h.connectionId, provider: "cal" });
+  });
+  afterEach(async () => db.close());
+  const discoveries = async () =>
+    (await db.listEvents()).filter(
+      (e) =>
+        e.type === "transaction.created" ||
+        e.type === "transaction.posting_candidate",
+    );
+
+  it("qualifies a posting beside a pending authorization already seen", async () => {
+    await h.capture(1, []);
+    await h.capture(2, [authorization()]);
+    const pending = await h.byKey("pending");
+    await h.capture(3, [authorization(), row("posted")]);
+    const posted = await h.byKey("posted");
+    expect((await discoveries()).map((e) => [e.type, e.transactionId])).toEqual(
+      [
+        ["transaction.created", pending.id],
+        ["transaction.posting_candidate", posted.id],
+      ],
+    );
+    expect((await db.getTransaction(posted.id))!.status).toBe("posted");
+    expect(
+      (await db.getTransaction(posted.id))!.details.postingLink,
+    ).toBeUndefined();
+  });
+  it("qualifies a posting that follows an earlier disappearance", async () => {
+    await h.capture(1, []);
+    await h.capture(2, [authorization()]);
+    await h.capture(3, []);
+    await h.capture(4, [row("posted")]);
+    const posted = await h.byKey("posted");
+    expect((await discoveries()).at(-1)).toMatchObject({
+      type: "transaction.posting_candidate",
+      transactionId: posted.id,
+    });
+  });
+  it("keeps announcing an unrelated purchase as new", async () => {
+    await h.capture(1, []);
+    await h.capture(2, [authorization()]);
+    await h.capture(3, [
+      authorization(),
+      row("other", { merchantName: "Unrelated", amountMinor: -777 }),
+    ]);
+    const other = await h.byKey("other");
+    expect((await discoveries()).at(-1)).toMatchObject({
+      type: "transaction.created",
+      transactionId: other.id,
+    });
+  });
+  it("qualifies, without dropping, same-money postings under another name", async () => {
+    await h.capture(1, []);
+    await h.capture(2, [authorization()]);
+    await h.capture(3, [
+      authorization(),
+      row("other", { merchantName: "Another presentation" }),
+    ]);
+    const other = await h.byKey("other");
+    expect((await discoveries()).at(-1)).toMatchObject({
+      type: "transaction.posting_candidate",
+      transactionId: other.id,
+    });
+  });
+  it("does not qualify a posting against a pending row first seen with it", async () => {
+    await h.capture(1, []);
+    await h.capture(2, [authorization(), row("posted")]);
+    expect((await discoveries()).map((e) => e.type)).toEqual([
+      "transaction.created",
+      "transaction.created",
+    ]);
+  });
 });

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { JsonObject, TransactionInput } from "../../src/domain/model.js";
 import type { SourceAdapter } from "../../src/domain/source-adapter.js";
-import { calInstallmentSource } from "../../src/providers/cal/posting-evidence.js";
+import { calExactContradiction } from "../../src/providers/cal/posting-evidence.js";
 import {
   authorization,
   postingAdapter,
@@ -112,7 +112,7 @@ describe.each(backends)("%s unique exact posting", (backend) => {
       automaticPosting: {
         ...providerVeto.automaticPosting!,
         exactNameHeuristic: true,
-        exactNameContradiction: calInstallmentSource,
+        exactNameContradiction: calExactContradiction,
       },
       extract(text, context) {
         const result = postingAdapter.extract(text, context);
@@ -130,6 +130,44 @@ describe.each(backends)("%s unique exact posting", (backend) => {
     await h.capture(3, [row("posted")], installment);
     expect((await db.getTransaction(pending.id))!.status).toBe("pending");
   });
+  it.each([
+    ["merchant ID", { merchantId: "A" }, { merchantId: "B" }],
+    ["abroad flag", { isAbroadApproval: true }, { isAbroadTransaction: false }],
+    [
+      "abroad flag beside a missing category",
+      { isAbroadApproval: true, internationalBranchID: null },
+      { isAbroadTransaction: false },
+    ],
+    [
+      "merchant ID beside a missing wallet flag",
+      { merchantId: "A" },
+      { merchantId: "B", walletTranInd: null },
+    ],
+  ])(
+    "keeps a differing stated %s from linking",
+    async (_label, left, right) => {
+      const stated: SourceAdapter = {
+        ...providerVeto,
+        automaticPosting: {
+          ...providerVeto.automaticPosting!,
+          exactNameHeuristic: true,
+          exactNameContradiction: calExactContradiction,
+        },
+        extract(text, context) {
+          const result = postingAdapter.extract(text, context);
+          for (const input of result.transactions) {
+            const [source] = input.details.provider.cal!.rows as JsonObject[];
+            Object.assign(source!, input.status === "pending" ? left : right);
+          }
+          return result;
+        },
+      };
+      await h.capture(2, [authorization()], stated);
+      const pending = await h.byKey("pending");
+      await h.capture(3, [row("posted")], stated);
+      expect((await db.getTransaction(pending.id))!.status).toBe("pending");
+    },
+  );
   it("does not apply the exact heuristic to twins, equal or distinct", async () => {
     await h.capture(2, [authorization("a"), authorization("b")]);
     const first = await h.byKey("a");

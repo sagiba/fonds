@@ -934,6 +934,36 @@ describe("refresh view", () => {
     expect(nextCommand(all)).toBe("fonds list-connections");
   });
 
+  it("shows the optional matcher status only in requested diagnostics", () => {
+    const text = refreshView(
+      plain(),
+      {
+        ...summary,
+        diagnostics: {
+          entries: [
+            {
+              event: "fonds_sync",
+              stage: "reconciliation",
+              outcome: "started",
+              settlement: "row_budget",
+            },
+          ],
+          dropped: 0,
+          truncated: false,
+        },
+      },
+      (args) => `fonds ${args.join(" ")}`,
+      { connectionId: "cal", nothingToRefresh: false },
+    );
+    expect(text).toContain("settlement=row_budget");
+    expect(
+      refreshView(plain(), summary, (args) => `fonds ${args.join(" ")}`, {
+        connectionId: "cal",
+        nothingToRefresh: false,
+      }),
+    ).not.toContain("settlement=");
+  });
+
   it("counts rows the provider no longer returned", () => {
     const text = refreshView(
       plain(),

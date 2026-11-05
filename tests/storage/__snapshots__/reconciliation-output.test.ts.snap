@@ -391,7 +391,7 @@ exports[`preserves fixed fixture replay under explicitly synthetic completeness 
       "id": 24,
       "runId": "golden-1",
       "transactionId": "transaction-22",
-      "type": "transaction.created",
+      "type": "transaction.posting_candidate",
     },
     {
       "actor": "sync",
