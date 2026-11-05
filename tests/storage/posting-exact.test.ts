@@ -218,12 +218,25 @@ describe.each(backends)("%s unique exact posting", (backend) => {
       notes: "Retain on rollback",
     });
     const before = await h.state();
-    await db.raw(
-      "CREATE TRIGGER reject_exact_audit BEFORE INSERT ON events WHEN NEW.type = 'transaction.linked' BEGIN SELECT RAISE(ABORT, 'synthetic audit failure'); END",
-    );
+    if (backend === "postgres") {
+      await db.raw(
+        "CREATE FUNCTION reject_exact_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.type = 'transaction.linked' THEN RAISE EXCEPTION 'synthetic audit failure'; END IF; RETURN NEW; END $$",
+      );
+      await db.raw(
+        "CREATE TRIGGER reject_exact_audit BEFORE INSERT ON events FOR EACH ROW EXECUTE FUNCTION reject_exact_audit()",
+      );
+    } else {
+      await db.raw(
+        "CREATE TRIGGER reject_exact_audit BEFORE INSERT ON events WHEN NEW.type = 'transaction.linked' BEGIN SELECT RAISE(ABORT, 'synthetic audit failure'); END",
+      );
+    }
     await expect(h.capture(3, [row("posted")], providerVeto)).rejects.toThrow();
     expect(await h.state()).toEqual(before);
-    await db.raw("DROP TRIGGER reject_exact_audit");
+    await db.raw(
+      backend === "postgres"
+        ? "DROP TRIGGER reject_exact_audit ON events"
+        : "DROP TRIGGER reject_exact_audit",
+    );
     await db.applyRun("posting-3", providerVeto);
     expect((await h.byKey("posted")).id).toBe(pending.id);
     const recovered = await h.state();
