@@ -407,7 +407,12 @@ export function presentWireTransaction(
           supersededTransactionId: link.postedId,
           automatic: link.automatic,
           policyVersion: link.policyVersion,
-          evidence: link.evidence,
+          evidence: link.evidence
+            ? {
+                runId: link.evidence.runId,
+                capturedAt: link.evidence.capturedAt,
+              }
+            : null,
           unlinked: link.split !== undefined,
         }
       : null,

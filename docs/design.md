@@ -176,13 +176,13 @@ without views.
 
 ## Pending-to-posted matching
 
-Automatic matching is a reversible provider opt-in. A disappearing authorization
+Automatic matching is reversible and provider-opted-in. A disappearing authorization
 retains its ID when a compatible new posted identity arrives in a fresh comparable
-capture. A unique observed overlap can preserve that opportunity: posting arrives
-later, both coexist, and a durable witness fixes attribution facts. Later
-comparable absence with sufficient posted evidence can complete matching without
-relying on old similarity candidates. Changed facts, competitors or owner
-decisions invalidate witnesses; annotated posted rows require owner confirmation.
+capture. A unique witness preserves that opportunity when the posting first appears
+alongside the authorization or as comparable coverage establishes its absence.
+Later comparable absence and sufficient posted evidence can complete matching
+without relying on old similarity candidates. Changed facts, competitors or owner
+decisions invalidate witnesses; annotated postings require owner confirmation.
 
 Both paths require equal purchase date, card and signed purchase money, verified
 bases and compatible roles. Shared code groups all plausible candidates before

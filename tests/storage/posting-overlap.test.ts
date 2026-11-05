@@ -2,6 +2,10 @@ import "../helpers/application-loading-differential.js";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import {
+  presentWireTransaction,
+  transactionDetailOutputSchema,
+} from "../../src/application/wire-output.js";
 import type { TransactionInput } from "../../src/domain/model.js";
 import type { SourceAdapter } from "../../src/domain/source-adapter.js";
 import {
@@ -141,6 +145,20 @@ describe.each(backends)("%s delayed posting overlap", (backend) => {
       capturedAt: "2040-07-04T12:00:00.000Z",
       overlap: overlapping.details.postingOverlap,
     });
+    for (const includeEvidence of [false, true]) {
+      const detail = transactionDetailOutputSchema.parse(
+        presentWireTransaction(survivor, true, includeEvidence),
+      );
+      expect(detail.postingMatch).toMatchObject({
+        automatic: true,
+        supersededTransactionId: posted.id,
+        evidence: {
+          runId: "posting-4",
+          capturedAt: "2040-07-04T12:00:00.000Z",
+        },
+      });
+      expect(detail.postingMatch!.evidence).not.toHaveProperty("overlap");
+    }
     expect(await db.getTransaction(posted.id)).toMatchObject({
       supersededById: pending.id,
       annotation: null,
@@ -259,6 +277,112 @@ describe.each(backends)("%s delayed posting overlap", (backend) => {
       });
     },
   );
+
+  it("retains a first-arrival witness when a new uncertain posting replaces an absent authorization", async () => {
+    await harness.capture(2, [authorization()]);
+    const pending = await harness.byKey("pending");
+    const annotation = await db.editAnnotation({
+      transactionId: pending.id,
+      expectedVersion: 0,
+      notes: "Retain the authorization note",
+    });
+    await harness.capture(3, [
+      row("posted", { kind: "unknown", amountBasis: "unknown" }),
+    ]);
+    const posted = await harness.byKey("posted");
+    expect(await db.getTransaction(pending.id)).toMatchObject({
+      status: "pending",
+      presence: "not_returned",
+      annotation,
+      details: { postingOverlap: { postedId: posted.id, runId: "posting-3" } },
+    });
+    expect(await postingEvents()).toEqual([]);
+
+    await harness.capture(4, [row("posted")]);
+    expect(await harness.byKey("posted")).toMatchObject({
+      id: pending.id,
+      status: "posted",
+      annotation,
+      details: { postingLink: { automatic: true, postedId: posted.id } },
+    });
+    expect(await postingEvents()).toHaveLength(2);
+    await harness.capture(5, [row("posted")]);
+    expect(await postingEvents()).toHaveLength(2);
+  });
+
+  it.each(incompleteCaptures)(
+    "does not witness a first-arrival transition from %s coverage",
+    async (_name, adapter) => {
+      await harness.capture(2, [authorization()]);
+      const pending = await harness.byKey("pending");
+      await harness.capture(
+        3,
+        [row("posted", { kind: "unknown", amountBasis: "unknown" })],
+        adapter,
+      );
+      expect(
+        (await db.getTransaction(pending.id))!.details.postingOverlap,
+      ).toBeUndefined();
+      await harness.capture(4, [row("posted")]);
+      expect((await db.getTransaction(pending.id))!.status).toBe("pending");
+      expect(await postingEvents()).toEqual([]);
+    },
+  );
+
+  it.each(["stale", "equal-time", "historical"])(
+    "does not witness a first-arrival transition from a %s capture",
+    async (mode) => {
+      await harness.capture(3, [authorization()]);
+      const pending = await harness.byKey("pending");
+      await harness.capture(
+        mode === "historical" ? 4 : 3,
+        [row("posted", { kind: "unknown", amountBasis: "unknown" })],
+        postingAdapter,
+        {
+          runId: "ineligible-transition",
+          hour: mode === "stale" ? "11" : "12",
+          history: mode === "historical",
+        },
+      );
+      expect(
+        (await db.getTransaction(pending.id))!.details.postingOverlap,
+      ).toBeUndefined();
+      expect(await postingEvents()).toEqual([]);
+    },
+  );
+
+  it("does not witness a first-arrival transition with competing postings", async () => {
+    await harness.capture(2, [authorization()]);
+    const pending = await harness.byKey("pending");
+    await harness.capture(3, [
+      row("posted", { kind: "unknown", amountBasis: "unknown" }),
+      row("competitor", { kind: "unknown", amountBasis: "unknown" }),
+    ]);
+    expect(
+      (await db.getTransaction(pending.id))!.details.postingOverlap,
+    ).toBeUndefined();
+    await harness.capture(4, [row("posted"), row("competitor")]);
+    expect((await db.getTransaction(pending.id))!.status).toBe("pending");
+    expect(await postingEvents()).toEqual([]);
+  });
+
+  it("does not consume a first-arrival witness after a posted annotation", async () => {
+    await harness.capture(2, [authorization()]);
+    const pending = await harness.byKey("pending");
+    await harness.capture(3, [
+      row("posted", { kind: "unknown", amountBasis: "unknown" }),
+    ]);
+    const posted = await harness.byKey("posted");
+    await db.editAnnotation({
+      transactionId: posted.id,
+      expectedVersion: 0,
+      notes: "Owner note on posting",
+    });
+    await harness.capture(4, [row("posted")]);
+    expect((await db.getTransaction(pending.id))!.status).toBe("pending");
+    expect((await db.getTransaction(posted.id))!.supersededById).toBeNull();
+    expect(await postingEvents()).toEqual([]);
+  });
 
   it("does not reclassify a known booked-entry role using later overlap eligibility", async () => {
     const { pending } = await overlap({ amountBasis: "booked_entry" });

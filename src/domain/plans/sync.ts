@@ -223,7 +223,7 @@ export interface SyncResult {
 }
 
 /** Bump when shared reconciliation rules change, independently of archived parser versions. */
-export const RECONCILIATION_POLICY_VERSION = "source-presence-v14";
+export const RECONCILIATION_POLICY_VERSION = "source-presence-v15";
 
 export function reconciliationFailure(warnings: readonly string[]) {
   const failureCode = reconciliationFailureCodeSchema.options.find((code) =>
@@ -2646,7 +2646,7 @@ export function planRun(
               plan.annotation(posted.id)?.version ?? 0,
             actor: "system",
             reason:
-              "Observed overlap followed by comparable authorization absence",
+              "Witnessed posting arrival and comparable authorization absence",
           },
           now,
           {

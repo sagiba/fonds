@@ -39,8 +39,8 @@ interface OverlapOptions {
 }
 
 /**
- * Remember an observed unique overlap, not a similarity suggestion. Absence and
- * classification can arrive in different captures; neither alone proves a link.
+ * Remember a unique overlap or same-capture transition, not a similarity suggestion.
+ * Absence and classification can arrive in different captures; neither alone proves a link.
  * The caller supplies only fresh, complete, comparable recent captures.
  */
 export function postingOverlapPairs({
@@ -152,10 +152,11 @@ export function postingOverlapPairs({
       previous?.presence === "seen" &&
       !old.has(posted!.id) &&
       pending.firstSeenAt < posted!.firstSeenAt &&
-      observed(pending) &&
+      (observed(pending) || absent(pending)) &&
       observed(posted!) &&
-      // Observed rows are written, so they are complete.
-      [pending, posted!].every((row) =>
+      // Observed rows are written, so they are complete. A comparably absent
+      // authorization instead retains its prior complete source evidence.
+      [posted!, ...(observed(pending) ? [pending] : [])].every((row) =>
         plan.full(row).details.sourceRefs.some((ref) => ref.runId === runId),
       )
     ) {
@@ -173,6 +174,9 @@ export function postingOverlapPairs({
     if (
       !fresh ||
       !witness ||
+      // The capture that creates a witness never spends it: same-capture
+      // continuation owns that decision, including its sibling guards.
+      witness.runId === runId ||
       !validWitness(witness.runId, witness.capturedAt) ||
       !observed(posted!) ||
       !absent(pending) ||
