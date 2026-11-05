@@ -2,8 +2,9 @@ import "../helpers/application-loading-differential.js";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { TransactionInput } from "../../src/domain/model.js";
+import type { JsonObject, TransactionInput } from "../../src/domain/model.js";
 import type { SourceAdapter } from "../../src/domain/source-adapter.js";
+import { calInstallmentSource } from "../../src/providers/cal/posting-evidence.js";
 import {
   authorization,
   postingAdapter,
@@ -105,6 +106,46 @@ describe.each(backends)("%s unique exact posting", (backend) => {
     });
   });
 
+  it("keeps a stated CAL installment contradiction from linking", async () => {
+    const installment: SourceAdapter = {
+      ...providerVeto,
+      automaticPosting: {
+        ...providerVeto.automaticPosting!,
+        exactNameHeuristic: true,
+        exactNameContradiction: calInstallmentSource,
+      },
+      extract(text, context) {
+        const result = postingAdapter.extract(text, context);
+        for (const input of result.transactions) {
+          if (input.status === "pending") {
+            const [source] = input.details.provider.cal!.rows as JsonObject[];
+            source!.trnTypeCode = "8";
+          }
+        }
+        return result;
+      },
+    };
+    await h.capture(2, [authorization()], installment);
+    const pending = await h.byKey("pending");
+    await h.capture(3, [row("posted")], installment);
+    expect((await db.getTransaction(pending.id))!.status).toBe("pending");
+  });
+  it("does not apply the exact heuristic to twins, equal or distinct", async () => {
+    await h.capture(2, [authorization("a"), authorization("b")]);
+    const first = await h.byKey("a");
+    await h.capture(3, [row("c"), row("d")], providerVeto);
+    expect((await db.getTransaction(first.id))!.status).toBe("pending");
+    expect(
+      (await db.listEvents()).filter((e) => e.type === "transaction.linked"),
+    ).toHaveLength(0);
+  });
+  it("labels only the heuristic pair as heuristic", async () => {
+    await h.capture(2, [authorization()]);
+    const pending = await h.byKey("pending");
+    await h.capture(3, [row("posted")]);
+    const link = (await db.getTransaction(pending.id))!.details.postingLink!;
+    expect(link.policyVersion).not.toBe("exact-unique-v1");
+  });
   it("does not infer a match with contradictory financial evidence", async () => {
     const details = row("posted").details;
     details.issues.push("conflicting_original_amount");

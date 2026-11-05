@@ -980,7 +980,12 @@ function planPostingContinuations({
       disappearingComplete,
       {
         ...adapter.automaticPosting,
-        compatibleGroups: exactMerchantPostingGroups,
+        compatibleGroups: (pending, posted) =>
+          exactMerchantPostingGroups(
+            pending,
+            posted,
+            adapter.automaticPosting?.exactNameContradiction,
+          ),
       },
       newPosted,
       annotationFor,

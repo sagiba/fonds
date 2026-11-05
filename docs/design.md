@@ -182,7 +182,7 @@ capture. A unique witness can preserve that opportunity until later evidence is
 usable. Changed facts, competitors or owner decisions invalidate witnesses.
 
 A unique first arrival can also link by exact merchant, date, card and signed
-purchase money when provider metadata differs. This heuristic does not prove
+purchase money, verified bases and compatible roles, when provider metadata differs. This heuristic does not prove
 identity: a canceled authorization and another identical purchase can be
 misattributed. Existing unwitnessed pairs remain reviewable. Ambiguous groups
 remain reviewable; no conversion or guessed rates are used.

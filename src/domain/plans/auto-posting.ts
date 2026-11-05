@@ -195,12 +195,16 @@ export function automaticPostingPairs(
 export function exactMerchantPostingGroups(
   pending: readonly TransactionFacts[],
   posted: readonly TransactionFacts[],
+  contradiction?: AutomaticPostingCapability["exactNameContradiction"],
 ): boolean {
   if (pending.length !== 1 || posted.length !== 1) {
     return false;
   }
   const left = pending[0]!;
   const right = posted[0]!;
+  if (contradiction?.(left) || contradiction?.(right)) {
+    return false;
+  }
   const normalized = (name: string | null) =>
     name
       ?.normalize("NFC")
