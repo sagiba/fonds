@@ -555,7 +555,7 @@ Pending rows never enter spending totals. A witnessed posting arrival can link a
 later absence and sufficient evidence, but an annotated posted row requires owner review;
 automatic links never move annotation documents. Only providers that opt in take part (each provider guide
 says whether it does), and billed lines are never matched or linked. Shared
-safeguards govern every match; exact matches relax metadata, not stated contradictions.
+safeguards govern every match; exact matches relax metadata, not contradictions.
 An unclassified pending row may take a known posted purchase's classification
 without claiming that the authorization stated its kind. The
 [design](design.md#pending-to-posted-matching) describes the guarantees, and
