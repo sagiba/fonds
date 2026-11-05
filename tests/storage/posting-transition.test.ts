@@ -3,6 +3,7 @@ import "../helpers/application-loading-differential.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { TransactionInput } from "../../src/domain/model.js";
+import type { SourceAdapter } from "../../src/domain/source-adapter.js";
 import {
   authorization,
   postingAdapter,
@@ -95,6 +96,57 @@ describe.each(backends)("%s disappearance witness", (backend) => {
     const pending = await h.byKey("pending");
     await h.capture(3, [unknown()], manual);
     await h.capture(4, [row("posted")]);
+    expect(
+      (await db.getTransaction(pending.id))!.details.postingOverlap,
+    ).toBeUndefined();
+    await noLink(pending.id);
+  });
+  it("does not spend a witness in the capture that created it", async () => {
+    await h.capture(2, [authorization()]);
+    const pending = await h.byKey("pending");
+    // A shared base key makes same-capture continuation refuse the sibling group.
+    const siblings: SourceAdapter = {
+      ...postingAdapter,
+      extract(text, context) {
+        const result = postingAdapter.extract(text, context);
+        for (const input of result.transactions) {
+          input.details.provider.cal!.identity = { baseKey: "shared" };
+        }
+        return result;
+      },
+    };
+    await h.capture(
+      3,
+      [row("posted"), row("sibling", { amountMinor: -150 })],
+      siblings,
+    );
+    expect(
+      (await db.getTransaction(pending.id))!.details.postingOverlap,
+    ).toBeDefined();
+    await noLink(pending.id);
+  });
+  it("does not witness an authorization outside the comparable window", async () => {
+    await h.capture(2, [
+      authorization("pending", { transactionDate: "2039-12-01" }),
+    ]);
+    const pending = await h.byKey("pending");
+    await h.capture(3, [
+      row("posted", {
+        transactionDate: "2039-12-01",
+        kind: "unknown",
+        amountBasis: "unknown",
+      }),
+    ]);
+    expect(
+      (await db.getTransaction(pending.id))!.details.postingOverlap,
+    ).toBeUndefined();
+    await noLink(pending.id);
+  });
+  it("does not witness a posting that arrives after an earlier absence", async () => {
+    await h.capture(2, [authorization()]);
+    const pending = await h.byKey("pending");
+    await h.capture(3, []);
+    await h.capture(4, [unknown()]);
     expect(
       (await db.getTransaction(pending.id))!.details.postingOverlap,
     ).toBeUndefined();
