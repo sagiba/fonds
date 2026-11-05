@@ -1009,6 +1009,23 @@ function planPostingContinuations({
   return { pairs, heuristic };
 }
 
+/** Same card and money one day apart; equal dates are already a component. */
+function adjacentDayCandidate(pending: LedgerRow, posted: LedgerRow): boolean {
+  return (
+    pending.cardId !== null &&
+    pending.cardId === posted.cardId &&
+    pending.amountMinor !== null &&
+    pending.amountMinor === posted.amountMinor &&
+    pending.currency !== null &&
+    pending.currency === posted.currency &&
+    pending.transactionDate !== null &&
+    posted.transactionDate !== null &&
+    Math.abs(
+      Date.parse(pending.transactionDate) - Date.parse(posted.transactionDate),
+    ) === DAY_MILLISECONDS
+  );
+}
+
 /** Same card, date and kind, with same-sign amounts in different currencies. */
 function crossCurrencyCandidate(
   pending: LedgerRow,
@@ -1133,6 +1150,14 @@ function refreshPendingCandidates(
     for (const group of groups) {
       for (const pending of group.pending) {
         for (const posted of group.posted) {
+          addCandidate(pending, posted);
+        }
+      }
+    }
+    // Sources can date one purchase a day apart, so a neighbor is review evidence.
+    for (const posted of postedRows) {
+      for (const pending of pendingRows) {
+        if (adjacentDayCandidate(pending, posted)) {
           addCandidate(pending, posted);
         }
       }

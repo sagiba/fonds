@@ -97,14 +97,13 @@ describe("Isracard settled unknown identity policy", () => {
       amountMinor: -1250,
     });
     expect(compatibleIsracardSettledPair(pending, posted)).toBe(true);
-    expect(settledIsracardMerchant(pending.merchantName)).toBe(
-      "PAYPAL EX RIVER STORE",
-    );
+    expect(
+      settledIsracardMerchant(pending.merchantName, posted.merchantName),
+    ).toBe(true);
   });
   it.each([
     ["different stated money", { dealSum: "13.00" }],
     ["foreign original currency", { currentPaymentCurrency: "USD" }],
-    ["unknown original currency", { currentPaymentCurrency: null }],
     ["uninterpreted description", { moreInfo: "Synthetic adjustment" }],
     ["foreign component", { paymentSumOutbound: "12.50" }],
     ["conflicting sign", { paymentSumSign: "-" }],
@@ -116,6 +115,83 @@ describe("Isracard settled unknown identity policy", () => {
         .txnIsrael[0],
       fields,
     );
+    source.responses.legacy = JSON.stringify(legacy);
+    const rows = facts(source);
+    expect(
+      compatibleIsracardSettledPair(
+        rows.find((r) => r.status === "pending")!,
+        rows.find((r) => r.status === "posted")!,
+      ),
+    ).toBe(false);
+  });
+  it.each([
+    [
+      "a domestic row in the Hebrew currency label",
+      "txnIsrael",
+      {
+        currencyId: 'ש"ח',
+        currentPaymentCurrency: null,
+        kodMatbeaMekori: 'ש"ח',
+      },
+    ],
+    [
+      "an abroad-section row in local currency",
+      "txnAbroad",
+      {
+        currencyId: "NIS",
+        currentPaymentCurrency: "NIS",
+        fullSupplierNameHeb: null,
+        fullSupplierNameOutbound: "PAYPAL EX RIVER STORE",
+        fullPurchaseDate: null,
+        fullPurchaseDateOutbound: "12/06/2040",
+        paymentSum: null,
+        dealSum: null,
+        paymentSumOutbound: "12.50",
+        dealSumOutbound: "12.50",
+        voucherNumberRatz: null,
+        voucherNumberRatzOutbound: "SETTLEMENT-EXAMPLE",
+      },
+    ],
+  ])("admits %s", (_label, section, fields) => {
+    const source = capture();
+    const legacy = JSON.parse(source.responses.legacy!);
+    const group =
+      legacy.CardsTransactionsListBean.Index0.CurrentCardTransactions[0];
+    const row = { ...group.txnIsrael[0], ...fields };
+    group.txnIsrael = [];
+    group[section] = [row];
+    source.responses.legacy = JSON.stringify(legacy);
+    const rows = facts(source);
+    const posted = rows.find((r) => r.status === "posted")!;
+    expect(posted).toMatchObject({ kind: "unknown", currency: "ILS" });
+    expect(
+      compatibleIsracardSettledPair(
+        rows.find((r) => r.status === "pending")!,
+        posted,
+      ),
+    ).toBe(true);
+  });
+  it("rejects an abroad-section row in another currency", () => {
+    const source = capture();
+    const legacy = JSON.parse(source.responses.legacy!);
+    const group =
+      legacy.CardsTransactionsListBean.Index0.CurrentCardTransactions[0];
+    group.txnAbroad = [
+      {
+        ...group.txnIsrael[0],
+        currencyId: "USD",
+        currentPaymentCurrency: "USD",
+        fullSupplierNameHeb: null,
+        fullSupplierNameOutbound: "PAYPAL EX RIVER STORE",
+        fullPurchaseDate: null,
+        fullPurchaseDateOutbound: "12/06/2040",
+        paymentSum: null,
+        dealSum: null,
+        paymentSumOutbound: "12.50",
+        dealSumOutbound: "12.50",
+      },
+    ];
+    group.txnIsrael = [];
     source.responses.legacy = JSON.stringify(legacy);
     const rows = facts(source);
     expect(
@@ -222,10 +298,10 @@ describe("Isracard settled unknown identity policy", () => {
     }
   });
   it.each([false, true])(
-    "retains unknown facts through real extraction and unlink (terminal-token opt-in: %s)",
+    "retains unknown facts through real extraction and unlink (repeated terminal token: %s)",
     async (repeatedTerminalToken) => {
       const db = await openDatabase(":memory:", {
-        settledPosting: repeatedTerminalToken ? "terminal-token" : "on",
+        settledPosting: "on",
       });
       try {
         await db.ensureConnection({

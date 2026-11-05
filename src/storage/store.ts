@@ -1424,7 +1424,6 @@ function buildStore<Db>(
     tx: Db,
     connection: Connection,
     extraction: ReturnType<typeof extractRun>,
-    mode: Exclude<SettledPostingMode, "off">,
   ): Promise<{
     snapshot?: SettlementSnapshot;
     status: NonNullable<SyncDiagnostic["settlement"]>;
@@ -1468,13 +1467,7 @@ function buildStore<Db>(
       accounts.set(response.accountKey, rows);
     }
     return {
-      snapshot: {
-        comparison:
-          mode === "terminal-token"
-            ? "repeated-terminal-token-v1"
-            : "merchant-presentation-v1",
-        accounts,
-      },
+      snapshot: { accounts },
       status: "ready",
     };
   }
@@ -1976,7 +1969,7 @@ function buildStore<Db>(
         );
         const settlement =
           settledMode !== "off" && adapter.automaticPosting?.settledHeuristic
-            ? await loadSettlement(tx, locked, extraction, settledMode)
+            ? await loadSettlement(tx, locked, extraction)
             : undefined;
         const removals = await statements.removals(tx, connection.id);
         const catalog = await loadCatalog(tx, connection.id);

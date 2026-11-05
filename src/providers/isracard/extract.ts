@@ -854,7 +854,7 @@ function billingCurrency(observation: Observation): string | null {
   return legacyCurrency(observation.row.currencyId);
 }
 
-function legacyCurrency(marker: unknown): string | null {
+export function legacyCurrency(marker: unknown): string | null {
   const value = token(marker);
   // Upstream constants.ts/convertCurrency explicitly identify NIS as a shekel alias.
   return value === "NIS" || value === "₪" || value === 'ש"ח' || value === "ש״ח"

@@ -132,12 +132,6 @@ describe.each(backends)("%s unique exact posting", (backend) => {
   });
   it.each([
     ["merchant ID", { merchantId: "A" }, { merchantId: "B" }],
-    ["abroad flag", { isAbroadApproval: true }, { isAbroadTransaction: false }],
-    [
-      "abroad flag beside a missing category",
-      { isAbroadApproval: true, internationalBranchID: null },
-      { isAbroadTransaction: false },
-    ],
     [
       "merchant ID beside a missing wallet flag",
       { merchantId: "A" },
@@ -168,6 +162,33 @@ describe.each(backends)("%s unique exact posting", (backend) => {
       expect((await db.getTransaction(pending.id))!.status).toBe("pending");
     },
   );
+  it("treats a differing abroad flag as metadata, not a contradiction", async () => {
+    const stated: SourceAdapter = {
+      ...providerVeto,
+      automaticPosting: {
+        ...providerVeto.automaticPosting!,
+        exactNameHeuristic: true,
+        exactNameContradiction: calExactContradiction,
+      },
+      extract(text, context) {
+        const result = postingAdapter.extract(text, context);
+        for (const input of result.transactions) {
+          const [source] = input.details.provider.cal!.rows as JsonObject[];
+          Object.assign(
+            source!,
+            input.status === "pending"
+              ? { isAbroadApproval: true }
+              : { isAbroadTransaction: false },
+          );
+        }
+        return result;
+      },
+    };
+    await h.capture(2, [authorization()], stated);
+    const pending = await h.byKey("pending");
+    await h.capture(3, [row("posted")], stated);
+    expect((await db.getTransaction(pending.id))!.status).toBe("posted");
+  });
   it("does not apply the exact heuristic to twins, equal or distinct", async () => {
     await h.capture(2, [authorization("a"), authorization("b")]);
     const first = await h.byKey("a");

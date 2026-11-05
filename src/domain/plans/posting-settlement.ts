@@ -19,12 +19,11 @@ export const SETTLEMENT_HORIZON_DAYS = 40;
 export const SETTLEMENT_MAX_ROWS = 2000;
 export const SETTLEMENT_EVIDENCE_BYTES = 65536;
 
-export const SETTLED_POSTING_MODES = ["off", "on", "terminal-token"] as const;
+const SETTLEMENT_COMPARISON = "merchant-variant-v1";
+
+export const SETTLED_POSTING_MODES = ["off", "on"] as const;
 
 export type SettledPostingMode = (typeof SETTLED_POSTING_MODES)[number];
-
-export type SettlementComparison =
-  "merchant-presentation-v1" | "repeated-terminal-token-v1";
 
 export type SettlementContender = Pick<
   Transaction,
@@ -43,7 +42,6 @@ export type SettlementContender = Pick<
 
 /** Present only when the deployment enabled the policy and the capture was scanned. */
 export interface SettlementSnapshot {
-  comparison: SettlementComparison;
   accounts: ReadonlyMap<string, readonly SettlementContender[]>;
 }
 
@@ -56,44 +54,17 @@ export const settlementScanStart = (capturedAt: string) =>
 
 type Policy = NonNullable<AutomaticPostingCapability["settledHeuristic"]>;
 
-/** A heuristic comparison, never evidence of issuer identity or financial role. */
-export function settledMerchantMatch(
-  left: string | null,
-  right: string | null,
-  repeatedTerminalToken = false,
-): boolean {
-  const normalize = (name: string | null) =>
-    name
-      ?.normalize("NFC")
-      .replace(/\p{White_Space}+/gu, " ")
-      .trim()
-      .toUpperCase();
-  const a = normalize(left);
-  const b = normalize(right);
-  if (!a || !b || !/[\p{L}\p{N}]/u.test(a) || !/[\p{L}\p{N}]/u.test(b)) {
-    return false;
-  }
-  if (a === b) {
-    return true;
-  }
-  if (!repeatedTerminalToken) {
-    return false;
-  }
-  // An explicit risk policy, not a claim that a suffix is redundant.
-  const shortened = (name: string) => {
-    const tokens = name.split(" ");
-    const last = tokens.pop()!;
-    return tokens.length >= 4 &&
-      new Set(tokens).size >= 4 &&
-      /^[\p{L}\p{N}]{2,4}$/u.test(last) &&
-      tokens.includes(last)
-      ? tokens.join(" ")
-      : undefined;
-  };
-  return shortened(a) === b || shortened(b) === a;
+/** Case and spacing never distinguish a merchant; `null` when nothing identifies one. */
+export function merchantPresentation(name: string | null): string | null {
+  const value = name
+    ?.normalize("NFC")
+    .replace(/\p{White_Space}+/gu, " ")
+    .trim()
+    .toUpperCase();
+  return value && /[\p{L}\p{N}]/u.test(value) ? value : null;
 }
 
-function eligible(row: LedgerRow): boolean {
+export function settlementEligible(row: LedgerRow): boolean {
   return (
     row.identityStrength === "native" &&
     !retiredFromMatching(row) &&
@@ -119,7 +90,7 @@ type Competitor = Omit<SettlementContender, "hydrationSafe">;
 
 /**
  * Unknown fields cannot place a row outside the candidate's neighborhood. A row
- * in another currency could still be this purchase only under the same name.
+ * in another currency, or reversing this money, matters only under the same name.
  */
 export function settlementCompetitor(
   row: Competitor,
@@ -162,7 +133,12 @@ export function settlementCompetitor(
   ) {
     return true;
   }
+  // A visible reversal of this money means the authorization may have ended there.
+  const reversal =
+    row.currency === pending.currency &&
+    row.amountMinor === -pending.amountMinor!;
   const foreign =
+    reversal ||
     row.currency !== pending.currency ||
     (row.originalCurrency !== null &&
       row.originalCurrency !== pending.currency);
@@ -204,21 +180,13 @@ export function postingSettlementPairs(
   const old = new Set(before.map((row) => row.id));
   const safe = (row: LedgerRow) =>
     old.has(row.id) ? safety.get(row.id) === true : !isNarrow(row);
-  const merchant = (name: string | null) =>
-    policy.merchantName ? policy.merchantName(name) : name;
-  const sameMerchant = (left: string | null, right: string | null) =>
-    settledMerchantMatch(
-      merchant(left),
-      merchant(right),
-      snapshot.comparison === "repeated-terminal-token-v1",
-    );
+  // Names are rechecked on every run: enrichment may legitimately re-present one.
   const fingerprint = (row: LedgerRow) =>
     canonicalJson([
       row.cardId,
       row.transactionDate,
       row.amountMinor,
       row.currency,
-      merchant(row.merchantName),
     ]);
   const horizon = daysBefore(capturedAt, SETTLEMENT_HORIZON_DAYS);
   const postedRows = rows.filter(
@@ -247,20 +215,24 @@ export function postingSettlementPairs(
       (posted) =>
         pending.cardId !== null &&
         pending.cardId === posted.cardId &&
-        pending.transactionDate === posted.transactionDate &&
+        posted.transactionDate !== null &&
+        Math.abs(
+          Date.parse(pending.transactionDate!) -
+            Date.parse(posted.transactionDate),
+        ) <= DAY &&
         pending.amountMinor !== null &&
         pending.amountMinor === posted.amountMinor &&
         pending.currency !== null &&
         pending.currency === posted.currency &&
         safe(pending) &&
         safe(posted) &&
-        sameMerchant(pending.merchantName, posted.merchantName),
+        policy.sameMerchant(pending.merchantName, posted.merchantName),
     );
     const posted = candidates.length === 1 ? candidates[0] : undefined;
     const usable =
       posted !== undefined &&
-      eligible(pending) &&
-      eligible(posted) &&
+      settlementEligible(pending) &&
+      settlementEligible(posted) &&
       pending.amountBasis === "authorization" &&
       (posted.amountBasis === "unknown" ||
         posted.amountBasis === "purchase_commitment") &&
@@ -269,7 +241,7 @@ export function postingSettlementPairs(
       !meaningfulAnnotation(plan.annotation(posted.id)?.data) &&
       ![...scanned, ...before, ...rows].some((row) =>
         settlementCompetitor(row, pending, posted, (name) =>
-          sameMerchant(name, pending.merchantName),
+          policy.sameMerchant(pending.merchantName, name),
         ),
       ) &&
       policy.compatiblePair(plan.full(pending), plan.full(posted));
@@ -313,7 +285,7 @@ export function postingSettlementPairs(
             postedFingerprint: fingerprint(posted),
             settlement: {
               policyVersion: SETTLED_POSTING_POLICY,
-              comparison: snapshot.comparison,
+              comparison: SETTLEMENT_COMPARISON,
               ...(held ? { arrival: held } : {}),
             },
           },

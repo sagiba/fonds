@@ -53,10 +53,12 @@ export interface AutomaticPostingCapability {
   exactNameHeuristic?: boolean;
   /**
    * Delayed heuristic identity linkage for a deployment that enables it. Facts
-   * stay as the source stated them; `merchantName` only normalizes presentation.
+   * stay as the source stated them; `sameMerchant` judges only presentation
+   * this source is known to vary, because uniqueness alone cannot tell two
+   * merchants apart when one name happens to begin the other.
    */
   settledHeuristic?: {
-    merchantName?(name: string | null): string | null;
+    sameMerchant(pending: string | null, posted: string | null): boolean;
     compatiblePair(
       pending: TransactionFacts,
       posted: TransactionFacts,
