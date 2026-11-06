@@ -6,6 +6,7 @@ import { parseArgs } from "node:util";
 import { serve, type ServerType } from "@hono/node-server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 
+import { captureArchiveOptions } from "./runtime/capture-archive.js";
 import { protectedDirectory } from "./runtime/checkout.js";
 import { CollectionScheduleError } from "./runtime/collection-schedule.js";
 import {
@@ -194,6 +195,7 @@ export async function startServer(args: string[], seams: ServerSeams = {}) {
       (message) => new CommandInputError(message),
     ),
     ...postingOptions(env, (message) => new CommandInputError(message)),
+    ...captureArchiveOptions(env, (message) => new CommandInputError(message)),
     loginFailuresBeforeAttention: loginFailuresBeforeAttention(
       env,
       (message) => new CommandInputError(message),

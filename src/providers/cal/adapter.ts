@@ -18,6 +18,7 @@ const RECENT_COMPARABLE_DAYS = 60;
 export const calAdapter: SourceAdapter = {
   provider: "cal",
   parserVersion: "cal-v15",
+  volatileCaptureFields: ["groupPid"],
   retainProviderEvidence: retainCalEvidence,
   mergeProviderEvidence: mergeCalEvidence,
   projectProviderState: projectCalState,

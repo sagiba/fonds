@@ -17,6 +17,10 @@ import { ISRACARD_ENDPOINTS } from "./transport.js";
 export const isracardAdapter: SourceAdapter = {
   provider: "isracard",
   parserVersion: "isracard-v17",
+  volatileCaptureFields: [
+    "card.cardGuid",
+    "responses.cardList.data.cardsList.cardGuid",
+  ],
   retainProviderEvidence: retainIsracardEvidence,
   mergeProviderEvidence: mergeIsracardEvidence,
   paymentContextFromRetainedEvidence: retainedPaymentContext,

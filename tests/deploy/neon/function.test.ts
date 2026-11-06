@@ -413,6 +413,7 @@ describe("Neon configuration", () => {
       // Omitted credential variables are merged by Neon, never cleared or guessed.
       expect(Object.keys(fonds?.env ?? {}).sort()).toEqual([
         "FONDS_AUTH_SECRET",
+        "FONDS_CAPTURE_ARCHIVE_DAYS",
         "FONDS_CONNECTION_ID",
         "FONDS_CONNECTION_PROVIDER",
         "FONDS_GOOGLE_OWNER_EMAIL",

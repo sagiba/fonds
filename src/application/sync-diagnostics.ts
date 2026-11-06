@@ -43,6 +43,9 @@ export const syncDiagnosticSchema = z.object({
       "capture_replayed",
       "body_released",
       "debug_body_retained",
+      "capture_archived",
+      "capture_repeated",
+      "capture_archive_failed",
       "evidence_deferred",
       "collection_failure",
       "card_discovery",
@@ -92,6 +95,8 @@ export const syncDiagnosticSchema = z.object({
       unchanged: count.optional(),
       failures: count.optional(),
       recoveredRuns: count.optional(),
+      /** A capture's stored size, compressed; absent when an earlier row holds it. */
+      archivedBytes: count.optional(),
       /**
        * Snapshot volume a reconciliation loaded: ledger rows read (its scope,
        * then every row after a fallback), applied runs and removals.

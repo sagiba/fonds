@@ -220,7 +220,8 @@ list the fields.
 `truncated` and `dropped` indicating omitted entries. It contains no financial
 values, provider fields or credentials. `--archive-days <days>` (1–30) opts into
 temporary raw-response retention in the database, subject to provider redactions;
-by default completed ingestion releases bodies. See
+by default completed ingestion releases bodies. `FONDS_CAPTURE_ARCHIVE_DAYS` keeps
+compressed captures for [longer](hosted-service.md#configuration). See
 [evidence retention](../database.md#what-the-financial-tables-hold). These are operator flags,
 not API or MCP inputs.
 

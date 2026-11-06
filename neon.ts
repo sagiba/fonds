@@ -15,6 +15,10 @@ import { LOGIN_FAILURES_BEFORE_ATTENTION } from "./src/application/refreshes.js"
 import { parseCredentials } from "./src/domain/credentials.js";
 import { SYNC_SCOPE_DAYS } from "./src/domain/plans/sync-scope.js";
 import {
+  CAPTURE_ARCHIVE_DAYS_INVALID,
+  captureArchiveDaysSchema,
+} from "./src/runtime/capture-archive.js";
+import {
   parseCollectionSchedule,
   utcCron,
 } from "./src/runtime/collection-schedule.js";
@@ -110,6 +114,13 @@ if (!settledPostingSchema.safeParse(settledPosting).success) {
   throw new Error(SETTLED_POSTING_INVALID);
 }
 env.FONDS_SETTLED_POSTING = settledPosting;
+
+// Always declared, likewise.
+const captureDays = process.env.FONDS_CAPTURE_ARCHIVE_DAYS ?? "0";
+if (!captureArchiveDaysSchema.safeParse(captureDays).success) {
+  throw new Error(CAPTURE_ARCHIVE_DAYS_INVALID);
+}
+env.FONDS_CAPTURE_ARCHIVE_DAYS = captureDays;
 
 // Always declared, likewise.
 const loginFailures =

@@ -139,6 +139,12 @@ import type {
 import { PROVIDER_STOP_REASONS } from "../domain/refreshes.js";
 import type { SourceAdapter } from "../domain/source-adapter.js";
 import {
+  CAPTURE_ARCHIVE_MAX_DAYS,
+  type CaptureArchiveOptions,
+  discoveryCapture,
+  runCapture,
+} from "./capture-archive.js";
+import {
   contentDigest,
   prepareRun,
   replayResult,
@@ -156,6 +162,7 @@ import {
   type PlanScope,
 } from "./sql.js";
 import type {
+  CaptureArchiveRow,
   LatestAppliedRun,
   LedgerLoad,
   OrderedRun,
@@ -547,6 +554,8 @@ export interface StoreOptions {
   syncScopeDays?: number;
   /** Delayed heuristic identity linkage; `off` by default. */
   settledPosting?: SettledPostingMode;
+  /** Keeps what each collection received; absent, bodies are released as usual. */
+  captureArchive?: CaptureArchiveOptions;
   /** The provider rules exact repair must honor; absent, it applies only shared rules. */
   repairAdapter?: (provider: string) => SourceAdapter | undefined;
 }
@@ -633,6 +642,17 @@ function buildStore<Db>(
   const commitWrites = db.commit ?? commitInOrder;
   const scopeDays = options.syncScopeDays ?? SYNC_SCOPE_DAYS;
   const settledMode = options.settledPosting ?? "off";
+  const archive = options.captureArchive;
+  if (
+    archive &&
+    !(
+      Number.isInteger(archive.days) &&
+      archive.days >= 1 &&
+      archive.days <= CAPTURE_ARCHIVE_MAX_DAYS
+    )
+  ) {
+    throw new RangeError("Capture archive days out of range");
+  }
   if (!SETTLED_POSTING_MODES.includes(settledMode)) {
     throw new RangeError("Unknown settled posting mode");
   }
@@ -1754,6 +1774,59 @@ function buildStore<Db>(
     return result;
   }
 
+  /**
+   * Debugging evidence only, so a failure here is logged and never stops the
+   * financial work around it. A repeat keeps a row, because each sighting still
+   * happened; pruning keeps the body it shares. Reads and inserts take no lock on
+   * existing rows, and a retry inserts nothing.
+   */
+  async function archiveCapture(
+    row: Pick<CaptureArchiveRow, "id" | "connectionId" | "kind" | "capturedAt">,
+    capture: () => Promise<{ text: string; digest: string }>,
+    emit: ReturnType<typeof syncDiagnostics>,
+    ids: ReturnType<typeof syncCorrelationIds>,
+  ): Promise<void> {
+    if (!archive) {
+      return;
+    }
+    const started = performance.now();
+    try {
+      const { text, digest } = await capture();
+      const held = await db.execute(
+        statements.captureBody(db.root, row.connectionId, digest),
+      );
+      const body = held.length > 0 ? null : archive.compress(text);
+      await db.execute(
+        statements.insertCaptureArchive(db.root, {
+          ...row,
+          contentDigest: digest,
+          body,
+          expiresAt: new Date(
+            Date.now() + archive.days * 86_400_000,
+          ).toISOString(),
+        }),
+      );
+      emit({
+        event: "fonds_sync",
+        ...ids,
+        stage: "archive",
+        outcome: "completed",
+        reason: body ? "capture_archived" : "capture_repeated",
+        durationMs: elapsedMs(started),
+        ...(body && { counts: { archivedBytes: body.byteLength } }),
+      });
+    } catch {
+      emit({
+        event: "fonds_sync",
+        ...ids,
+        stage: "archive",
+        outcome: "failed",
+        reason: "capture_archive_failed",
+        failureCategory: "persistence",
+      });
+    }
+  }
+
   async function ingestRun(
     input: RunInput,
     adapter: SourceAdapter,
@@ -1907,6 +1980,27 @@ function buildStore<Db>(
         new Error("Unapplied run has no recoverable source body"),
       );
     }
+    // Every application passes here while the body exists, recovery included,
+    // and before extraction, so a capture the parser rejects is kept too.
+    await archiveCapture(
+      {
+        id,
+        connectionId: connection.id,
+        kind: "run",
+        capturedAt: archived.startedAt,
+      },
+      () =>
+        runCapture(
+          {
+            collectorVersion: archived.collectorVersion,
+            responses: archived.snapshot.responses,
+            failures: archived.snapshot.failures ?? [],
+          },
+          adapter,
+        ),
+      emit,
+      ids,
+    );
     const started = performance.now();
     emit({
       event: "fonds_sync",
@@ -2202,8 +2296,10 @@ function buildStore<Db>(
     });
     // Expiration is maintenance after the atomic financial commit; failure cannot undo it.
     try {
+      const now = new Date().toISOString();
+      await db.execute(statements.pruneDebugBodies(db.root, now));
       await db.execute(
-        statements.pruneDebugBodies(db.root, new Date().toISOString()),
+        statements.pruneCaptureArchives(db.root, connection.id, now),
       );
       emit({
         event: "fonds_sync",
@@ -2257,7 +2353,20 @@ function buildStore<Db>(
       Promise.all(
         (await db.execute(statements.connections(db.root))).map(present),
       ),
-    recordCardDiscovery: async (connectionId, input) => {
+    recordCardDiscovery: async (connectionId, input, onDiagnostic) => {
+      // Before validation, so a discovery the schema refuses is kept too.
+      const id = crypto.randomUUID();
+      await archiveCapture(
+        {
+          id,
+          connectionId,
+          kind: "card_discovery",
+          capturedAt: new Date().toISOString(),
+        },
+        () => discoveryCapture(input),
+        syncDiagnostics(onDiagnostic),
+        syncCorrelationIds({ captureId: id }),
+      );
       const discovery = cardDiscoverySchema.parse(input);
       await db.transaction(async (tx) => {
         const connection = (

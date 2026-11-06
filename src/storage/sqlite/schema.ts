@@ -1,5 +1,6 @@
 import {
   type AnySQLiteColumn,
+  blob,
   customType,
   foreignKey,
   index,
@@ -161,6 +162,29 @@ export const syncRunBodies = sqliteTable("sync_run_bodies", {
   retention: text({ enum: ["staged", "debug"] }).notNull(),
   expiresAt: text("expires_at"),
 });
+
+export const captureArchives = sqliteTable(
+  "capture_archives",
+  {
+    sequence: integer().primaryKey({ autoIncrement: true }),
+    id: text().notNull().unique(),
+    connectionId: text("connection_id")
+      .notNull()
+      .references(() => connections.id),
+    kind: text({ enum: ["run", "card_discovery"] }).notNull(),
+    capturedAt: text("captured_at").notNull(),
+    contentDigest: text("content_digest").notNull(),
+    body: blob({ mode: "buffer" }).$type<Uint8Array>(),
+    expiresAt: text("expires_at").notNull(),
+  },
+  (table) => [
+    index("capture_archives_content").on(
+      table.connectionId,
+      table.contentDigest,
+    ),
+    index("capture_archives_expiry").on(table.expiresAt),
+  ],
+);
 
 export const deferredEvidence = sqliteTable("deferred_evidence", {
   id: text().primaryKey(),

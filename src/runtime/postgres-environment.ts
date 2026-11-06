@@ -17,6 +17,7 @@ import {
   initializePostgresDatabase,
   openPostgresDatabase,
 } from "../storage/postgres/store.js";
+import { captureArchiveOptions } from "./capture-archive.js";
 import { HostedConfigurationError } from "./hosted-service.js";
 import {
   type Installation,
@@ -206,6 +207,10 @@ export async function openPostgresSession(
         (message) => new CommandInputError(message),
       ),
       ...postingOptions(env, (message) => new CommandInputError(message)),
+      ...captureArchiveOptions(
+        env,
+        (message) => new CommandInputError(message),
+      ),
     },
   );
   try {

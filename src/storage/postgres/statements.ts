@@ -59,7 +59,10 @@ import {
   transactionSeek,
   wireEventColumns,
 } from "../sql.js";
-import type { DeferredEvidenceWrite } from "../statements.js";
+import type {
+  CaptureArchiveRow,
+  DeferredEvidenceWrite,
+} from "../statements.js";
 import {
   decodeLedgerRow,
   decodeTransaction,
@@ -1234,6 +1237,48 @@ export const pruneDebugBodies = (db: Executor, now: string) =>
         sql`${schema.syncRunBodies.expiresAt} <= ${now}`,
       ),
     );
+/** Whether a retained row already holds this content; never reads the body. */
+export const captureBody = (
+  db: Executor,
+  connectionId: string,
+  contentDigest: string,
+) =>
+  db
+    .select({ id: schema.captureArchives.id })
+    .from(schema.captureArchives)
+    .where(
+      and(
+        eq(schema.captureArchives.connectionId, connectionId),
+        eq(schema.captureArchives.contentDigest, contentDigest),
+        isNotNull(schema.captureArchives.body),
+      ),
+    )
+    .limit(1);
+
+export const insertCaptureArchive = (db: Executor, row: CaptureArchiveRow) =>
+  db.insert(schema.captureArchives).values(row).onConflictDoNothing();
+
+/**
+ * A body stays while any unexpired row shares its content. One connection at a
+ * time: its collection lock orders this after that connection's own archiving.
+ */
+export const pruneCaptureArchives = (
+  db: Executor,
+  connectionId: string,
+  now: string,
+) =>
+  db.delete(schema.captureArchives).where(
+    sql`capture_archives.connection_id = ${connectionId}
+      AND capture_archives.expires_at <= ${now} AND (
+      capture_archives.body IS NULL OR NOT EXISTS (
+        SELECT 1 FROM capture_archives AS live
+        WHERE live.connection_id = capture_archives.connection_id
+          AND live.content_digest = capture_archives.content_digest
+          AND live.expires_at > ${now}
+      )
+    )`,
+  );
+
 export const setConfig = (db: Executor, id: string, config: ConnectionConfig) =>
   db
     .update(schema.connections)

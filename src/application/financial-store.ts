@@ -253,6 +253,7 @@ export interface InternalStore
   recordCardDiscovery(
     connectionId: string,
     discovery: CardDiscovery,
+    onDiagnostic?: SyncDiagnosticSink,
   ): Promise<void>;
   /** Internal history inspection; presence and perspective default to all. */
   listTransactions(input?: TransactionFilters): Promise<TransactionView[]>;

@@ -185,6 +185,23 @@ describe("trusted client address", () => {
     },
   );
 
+  it("accepts capture retention of 0 to 90 days", () => {
+    const parse = (FONDS_CAPTURE_ARCHIVE_DAYS?: string) =>
+      hostedNodeConfiguration({
+        ...base,
+        FONDS_DATABASE_URL: "postgresql://u:p@127.0.0.1/fonds",
+        ...(FONDS_CAPTURE_ARCHIVE_DAYS !== undefined && {
+          FONDS_CAPTURE_ARCHIVE_DAYS,
+        }),
+      }).captureArchiveDays;
+    expect(parse()).toBeUndefined();
+    expect(parse("0")).toBe(0);
+    expect(parse("90")).toBe(90);
+    for (const value of ["91", "-1", "1.5", "07", "many"]) {
+      expect(() => parse(value)).toThrow(/FONDS_CAPTURE_ARCHIVE_DAYS/);
+    }
+  });
+
   it("accepts only the settled posting modes", () => {
     const parse = (FONDS_SETTLED_POSTING?: string) =>
       hostedNodeConfiguration({

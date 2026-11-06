@@ -56,6 +56,12 @@ debugging retention was requested. Legacy archives remain. Unknown fields are
 discarded; recollection cannot recover vanished values or expired periods.
 Declared evidence without a safe transaction identity is retained separately.
 
+An opt-in capture archive keeps what each run received and each card discovery,
+compressed and as received, for a bounded period, so later matching can be
+debugged against real sequences. It is written before parsing, so rejected
+captures are kept too, and a failed write never stops ingestion. Captures that
+differ only in key order, capture time or source-regenerated fields share one body.
+
 Input digests preserve run-ID immutability after body removal; applied replay is
 quiet. Recovery needs the staged body and matching parser. Historical
 reinterpretation is unsupported. Retained row evidence could support re-deriving

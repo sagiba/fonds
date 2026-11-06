@@ -109,6 +109,17 @@ export interface RefreshWindowRow {
 }
 
 /** Content-addressed evidence that cannot safely belong to a ledger transaction. */
+export interface CaptureArchiveRow {
+  id: string;
+  connectionId: string;
+  kind: "run" | "card_discovery";
+  capturedAt: string;
+  contentDigest: string;
+  /** Null when an earlier row with this digest holds the same content. */
+  body: Uint8Array | null;
+  expiresAt: string;
+}
+
 export interface DeferredEvidenceWrite {
   id: string;
   connectionId: string;
@@ -343,6 +354,17 @@ export interface Statements<Db> {
     keepUntil: string | null,
   ): Iterable<PromiseLike<unknown>>;
   pruneDebugBodies(db: Db, now: string): PromiseLike<unknown>;
+  captureBody(
+    db: Db,
+    connectionId: string,
+    contentDigest: string,
+  ): PromiseLike<{ id: string }[]>;
+  insertCaptureArchive(db: Db, row: CaptureArchiveRow): PromiseLike<unknown>;
+  pruneCaptureArchives(
+    db: Db,
+    connectionId: string,
+    now: string,
+  ): PromiseLike<unknown>;
   setConfig(db: Db, id: string, config: ConnectionConfig): PromiseLike<unknown>;
   latestOccurrence(db: Db): PromiseLike<{ scheduledAt: string | null }[]>;
   claimOccurrence(

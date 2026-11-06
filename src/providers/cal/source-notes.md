@@ -32,6 +32,8 @@ established transaction role and remains unretained, not classified as proven no
   Recent posted rows have 73 keys; older accumulated rows have 71 because
   `paymentsMade` and `paymentsMadeComment` can be absent. Pending has 19 keys in
   two variants, the earlier without `transactionID` and `isAbroadApproval`.
+  Top-level `groupPid` differs between otherwise identical answers, so capture
+  comparison ignores it.
   `statusTitle` was only ever null. Initialization names the account
   `bankAccountUniqueId`; the recent request expects `bankAccountUniqueID`.
 - **Negative findings:** `statusCode: 1` marks application success, not
