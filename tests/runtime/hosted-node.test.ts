@@ -185,6 +185,36 @@ describe("trusted client address", () => {
     },
   );
 
+  it("accepts capture retention of 0 to 90 days", () => {
+    const parse = (FONDS_CAPTURE_ARCHIVE_DAYS?: string) =>
+      hostedNodeConfiguration({
+        ...base,
+        FONDS_DATABASE_URL: "postgresql://u:p@127.0.0.1/fonds",
+        ...(FONDS_CAPTURE_ARCHIVE_DAYS !== undefined && {
+          FONDS_CAPTURE_ARCHIVE_DAYS,
+        }),
+      }).captureArchiveDays;
+    expect(parse()).toBeUndefined();
+    expect(parse("0")).toBe(0);
+    expect(parse("90")).toBe(90);
+    for (const value of ["91", "-1", "1.5", "07", "many"]) {
+      expect(() => parse(value)).toThrow(/FONDS_CAPTURE_ARCHIVE_DAYS/);
+    }
+  });
+
+  it("accepts only the settled posting modes", () => {
+    const parse = (FONDS_SETTLED_POSTING?: string) =>
+      hostedNodeConfiguration({
+        ...base,
+        FONDS_DATABASE_URL: "postgresql://u:p@127.0.0.1/fonds",
+        ...(FONDS_SETTLED_POSTING !== undefined && { FONDS_SETTLED_POSTING }),
+      }).settledPosting;
+    expect(parse()).toBeUndefined();
+    expect(parse("off")).toBe("off");
+    expect(parse("on")).toBe("on");
+    expect(() => parse("always")).toThrow(/FONDS_SETTLED_POSTING/);
+  });
+
   it.each(["", "0", "3661", "040", "ten"])(
     "accepts sync scope days from 1 to 3660, not %o",
     (value) => {
@@ -199,6 +229,27 @@ describe("trusted client address", () => {
       expect(parse("1")).toBe(1);
       expect(parse("3660")).toBe(3660);
       expect(() => parse(value)).toThrow(/FONDS_SYNC_SCOPE_DAYS/);
+    },
+  );
+
+  it.each(["", "0", "6", "02", "1.5", "two"])(
+    "accepts login failures before attention from 1 to 5, not %o",
+    (value) => {
+      const parse = (FONDS_LOGIN_FAILURES_BEFORE_ATTENTION?: string) =>
+        hostedNodeConfiguration({
+          ...base,
+          FONDS_DATABASE_URL: "postgresql://u:p@127.0.0.1/fonds",
+          ...(FONDS_LOGIN_FAILURES_BEFORE_ATTENTION !== undefined && {
+            FONDS_LOGIN_FAILURES_BEFORE_ATTENTION,
+          }),
+        }).loginFailuresBeforeAttention;
+      // Unset leaves the refresh service's default.
+      expect(parse()).toBeUndefined();
+      expect(parse("1")).toBe(1);
+      expect(parse("5")).toBe(5);
+      expect(() => parse(value)).toThrow(
+        /FONDS_LOGIN_FAILURES_BEFORE_ATTENTION/,
+      );
     },
   );
 

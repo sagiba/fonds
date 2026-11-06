@@ -7,13 +7,20 @@ import {
 } from "./evidence.js";
 import { extractIsracard } from "./extract.js";
 import { isracardFinancialAuthority } from "./financial-authority.js";
-import { compatibleIsracardPostingGroups } from "./posting-evidence.js";
+import {
+  compatibleIsracardPostingGroups,
+  isracardSettlementPolicy,
+} from "./posting-evidence.js";
 import { normalizeIsracardScope, validateIsracardScope } from "./scope.js";
 import { ISRACARD_ENDPOINTS } from "./transport.js";
 
 export const isracardAdapter: SourceAdapter = {
   provider: "isracard",
   parserVersion: "isracard-v17",
+  volatileCaptureFields: [
+    "card.cardGuid",
+    "responses.cardList.data.cardsList.cardGuid",
+  ],
   retainProviderEvidence: retainIsracardEvidence,
   mergeProviderEvidence: mergeIsracardEvidence,
   paymentContextFromRetainedEvidence: retainedPaymentContext,
@@ -26,9 +33,11 @@ export const isracardAdapter: SourceAdapter = {
   sourceCoverage: { kind: "same_origin", statuses: ["pending"] },
   pendingPostingCandidates: true,
   automaticPosting: {
+    exactNameHeuristic: true,
     pendingAmountBasis: "authorization",
     postedAmountBasis: "purchase_commitment",
     compatibleGroups: compatibleIsracardPostingGroups,
+    settledHeuristic: isracardSettlementPolicy,
   },
   resourceKey(endpoint) {
     return endpoint === ISRACARD_ENDPOINTS.transactions ||

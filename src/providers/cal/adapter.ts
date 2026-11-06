@@ -5,7 +5,11 @@ import {
   retainCalEvidence,
 } from "./evidence.js";
 import { extractCal } from "./extract.js";
-import { compatibleCalPostingGroups } from "./posting-evidence.js";
+import {
+  calExactContradiction,
+  calSettlementPolicy,
+  compatibleCalPostingGroups,
+} from "./posting-evidence.js";
 import { normalizeCalScope, validateCalScope } from "./scope.js";
 
 // Hypothesis-based margin inside the asserted 90 days; governing dates are unvalidated.
@@ -14,6 +18,7 @@ const RECENT_COMPARABLE_DAYS = 60;
 export const calAdapter: SourceAdapter = {
   provider: "cal",
   parserVersion: "cal-v15",
+  volatileCaptureFields: ["groupPid"],
   retainProviderEvidence: retainCalEvidence,
   mergeProviderEvidence: mergeCalEvidence,
   projectProviderState: projectCalState,
@@ -22,6 +27,9 @@ export const calAdapter: SourceAdapter = {
   normalizeScope: normalizeCalScope,
   pendingPostingCandidates: true,
   automaticPosting: {
+    exactNameHeuristic: true,
+    exactNameContradiction: calExactContradiction,
+    settledHeuristic: calSettlementPolicy,
     compatibleGroups: compatibleCalPostingGroups,
     pendingAmountBasis: "authorization",
     postedAmountBasis: "purchase_commitment",

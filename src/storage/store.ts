@@ -29,6 +29,8 @@ import {
   finalAttention,
   isActive,
   isExecuted,
+  isLoginStop,
+  LOGIN_FAILURES_BEFORE_ATTENTION,
   type NotStartedReason,
   type Refresh,
   refreshHealthEvents,
@@ -43,6 +45,7 @@ import {
 import {
   elapsedMs,
   syncCorrelationIds,
+  type SyncDiagnostic,
   syncDiagnostics,
   type SyncDiagnosticSink,
 } from "../application/sync-diagnostics.js";
@@ -52,6 +55,7 @@ import {
   ConflictError,
   InvalidInputError,
   NotFoundError,
+  RepairRefusedError,
 } from "../domain/errors.js";
 import { toSafeMinor } from "../domain/money.js";
 import { canonicalJson, compareStrings } from "../domain/observations.js";
@@ -62,12 +66,27 @@ import {
 } from "../domain/plans/annotation.js";
 import { planCardDiscovery } from "../domain/plans/catalog.js";
 import {
+  applyRepair,
+  exactPostingRepairSchema,
+  REPAIR_MAX_ACCOUNT_ROWS,
+  REPAIR_MAX_D1_ACCOUNT_ROWS,
+} from "../domain/plans/exact-posting-repair.js";
+import {
   planPosting,
   planRemoval,
   planUnlinkPosting,
   postingSchema,
   removalSchema,
 } from "../domain/plans/lifecycle.js";
+import {
+  SETTLED_POSTING_MODES,
+  type SettledPostingMode,
+  SETTLEMENT_EVIDENCE_BYTES,
+  SETTLEMENT_MAX_ROWS,
+  type SettlementContender,
+  settlementScanStart,
+  type SettlementSnapshot,
+} from "../domain/plans/posting-settlement.js";
 import {
   copyRunHistory,
   decodeRunHistory,
@@ -120,6 +139,12 @@ import type {
 import { PROVIDER_STOP_REASONS } from "../domain/refreshes.js";
 import type { SourceAdapter } from "../domain/source-adapter.js";
 import {
+  CAPTURE_ARCHIVE_MAX_DAYS,
+  type CaptureArchiveOptions,
+  discoveryCapture,
+  runCapture,
+} from "./capture-archive.js";
+import {
   contentDigest,
   prepareRun,
   replayResult,
@@ -137,6 +162,7 @@ import {
   type PlanScope,
 } from "./sql.js";
 import type {
+  CaptureArchiveRow,
   LatestAppliedRun,
   LedgerLoad,
   OrderedRun,
@@ -522,10 +548,16 @@ async function commitInOrder<
 /** Installation settings every store of a database shares. */
 export interface StoreOptions {
   /**
-   * Days around each capture's requested dates and observations that its
-   * application reads: a whole number from 1 to 3660, by default 40.
+   * Days around each capture's requested dates that its application reads:
+   * a whole number from 1 to 3660, by default 40.
    */
   syncScopeDays?: number;
+  /** Delayed heuristic identity linkage; `off` by default. */
+  settledPosting?: SettledPostingMode;
+  /** Keeps what each collection received; absent, bodies are released as usual. */
+  captureArchive?: CaptureArchiveOptions;
+  /** The provider rules exact repair must honor; absent, it applies only shared rules. */
+  repairAdapter?: (provider: string) => SourceAdapter | undefined;
 }
 
 /**
@@ -609,6 +641,21 @@ function buildStore<Db>(
 ): InternalStore & RefreshWriter {
   const commitWrites = db.commit ?? commitInOrder;
   const scopeDays = options.syncScopeDays ?? SYNC_SCOPE_DAYS;
+  const settledMode = options.settledPosting ?? "off";
+  const archive = options.captureArchive;
+  if (
+    archive &&
+    !(
+      Number.isInteger(archive.days) &&
+      archive.days >= 1 &&
+      archive.days <= CAPTURE_ARCHIVE_MAX_DAYS
+    )
+  ) {
+    throw new RangeError("Capture archive days out of range");
+  }
+  if (!SETTLED_POSTING_MODES.includes(settledMode)) {
+    throw new RangeError("Unknown settled posting mode");
+  }
   if (!isSyncScopeDays(scopeDays)) {
     throw new RangeError(
       "Sync scope days must be a whole number from 1 to 3660",
@@ -775,7 +822,7 @@ function buildStore<Db>(
       (await db.execute(statements.activeRefreshes(db.root))).map((row) =>
         refreshFromRow(row),
       ),
-    updateRefresh: (id, progress) =>
+    updateRefresh: (id, progress, policy) =>
       db.transaction(async (tx) => {
         const reference = (await statements.refresh(tx, id))[0];
         const connection =
@@ -793,6 +840,18 @@ function buildStore<Db>(
           : undefined;
         // A refresh's terminal status and its final attention commit together.
         if (finishing) {
+          const attention = policy ?? {
+            loginFailuresBeforeAttention: LOGIN_FAILURES_BEFORE_ATTENTION,
+          };
+          // Only a refused login looks back past the previous refresh.
+          const earlier =
+            isLoginStop(row) && attention.loginFailuresBeforeAttention > 1
+              ? await statements.loginStreakRefreshes(
+                  tx,
+                  row.connectionId,
+                  attention.loginFailuresBeforeAttention - 1,
+                )
+              : [];
           fields.requiresAttention = finalAttention(
             {
               status,
@@ -801,6 +860,8 @@ function buildStore<Db>(
               providerStopReason: row.providerStopReason,
             },
             previous,
+            earlier,
+            attention,
           );
         }
         const cumulative = counts && { ...counts };
@@ -1113,7 +1174,10 @@ function buildStore<Db>(
           return [
             ...chunks(
               clause.accounts,
-              Math.max(1, budget - clause.statuses.length - 4),
+              Math.max(
+                1,
+                budget - clauseParameters({ ...clause, accounts: [] }),
+              ),
             ),
           ].map((accounts) => ({ ...clause, accounts }));
         case "keys":
@@ -1164,7 +1228,7 @@ function buildStore<Db>(
    * - supersession, both ways, and purchase families: the purchase of every
    *   billed line and every line of every purchase;
    * - stored pending-to-posted candidate lists, both ways;
-   * - the observation radius around every named row, and the exact-date
+   * - the candidate distance around every named row, and the exact-date
    *   group of every row a decision can move between groups (pending and
    *   covered rows, named rows and rows whose identity is in doubt);
    * - then supersession, purchase families and candidates again.
@@ -1312,7 +1376,6 @@ function buildStore<Db>(
               accounts.has(row.sourceScope) && (doubt || named(row)),
           )
           .map(({ row }) => row),
-        scope.radius,
       ).filter(
         (window) =>
           !scope.windows.some(
@@ -1373,6 +1436,63 @@ function buildStore<Db>(
   }
 
   /**
+   * Bounded read of the rows that could contest a settlement link, for the
+   * accounts this capture proves complete. Skipping a capture is neutral:
+   * settlement re-derives everything on the next capture it can read.
+   */
+  async function loadSettlement(
+    tx: Db,
+    connection: Connection,
+    extraction: ReturnType<typeof extractRun>,
+  ): Promise<{
+    snapshot?: SettlementSnapshot;
+    status: NonNullable<SyncDiagnostic["settlement"]>;
+  }> {
+    const covered = extraction.extracted.filter(({ result }) =>
+      result.partitions.some((part) => part.status === "pending"),
+    );
+    if (covered.length === 0) {
+      return { status: "no_pending_coverage" };
+    }
+    const complete = covered.filter(
+      ({ result }) =>
+        !result.historical &&
+        result.partitions.every((part) => part.success) &&
+        result.partitions.some((part) => part.status === "posted") &&
+        result.partitions.some(
+          (part) => part.status === "pending" && part.comparable,
+        ),
+    );
+    if (complete.length === 0) {
+      return { status: "incomplete_capture" };
+    }
+    const accounts = new Map<string, SettlementContender[]>();
+    let remaining = SETTLEMENT_MAX_ROWS;
+    for (const { response } of complete) {
+      if (accounts.has(response.accountKey)) {
+        continue;
+      }
+      const rows = await statements.settlementContenders(
+        tx,
+        connection.id,
+        response.accountKey,
+        settlementScanStart(response.capturedAt),
+        remaining + 1,
+        SETTLEMENT_EVIDENCE_BYTES,
+      );
+      if (rows.length > remaining) {
+        return { status: "row_budget" };
+      }
+      remaining -= rows.length;
+      accounts.set(response.accountKey, rows);
+    }
+    return {
+      snapshot: { accounts },
+      status: "ready",
+    };
+  }
+
+  /**
    * Plans one application from narrow rows, hydrating the rows the plan
    * needs complete. A round whose plan demanded hydration is speculative:
    * its result, and any planner error, is discarded, the demanded rows are
@@ -1398,6 +1518,7 @@ function buildStore<Db>(
       adapter: SourceAdapter;
       now: string;
       onRead: (reading: boolean) => void;
+      settlement?: SettlementSnapshot;
     },
   ) {
     const { connection, adapter } = input;
@@ -1442,6 +1563,7 @@ function buildStore<Db>(
       }
       const plan = new FinancialPlan({
         connection,
+        ...(input.settlement ? { settlement: input.settlement } : {}),
         rows: ledger.map(({ row }) => complete.get(row.id) ?? row),
         annotations,
         priorRuns: history.priorRuns,
@@ -1566,6 +1688,9 @@ function buildStore<Db>(
   ) {
     const { adapter, history, runHistory } = dependent;
     const plan = await loadPlan(tx, connection, undefined, [], true);
+    if (dependent.plan.snapshot.settlement) {
+      plan.snapshot.settlement = dependent.plan.snapshot.settlement;
+    }
     let replayed = 0;
     const result = planRun(
       plan,
@@ -1647,6 +1772,59 @@ function buildStore<Db>(
     );
     await savePlan(tx, plan);
     return result;
+  }
+
+  /**
+   * Debugging evidence only, so a failure here is logged and never stops the
+   * financial work around it. A repeat keeps a row, because each sighting still
+   * happened; pruning keeps the body it shares. Reads and inserts take no lock on
+   * existing rows, and a retry inserts nothing.
+   */
+  async function archiveCapture(
+    row: Pick<CaptureArchiveRow, "id" | "connectionId" | "kind" | "capturedAt">,
+    capture: () => Promise<{ text: string; digest: string }>,
+    emit: ReturnType<typeof syncDiagnostics>,
+    ids: ReturnType<typeof syncCorrelationIds>,
+  ): Promise<void> {
+    if (!archive) {
+      return;
+    }
+    const started = performance.now();
+    try {
+      const { text, digest } = await capture();
+      const held = await db.execute(
+        statements.captureBody(db.root, row.connectionId, digest),
+      );
+      const body = held.length > 0 ? null : archive.compress(text);
+      await db.execute(
+        statements.insertCaptureArchive(db.root, {
+          ...row,
+          contentDigest: digest,
+          body,
+          expiresAt: new Date(
+            Date.now() + archive.days * 86_400_000,
+          ).toISOString(),
+        }),
+      );
+      emit({
+        event: "fonds_sync",
+        ...ids,
+        stage: "archive",
+        outcome: "completed",
+        reason: body ? "capture_archived" : "capture_repeated",
+        durationMs: elapsedMs(started),
+        ...(body && { counts: { archivedBytes: body.byteLength } }),
+      });
+    } catch {
+      emit({
+        event: "fonds_sync",
+        ...ids,
+        stage: "archive",
+        outcome: "failed",
+        reason: "capture_archive_failed",
+        failureCategory: "persistence",
+      });
+    }
   }
 
   async function ingestRun(
@@ -1802,6 +1980,27 @@ function buildStore<Db>(
         new Error("Unapplied run has no recoverable source body"),
       );
     }
+    // Every application passes here while the body exists, recovery included,
+    // and before extraction, so a capture the parser rejects is kept too.
+    await archiveCapture(
+      {
+        id,
+        connectionId: connection.id,
+        kind: "run",
+        capturedAt: archived.startedAt,
+      },
+      () =>
+        runCapture(
+          {
+            collectorVersion: archived.collectorVersion,
+            responses: archived.snapshot.responses,
+            failures: archived.snapshot.failures ?? [],
+          },
+          adapter,
+        ),
+      emit,
+      ids,
+    );
     const started = performance.now();
     emit({
       event: "fonds_sync",
@@ -1862,6 +2061,10 @@ function buildStore<Db>(
           adapter,
           ledger.map(({ row }) => row),
         );
+        const settlement =
+          settledMode !== "off" && adapter.automaticPosting?.settledHeuristic
+            ? await loadSettlement(tx, locked, extraction)
+            : undefined;
         const removals = await statements.removals(tx, connection.id);
         const catalog = await loadCatalog(tx, connection.id);
         phase = "reconciliation";
@@ -1879,12 +2082,14 @@ function buildStore<Db>(
           ...ids,
           stage: "reconciliation",
           outcome: "started",
+          settlement: settlement?.status ?? "disabled",
           ...(requestScope && { requestScope }),
           counts: loaded,
         });
         const now = new Date().toISOString();
         const planned = await planApplication(tx, {
           connection: locked,
+          ...(settlement?.snapshot ? { settlement: settlement.snapshot } : {}),
           ledger,
           bounds: { scope: bounded.scope, knownScopes: bounded.knownScopes },
           history: loadedHistory,
@@ -2048,13 +2253,6 @@ function buildStore<Db>(
                       ),
                     ]),
                   ].sort(),
-                  requiresAttention:
-                    refresh.requiresAttention ||
-                    (run.snapshot.failures ?? []).some(
-                      (failure) =>
-                        failure.code === "authentication_failed" ||
-                        failure.code === "authentication_challenge",
-                    ),
                 }),
               ]
             : []),
@@ -2098,8 +2296,10 @@ function buildStore<Db>(
     });
     // Expiration is maintenance after the atomic financial commit; failure cannot undo it.
     try {
+      const now = new Date().toISOString();
+      await db.execute(statements.pruneDebugBodies(db.root, now));
       await db.execute(
-        statements.pruneDebugBodies(db.root, new Date().toISOString()),
+        statements.pruneCaptureArchives(db.root, connection.id, now),
       );
       emit({
         event: "fonds_sync",
@@ -2153,7 +2353,20 @@ function buildStore<Db>(
       Promise.all(
         (await db.execute(statements.connections(db.root))).map(present),
       ),
-    recordCardDiscovery: async (connectionId, input) => {
+    recordCardDiscovery: async (connectionId, input, onDiagnostic) => {
+      // Before validation, so a discovery the schema refuses is kept too.
+      const id = crypto.randomUUID();
+      await archiveCapture(
+        {
+          id,
+          connectionId,
+          kind: "card_discovery",
+          capturedAt: new Date().toISOString(),
+        },
+        () => discoveryCapture(input),
+        syncDiagnostics(onDiagnostic),
+        syncCorrelationIds({ captureId: id }),
+      );
       const discovery = cardDiscoverySchema.parse(input);
       await db.transaction(async (tx) => {
         const connection = (
@@ -2468,6 +2681,193 @@ function buildStore<Db>(
             planUndoAnnotation(plan, event, input, new Date().toISOString()),
         );
       }),
+    repairExactPostings: async (input) => {
+      const command = exactPostingRepairSchema.parse(input);
+      return db.transaction(async (tx) => {
+        const connection = (
+          await statements.repairLockConnectionOf(tx, command.transactionId)
+        )[0];
+        if (!connection) {
+          throw new NotFoundError("Transaction not found");
+        }
+        const maxRows =
+          db.backend === "d1"
+            ? REPAIR_MAX_D1_ACCOUNT_ROWS
+            : REPAIR_MAX_ACCOUNT_ROWS;
+        const encoder = new TextEncoder();
+        const bytes = (value: unknown) =>
+          encoder.encode(JSON.stringify(value)).byteLength;
+        const maxNarrowBytes =
+          db.backend === "d1" ? 4 * 1024 * 1024 : 16 * 1024 * 1024;
+        const maxHydratedBytes =
+          db.backend === "d1" ? 4 * 1024 * 1024 : 16 * 1024 * 1024;
+        const maxHydrated = db.backend === "d1" ? 40 : 100;
+        const ledger: LedgerLoad[] = [];
+        let narrowBytes = 0;
+        let afterId: string | undefined;
+        for (;;) {
+          const page = await statements.repairLedgerRows(
+            tx,
+            connection.id,
+            command.transactionId,
+            afterId,
+            100,
+            2048,
+          );
+          narrowBytes += bytes(page);
+          if (
+            narrowBytes > maxNarrowBytes ||
+            ledger.length + page.length > maxRows
+          ) {
+            throw new RepairRefusedError(
+              "Account exceeds repair row or byte limit",
+            );
+          }
+          ledger.push(...page);
+          if (page.length < 100) {
+            break;
+          }
+          afterId = page.at(-1)!.row.id;
+        }
+        if (!ledger.some(({ row }) => row.id === command.transactionId)) {
+          throw new RepairRefusedError("Repair account snapshot is incomplete");
+        }
+        ledger.sort((a, b) => a.position - b.position);
+        const narrow = new Map(ledger.map(({ row }) => [row.id, row]));
+        const complete = new Map<string, Transaction>();
+        const annotations = ledger.flatMap(({ annotation }) =>
+          annotation ? [annotation] : [],
+        );
+        let hydratedBytes = 0;
+        const now = new Date().toISOString();
+        let plan: FinancialPlan | undefined;
+        let pairs: ReturnType<typeof applyRepair> = [];
+        for (let round = 0; round < 8; round++) {
+          plan = new FinancialPlan({
+            connection,
+            rows: ledger.map(({ row }) => complete.get(row.id) ?? row),
+            annotations,
+            priorRuns: [],
+            removals: [],
+            scope: { completeDate: () => true, missing: new Set() },
+          });
+          let failure: unknown;
+          try {
+            pairs = applyRepair(
+              plan,
+              command,
+              now,
+              options.repairAdapter?.(connection.provider)?.automaticPosting
+                ?.exactNameContradiction,
+            );
+            if (command.mode === "apply" && pairs.length) {
+              finishTransactionContent(
+                plan,
+                undefined,
+                undefined,
+                now,
+                new Set(),
+                "owner",
+              );
+            }
+          } catch (error) {
+            failure = error;
+          }
+          if (plan.misses.size) {
+            throw new RepairRefusedError(
+              "Repair dependency lies outside the complete account",
+            );
+          }
+          if (!plan.demands.size) {
+            if (failure) {
+              throw failure;
+            }
+            break;
+          }
+          const wanted = [...plan.demands].filter((id) => !complete.has(id));
+          if (!wanted.length || complete.size + wanted.length > maxHydrated) {
+            throw new RepairRefusedError("Repair exceeds hydration limit");
+          }
+          for (const batch of chunks(wanted, 5)) {
+            const hydrated = await statements.repairCompleteRows(
+              tx,
+              batch,
+              16384,
+            );
+            hydratedBytes += bytes(hydrated);
+            if (
+              hydratedBytes > maxHydratedBytes ||
+              hydrated.length !== batch.length
+            ) {
+              throw new RepairRefusedError(
+                "Repair exceeds hydration byte limit or dependency is missing",
+              );
+            }
+            for (const { row, annotation } of hydrated) {
+              const projected = narrow.get(row.id);
+              if (
+                !projected ||
+                canonicalJson(narrowFacts(row)) !== canonicalJson(projected) ||
+                canonicalJson(annotation) !==
+                  canonicalJson(
+                    ledger.find((item) => item.row.id === row.id)?.annotation ??
+                      null,
+                  )
+              ) {
+                throw new RepairRefusedError(
+                  "Repair projection changed or could not be verified",
+                );
+              }
+              complete.set(row.id, row);
+            }
+          }
+          plan = undefined;
+        }
+        if (!plan || plan.demands.size || plan.misses.size) {
+          throw new RepairRefusedError("Repair planning exceeded its bounds");
+        }
+        if (
+          [
+            ...plan.transactionWrites.values(),
+            ...plan.observationWrites.values(),
+          ].some((row) => isNarrow(row) || !complete.has(row.id))
+        ) {
+          throw new RepairRefusedError("Repair write was not fully hydrated");
+        }
+        let outputBytes = 0;
+        for (const value of [
+          ...plan.transactionWrites.values(),
+          ...plan.annotationWrites.values(),
+          ...plan.observationWrites.values(),
+          ...plan.events,
+        ]) {
+          outputBytes += bytes(value);
+          if (outputBytes > 16 * 1024 * 1024) {
+            throw new RepairRefusedError("Repair output exceeds byte limit");
+          }
+        }
+        if (db.backend === "d1") {
+          const latest = (
+            await statements.repairLockConnectionOf(tx, command.transactionId)
+          )[0];
+          if (
+            !latest ||
+            !("revision" in connection) ||
+            !("revision" in latest) ||
+            typeof connection.revision !== "number" ||
+            connection.revision !== latest.revision
+          ) {
+            throw new RepairRefusedError(
+              "Financial data changed concurrently; retry repair",
+            );
+          }
+        }
+        if (command.mode === "apply" && pairs.length) {
+          await savePlan(tx, plan);
+        }
+        return { mode: command.mode, pairs };
+      });
+    },
     linkPendingTransaction: async (input) => {
       const command = postingSchema.parse(input);
       return db.transaction((tx) =>

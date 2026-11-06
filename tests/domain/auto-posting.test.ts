@@ -168,6 +168,8 @@ function pairs(
         .map((row) => [row, row]),
     ),
     capability,
+    undefined,
+    () => undefined,
   ).pairs;
 }
 
@@ -316,6 +318,25 @@ describe("automatic posting candidate graph", () => {
         [row("s-a"), row("s-b", { merchantName: "Other" })],
       ).size,
     ).toBe(0);
+  });
+
+  it("fails closed for twin attribution if annotation access is unavailable", () => {
+    const left = [pending("pending-a"), pending("pending-b")];
+    const right = [postedFacts("posted-a"), postedFacts("posted-b")];
+    const disappearing = new Map(left.map((row) => [row, row]));
+    expect(
+      automaticPostingPairs(left, right, disappearing, capability).pairs.size,
+    ).toBe(0);
+    expect(
+      automaticPostingPairs(
+        left,
+        right,
+        disappearing,
+        capability,
+        undefined,
+        () => undefined,
+      ).pairs.size,
+    ).toBe(2);
   });
 
   it.each([2, 3])(

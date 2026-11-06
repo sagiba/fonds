@@ -4,7 +4,7 @@ import { identityBase } from "./source-identity.js";
 import type { LedgerRow, LedgerScope } from "./state.js";
 import type { extractRun } from "./sync.js";
 
-/** Days around a capture's request window and observations that it reconciles. */
+/** Days around a capture's request window that it reconciles, by default. */
 export const SYNC_SCOPE_DAYS = 40;
 
 /** The widest configurable padding: about ten years. */
@@ -15,7 +15,11 @@ export function isSyncScopeDays(days: number): boolean {
   return Number.isInteger(days) && days >= 1 && days <= SYNC_SCOPE_MAX_DAYS;
 }
 
-/** The widest date distance between a pending row and a posted candidate. */
+/**
+ * The widest date distance between a pending row and a posted candidate,
+ * and the days read around every observed or named date: the candidate scan
+ * is the only fold over a date's neighbours.
+ */
 export const CANDIDATE_DAYS = 7;
 
 const DAY_MILLISECONDS = 86_400_000;
@@ -43,13 +47,11 @@ export interface SyncScope {
    * and whatever the adapter's coverage can declare absent, whatever their dates.
    */
   statuses: Transaction["status"][];
-  /** The padded request windows, and every observation's padded date. */
-  windows: DateWindow[];
   /**
-   * Days around an observed or named date that are read: the configured
-   * padding, never less than the candidate distance.
+   * The request windows padded by the configured days, and every
+   * observation's date padded by the candidate distance.
    */
-  radius: number;
+  windows: DateWindow[];
   /** Source keys, aliases and purchase keys the observations name. */
   keys: string[];
   /** Identity bases the observations declare. */
@@ -132,10 +134,12 @@ function merged(windows: DateWindow[]): DateWindow[] {
 /**
  * Which rows one application reads before closure. Every response counts,
  * including those an implausible-empty check may later reject, so the
- * scope never depends on that decision. A month governs over request bounds
- * (a backfill month follows that month, never the day it ran), and
- * observations are padded by at least the candidate distance, so any row an
- * observation could be suggested with is read.
+ * scope never depends on that decision. The configured `days` pad only the
+ * dates a response requested: its month over its request bounds (a backfill
+ * month follows that month, never the day it ran), else its capture day.
+ * An observation's date is padded by the candidate distance, so any row it
+ * could be suggested with is read; its identity comes from the key, alias
+ * and base lookups, never from its date.
  */
 export function syncScope(
   extraction: Pick<ReturnType<typeof extractRun>, "extracted">,
@@ -147,7 +151,6 @@ export function syncScope(
   const keys = new Set<string>();
   const bases = new Set<string>();
   let requestScope: SyncScope["requestScope"];
-  const radius = Math.max(days, CANDIDATE_DAYS);
   for (const { response, result } of extraction.extracted) {
     accounts.add(response.accountKey);
     const requested = requestedDates(response);
@@ -177,8 +180,8 @@ export function syncScope(
         windows.push({
           sourceScope: input.sourceScope,
           field: "transaction",
-          from: shifted(date, -radius),
-          to: shifted(date, radius),
+          from: shifted(date, -CANDIDATE_DAYS),
+          to: shifted(date, CANDIDATE_DAYS),
         });
       }
     }
@@ -192,7 +195,6 @@ export function syncScope(
       ]),
     ],
     windows: merged(windows),
-    radius,
     keys: [...keys],
     bases: [...bases],
     requestScope,
@@ -217,13 +219,10 @@ export function scopeNames(
 }
 
 /**
- * Windows of `radius` days around each row's transaction (or booking) date,
- * as `syncScope` pads an observation's date.
+ * Windows of the candidate distance around each row's transaction (or
+ * booking) date, as `syncScope` pads an observation's date.
  */
-export function namedWindows(
-  rows: readonly LedgerRow[],
-  radius: number,
-): DateWindow[] {
+export function namedWindows(rows: readonly LedgerRow[]): DateWindow[] {
   return merged(
     rows.flatMap((row) => {
       const date = row.transactionDate ?? row.bookingDate;
@@ -232,8 +231,8 @@ export function namedWindows(
             {
               sourceScope: row.sourceScope,
               field: "transaction" as const,
-              from: shifted(date, -radius),
-              to: shifted(date, radius),
+              from: shifted(date, -CANDIDATE_DAYS),
+              to: shifted(date, CANDIDATE_DAYS),
             },
           ]
         : [];

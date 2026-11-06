@@ -6,6 +6,7 @@ import { parseArgs } from "node:util";
 import { serve, type ServerType } from "@hono/node-server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 
+import { captureArchiveOptions } from "./runtime/capture-archive.js";
 import { protectedDirectory } from "./runtime/checkout.js";
 import { CollectionScheduleError } from "./runtime/collection-schedule.js";
 import {
@@ -21,7 +22,9 @@ import {
   localStateDirectory,
   openSqliteSession,
 } from "./runtime/local-ledger.js";
+import { loginFailuresBeforeAttention } from "./runtime/login-failures.js";
 import { CommandInputError } from "./runtime/operation-cli.js";
+import { postingOptions } from "./runtime/settled-posting.js";
 import { STATE_FILE, StateError } from "./runtime/state.js";
 import { syncScopeDays } from "./runtime/sync-scope.js";
 import { createHttpService } from "./transport/http.js";
@@ -188,6 +191,12 @@ export async function startServer(args: string[], seams: ServerSeams = {}) {
   }
   const session = await openSqliteSession(databasePath, installation, {
     syncScopeDays: syncScopeDays(
+      env,
+      (message) => new CommandInputError(message),
+    ),
+    ...postingOptions(env, (message) => new CommandInputError(message)),
+    ...captureArchiveOptions(env, (message) => new CommandInputError(message)),
+    loginFailuresBeforeAttention: loginFailuresBeforeAttention(
       env,
       (message) => new CommandInputError(message),
     ),

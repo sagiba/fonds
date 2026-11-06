@@ -17,6 +17,7 @@ import {
   initializePostgresDatabase,
   openPostgresDatabase,
 } from "../storage/postgres/store.js";
+import { captureArchiveOptions } from "./capture-archive.js";
 import { HostedConfigurationError } from "./hosted-service.js";
 import {
   type Installation,
@@ -25,8 +26,10 @@ import {
   installationFromSecrets,
   resolveInstallation,
 } from "./installation.js";
+import { loginFailuresBeforeAttention } from "./login-failures.js";
 import { CommandInputError } from "./operation-cli.js";
 import type { BackendSession } from "./operator-cli.js";
+import { postingOptions } from "./settled-posting.js";
 import { STATE_SECRETS, StateError } from "./state.js";
 import { syncScopeDays } from "./sync-scope.js";
 
@@ -192,10 +195,19 @@ export async function openPostgresSession(
       "FONDS_DATABASE_URL is required; without it, fonds uses SQLite.",
     );
   }
+  const loginFailures = loginFailuresBeforeAttention(
+    env,
+    (message) => new CommandInputError(message),
+  );
   const store = openPostgresDatabase(
     financialPoolConfig(env.FONDS_DATABASE_URL),
     {
       syncScopeDays: syncScopeDays(
+        env,
+        (message) => new CommandInputError(message),
+      ),
+      ...postingOptions(env, (message) => new CommandInputError(message)),
+      ...captureArchiveOptions(
         env,
         (message) => new CommandInputError(message),
       ),
@@ -213,6 +225,7 @@ export async function openPostgresSession(
       credentials: createPostgresCredentialStore(store.pool),
       eventSubscriptions: createPostgresEventStore(store.pool, store),
       credentialsKey: installation.credentialsKey,
+      loginFailuresBeforeAttention: loginFailures,
       close: () => store.close(),
     };
   } catch (error) {

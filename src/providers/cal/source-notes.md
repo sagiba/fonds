@@ -32,6 +32,8 @@ established transaction role and remains unretained, not classified as proven no
   Recent posted rows have 73 keys; older accumulated rows have 71 because
   `paymentsMade` and `paymentsMadeComment` can be absent. Pending has 19 keys in
   two variants, the earlier without `transactionID` and `isAbroadApproval`.
+  Top-level `groupPid` differs between otherwise identical answers, so capture
+  comparison ignores it.
   `statusTitle` was only ever null. Initialization names the account
   `bankAccountUniqueId`; the recent request expects `bankAccountUniqueID`.
 - **Negative findings:** `statusCode: 1` marks application success, not
@@ -303,7 +305,9 @@ money unknown.
   conservative gates. Merchant IDs are optional because pending rows lack them;
   timestamps, wallet descriptions, billing dates, posted-only IDs and the
   first-payment equality are not gates. The equalities are observations, not
-  issuer invariants.
+  issuer invariants; type 8 and differing merchant IDs veto exact and settled
+  matches. Settled names may differ by a pending location ending in a country code,
+  or a pending name cut at 25 characters.
 - **Checks:** [posting evidence tests]; [auto posting].
 
 [auto posting]: ../../../tests/storage/auto-posting.test.ts

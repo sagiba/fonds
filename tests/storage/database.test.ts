@@ -41,6 +41,7 @@ it("creates the ledger, evidence and operational tables and enables foreign keys
     ).toEqual([
       { name: "accounts" },
       { name: "annotations" },
+      { name: "capture_archives" },
       { name: "cards" },
       { name: "collection_leases" },
       { name: "connections" },

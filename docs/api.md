@@ -34,6 +34,8 @@ which runtimes offer refreshes.
 | `list_events`                                            | `GET /v1/events`                                                                     | Read   | Requires `connectionId`. [Event feed](#events).                                                                                                                                                    |
 | `update_annotation`                                      | `PATCH /v1/transactions/:id/annotation`                                              | Write  | [Partial update](#annotations), guarded by `expectedVersion`.                                                                                                                                      |
 | `undo_annotation`                                        | `POST /v1/annotations/undo`                                                          | Write  | Inputs `eventId` and `expectedVersion`.                                                                                                                                                            |
+| `preview_exact_posting_repair`                           | `POST /v1/transactions/:id/preview-exact-posting-repair`                             | Read   | Preview the owner-triggered heuristic. See [matching](#pending-to-posted-matching).                                                                                                                |
+| `apply_exact_posting_repair`                             | `POST /v1/transactions/:id/apply-exact-posting-repair`                               | Write  | Apply an inspected preview. See [matching](#pending-to-posted-matching).                                                                                                                           |
 | `link_pending_transaction`, `unlink_pending_transaction` | `POST /v1/transactions/:id/link-pending`, `POST /v1/transactions/:id/unlink-pending` | Write  | `:id` is the pending transaction, which survives. See [matching](#pending-to-posted-matching).                                                                                                     |
 | `confirm_removal`                                        | `POST /v1/transactions/:id/removal`                                                  | Write  | Needs a `reason` and `expectedTransactionVersion`. Absence from a capture is never enough.                                                                                                         |
 
@@ -550,12 +552,13 @@ matched conservatively and reversibly. The pending transaction keeps its ID and
 takes the posted facts, and the posted row is retired with `supersededById`. The
 match is one-to-one. Pending absence is independent: use `status=pending` and
 `presence=current` for retained authorizations without proven absence; explicit
-states and `all` expose history.
-Pending rows never enter spending totals. A witnessed overlap can link after later
-absence and sufficient evidence, but an annotated posted row requires owner review;
+states and `all` expose history. An inferred match whose authorization returns stays
+matched and keeps the review reason `linked_authorization_returned` until unlinked.
+Pending rows never enter spending totals. A witnessed posting arrival can link after
+later absence and sufficient evidence, but an annotated posted row requires owner review;
 automatic links never move annotation documents. Only providers that opt in take part (each provider guide
 says whether it does), and billed lines are never matched or linked. Shared
-safeguards govern every match; provider evidence can only narrow eligibility.
+safeguards govern every match; exact matches relax metadata, not contradictions.
 An unclassified pending row may take a known posted purchase's classification
 without claiming that the authorization stated its kind. The
 [design](design.md#pending-to-posted-matching) describes the guarantees, and
@@ -566,8 +569,10 @@ without claiming that the authorization stated its kind. The
 | Field                     | Meaning                                                               |
 | ------------------------- | --------------------------------------------------------------------- |
 | `supersededTransactionId` | The retired posted row.                                               |
-| `automatic`               | Matched by the service rather than confirmed by the owner.            |
+| `automatic`               | Matched by the service. False without `heuristic`: owner-confirmed.   |
 | `policyVersion`           | The policy that decided it.                                           |
+| `heuristic`               | True when the match rests on similarity, including owner-run repair.  |
+| `settlement`              | `{startedAt, comparison, observedLedgerOnly}` for a settlement match. |
 | `evidence`                | `{runId, capturedAt}` of the deciding capture, or null.               |
 | `unlinked`                | The owner split the pair, so it is never matched automatically again. |
 
@@ -585,6 +590,20 @@ corrected posted facts on the retained ID and keeps annotations where they are.
 Read both records before either action, because a truncated candidate list does
 not prove a unique pairing. When a match changes, billed lines that point at the
 retired purchase move to the surviving one in the same write.
+
+These repair operations offer an owner-triggered heuristic for existing records,
+not proof of identity. `transactionId` identifies any row in the account; `from` and
+`to` bound transaction dates. Call `preview_exact_posting_repair` with a `reason`, then
+inspect the returned `pairs`. To apply, call `apply_exact_posting_repair` and pass the complete
+returned array as `expected`. The operation rereads the account and refuses a
+changed preview, incompatible annotations, rejected pairs, ambiguous matches,
+or unsupported financial facts. It requires a source-confirmed absence for the
+pending record and a currently seen posted record that arrived after it. Applied
+links are `heuristic`, carry null `evidence` and leave approvals stale. It fails without changes above 6,000 account
+rows (1,000 on D1) or 20 matching pairs. Projected fields over 2 KiB (the refusal
+names the row), hydrated fields over 16 KiB, and exceeded dependency or total-byte
+budgets also fail without changes, with a stated refusal. Each applied link keeps audit history and can be unlinked. Apply echoes the accepted preview versions; reread records
+for current versions. Preview requires `financial:read`; apply requires `financial:write`.
 
 ## Annotations
 
@@ -656,6 +675,7 @@ values. `summary` appears on `sync.baseline` events as `{transactionCount, histo
 | `sync.partial`, `sync.failed`, `sync.recovered`                    | Sync run health.                                                                                                                    |
 | `transaction.imported`                                             | A discovery from an initial, historical or stale capture, or already contradicted by newer authoritative absence. Not new spending. |
 | `transaction.created`                                              | A discovery from a later fresh recent-window refresh, without newer authoritative absence.                                          |
+| `transaction.posting_candidate`                                    | A discovery that may continue an authorization already seen. Not a link, and not proof of new spending or of its absence.           |
 | `transaction.updated`                                              | A versioned field changed.                                                                                                          |
 | `transaction.posted`, `transaction.linked`, `transaction.unlinked` | Pending-to-posted transitions.                                                                                                      |
 | `transaction.removed`                                              | The owner confirmed removal.                                                                                                        |
@@ -663,7 +683,7 @@ values. `summary` appears on `sync.baseline` events as `{transactionCount, histo
 | `transaction.review_required`, `transaction.review_resolved`       | Review state changed.                                                                                                               |
 | `annotation.updated`                                               | The owner changed an annotation, or undid a change.                                                                                 |
 | `refresh.failed`                                                   | A refresh finished `partial` or `failed`.                                                                                           |
-| `refresh.attention_required`                                       | Its connection began needing attention: scheduled refreshes wait for a completed retry.                                             |
+| `refresh.attention_required`                                       | Its connection began needing attention: scheduled refreshes retry daily until one completes.                                        |
 | `refresh.recovered`                                                | A retry completed, ending that wait.                                                                                                |
 
 Events are thin. They identify records to refetch in their current state, and carry
@@ -689,7 +709,7 @@ exclude SQL, credentials and financial data. Success never adds a `success` flag
 | 404         | `not_found`           | Missing record, connection or route. Optional capabilities may have no route.                         |
 | 409         | `conflict`            | Stale version, invalid lifecycle state or conflicting decision. Reread before retrying.               |
 | 409         | `refresh_in_progress` | A refresh of the connection is already pending or running; read it with `list_refreshes`.             |
-| 409         | `requires_attention`  | The provider needs the owner; ordinary refreshes wait for an operator retry.                          |
+| 409         | `requires_attention`  | The provider needs the owner; refreshes slow until a retry completes.                                 |
 | 413         | `too_large`           | HTTP request body over 64 KiB.                                                                        |
 | 413         | `output_too_large`    | The result exceeds an output bound or the 256 KiB response budget.                                    |
 | 500         | `internal_error`      | Unexpected operation or output validation failure.                                                    |

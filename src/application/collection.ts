@@ -352,7 +352,11 @@ export async function collectFromStore(
     if (event.type === "card_discovery") {
       // Buffered captures are applied against the catalog that preceded this discovery.
       await flush();
-      await store.recordCardDiscovery(input.connectionId, event.discovery);
+      await store.recordCardDiscovery(
+        input.connectionId,
+        event.discovery,
+        input.onDiagnostic,
+      );
       diagnose({
         captureId,
         stage: "capture",

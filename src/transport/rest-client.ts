@@ -62,7 +62,7 @@ const remoteErrors: Readonly<Record<string, string>> = {
   refresh_in_progress:
     "A refresh of this connection is already running. Read it with list_refreshes; resume_refresh continues it.",
   requires_attention:
-    "The provider needs the owner's attention. A manual refresh may retry once an hour; scheduled refreshes resume after one completes.",
+    "The provider needs the owner's attention. A manual refresh may retry once an hour and the schedule once a day; refreshes resume after a retry completes.",
   internal_error: "Operation failed.",
   unavailable: "Service unavailable.",
 };

@@ -56,6 +56,12 @@ debugging retention was requested. Legacy archives remain. Unknown fields are
 discarded; recollection cannot recover vanished values or expired periods.
 Declared evidence without a safe transaction identity is retained separately.
 
+An opt-in capture archive keeps what each run received and each card discovery,
+compressed and as received, for a bounded period, so later matching can be
+debugged against real sequences. It is written before parsing, so rejected
+captures are kept too, and a failed write never stops ingestion. Captures that
+differ only in key order, capture time or source-regenerated fields share one body.
+
 Input digests preserve run-ID immutability after body removal; applied replay is
 quiet. Recovery needs the staged body and matching parser. Historical
 reinterpretation is unsupported. Retained row evidence could support re-deriving
@@ -176,32 +182,40 @@ without views.
 
 ## Pending-to-posted matching
 
-Automatic matching is a reversible provider opt-in. A disappearing authorization
-retains its ID when a compatible new posted identity arrives in a fresh comparable
-capture. A unique observed overlap can preserve that opportunity: posting arrives
-later, both coexist, and a durable witness fixes attribution facts. Later
-comparable absence with sufficient posted evidence can complete matching without
-relying on old similarity candidates. Changed facts, competitors or owner
-decisions invalidate witnesses; annotated posted rows require owner confirmation.
+Automatic matching is reversible and provider-opted-in. A disappearing authorization
+can retain its ID when a compatible new posting arrives in a fresh comparable
+capture. A unique witness preserves that opportunity until evidence is
+usable. Changed facts, competitors or owner decisions invalidate witnesses.
 
-Both paths require equal purchase date, card and signed purchase money, verified
-bases and compatible roles. Shared code groups all plausible candidates before
-eligibility; provider evidence only narrows. Neither conversion nor guessed rates
-are used. Links retain evidence and reversibility but may misattribute expired
-authorizations to identical purchases. Same-capture twins may pair in fixed
-arbitrary order where allowed; delayed matching requires a singleton. Pending
-absence independently affects presence, never history or annotations. Unwitnessed
-existing rows stay reviewable. Linked authorizations accept fresh corrections
-without changing posted money or immutable link history; splitting restores both
-current components. A link commits `transaction.posted` and `transaction.linked`;
-creating a witness is not a financial transition.
+A unique first arrival can also link by exact merchant, date, card and signed
+purchase money when provider metadata differs, never against a stated
+contradiction. This heuristic does not prove identity: a canceled authorization
+and another identical purchase can be misattributed. Ambiguous groups stay
+reviewable; no conversion or guessed rates are used.
+
+A deployment can enable settlement ([`FONDS_SETTLED_POSTING`](guides/hosted-service.md#configuration),
+off by default). A unique pair whose posting arrived after its authorization links
+on a fresh capture 24 hours after arrival and accepted absence, preserving unknown
+facts. Dates may differ by a day; each provider states which name presentations it
+is known to vary, because a shared prefix alone cannot separate two merchants. Every check repeats then from retained rows, so failed or partial captures
+only delay it. Competitors, corrections, reappearance or posted annotations veto
+it, and purchases past 40 days are left to owner repair. An unseen purchase can
+still be misattributed. An inferred link whose authorization returns stays linked
+and asks for review.
+
+Same-capture twins may pair in fixed arbitrary order only when owner annotations
+are equivalent. Absence changes
+presence, never history or annotations. Linked authorizations accept corrections
+without changing posted money or link history; splitting restores both components.
+A link commits `transaction.posted` and `transaction.linked`; a witness alone
+does not.
 
 Owner decisions carry the current transaction and annotation versions and a
 reason ([API](api.md#pending-to-posted-matching)):
 
 - **Link** keeps the pending ID. Conflicting nonempty annotations block it; equal
-  ones survive, or the posted one moves to an empty survivor. Automatic links leave
-  annotations unchanged, so dependent approvals can become stale.
+  ones survive, or the posted one moves to an empty survivor. Automatic links and
+  owner-run repair leave annotations unchanged, so dependent approvals can become stale.
 - **Unlink** restores both rows on their own IDs with their annotations, and the
   pair is never suggested or matched automatically again. Unchanged retries are
   quiet.

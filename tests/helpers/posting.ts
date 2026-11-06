@@ -15,6 +15,7 @@ export const postingAdapter: SourceAdapter = {
   projectProviderState: projectCalState,
   mergeProviderEvidence: mergeCalEvidence,
   automaticPosting: {
+    exactNameHeuristic: true,
     compatibleGroups: compatibleCalPostingGroups,
     pendingAmountBasis: "authorization",
     postedAmountBasis: "purchase_commitment",

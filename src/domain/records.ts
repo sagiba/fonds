@@ -133,6 +133,7 @@ export const EVENT_TYPES = [
   "sync.recovered",
   "transaction.imported",
   "transaction.created",
+  "transaction.posting_candidate",
   "transaction.updated",
   "transaction.posted",
   "transaction.linked",

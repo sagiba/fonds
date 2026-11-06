@@ -10,6 +10,7 @@ import type {
   Run,
   Transaction,
 } from "../records.js";
+import type { SettlementSnapshot } from "./posting-settlement.js";
 import type { PriorRun, RunHistorySummary } from "./run-history.js";
 
 export type {
@@ -167,6 +168,7 @@ export interface LedgerScope {
 }
 
 export interface FinancialSnapshot {
+  settlement?: SettlementSnapshot;
   connection: Connection;
   /**
    * Insertion order, before source-key sorting; adapters must preserve tie

@@ -72,8 +72,19 @@ A client checks a refresh's outcome with `get_connection`.
 
 A notification says records changed. The receiving assistant or application
 must fetch and interpret them: a change may be a new transaction, a correction
-or an annotation, not necessarily another purchase. Notification timing depends
-on refresh and delivery schedules, not the time you used your card.
+or an annotation, not necessarily another purchase. Pending and posted observations
+may overlap or arrive with a gap, so treat `transaction.created` as a new discovery
+and `transaction.posting_candidate` as a possible continuation of an authorization
+already seen: report it, qualified, and neither assert a second purchase nor drop
+it. Read the detailed record: `review.pendingPostingCandidateIds` lists candidates,
+even on `transaction.created`. A posted row retired by a match has `supersededById`;
+the surviving ID holds `postingMatch`, unless `unlinked` says the owner split it.
+Report `automatic: false` without `heuristic` as owner-confirmed and other matches
+as inferred. Keep your own
+record of IDs already reported: the pending ID survives a match, and a
+`transaction.posted` on an unreported ID is new to the reader. See
+[matching](../api.md#pending-to-posted-matching). Notification timing depends on
+refresh and delivery schedules, not the time you used your card.
 
 Local stdio clients can read, annotate and refresh, but cannot create Events
 subscriptions. See [local refresh and Events](local-setup.md#refresh-and-events-on-the-server)

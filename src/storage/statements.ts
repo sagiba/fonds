@@ -19,6 +19,7 @@ import type {
 import type { Account } from "../domain/accounts.js";
 import type { Card } from "../domain/cards.js";
 import type { RefreshFailureCode } from "../domain/model.js";
+import type { SettlementContender } from "../domain/plans/posting-settlement.js";
 import type {
   PriorRun,
   RunHistoryDocument,
@@ -108,6 +109,17 @@ export interface RefreshWindowRow {
 }
 
 /** Content-addressed evidence that cannot safely belong to a ledger transaction. */
+export interface CaptureArchiveRow {
+  id: string;
+  connectionId: string;
+  kind: "run" | "card_discovery";
+  capturedAt: string;
+  contentDigest: string;
+  /** Null when an earlier row with this digest holds the same content. */
+  body: Uint8Array | null;
+  expiresAt: string;
+}
+
 export interface DeferredEvidenceWrite {
   id: string;
   connectionId: string;
@@ -142,6 +154,14 @@ export type TotalsPartRow = Omit<TotalsPart, "amountMinor" | "fxFeeMinor"> & {
 
 /** Unexecuted Drizzle statements. The driver owns execution and transactions. */
 export interface Statements<Db> {
+  settlementContenders(
+    db: Db,
+    connectionId: string,
+    accountKey: string,
+    since: string,
+    limit: number,
+    evidenceBytes: number,
+  ): PromiseLike<SettlementContender[]>;
   cards(db: Db, connectionId: string): PromiseLike<Card[]>;
   card(db: Db, id: string): PromiseLike<Card[]>;
   cardPage(db: Db, input: CatalogQuery): PromiseLike<Card[]>;
@@ -256,7 +276,21 @@ export interface Statements<Db> {
     id: string,
     limit: number,
   ): PromiseLike<Pick<Run, "id" | "parserVersion">[]>;
+  repairLockConnectionOf(db: Db, id: string): PromiseLike<Connection[]>;
   planRows(db: Db, id: string, scope?: PlanScope): PromiseLike<PlanRow[]>;
+  repairLedgerRows(
+    db: Db,
+    id: string,
+    anchorId: string,
+    afterId: string | undefined,
+    limit: number,
+    fieldBytes: number,
+  ): PromiseLike<LedgerLoad[]>;
+  repairCompleteRows(
+    db: Db,
+    ids: string[],
+    fieldBytes: number,
+  ): PromiseLike<PlanRow[]>;
   /**
    * Narrow rows of the connection, every one or those `clauses` select, in
    * ingestion order.
@@ -320,6 +354,17 @@ export interface Statements<Db> {
     keepUntil: string | null,
   ): Iterable<PromiseLike<unknown>>;
   pruneDebugBodies(db: Db, now: string): PromiseLike<unknown>;
+  captureBody(
+    db: Db,
+    connectionId: string,
+    contentDigest: string,
+  ): PromiseLike<{ id: string }[]>;
+  insertCaptureArchive(db: Db, row: CaptureArchiveRow): PromiseLike<unknown>;
+  pruneCaptureArchives(
+    db: Db,
+    connectionId: string,
+    now: string,
+  ): PromiseLike<unknown>;
   setConfig(db: Db, id: string, config: ConnectionConfig): PromiseLike<unknown>;
   latestOccurrence(db: Db): PromiseLike<{ scheduledAt: string | null }[]>;
   claimOccurrence(
@@ -358,6 +403,12 @@ export interface Statements<Db> {
     page: RefreshPageInput,
   ): PromiseLike<RefreshRow[]>;
   lastExecutedRefresh(db: Db, connectionId: string): PromiseLike<RefreshRow[]>;
+  /** The last `limit` executed refreshes a rate limit did not stop, newest first. */
+  loginStreakRefreshes(
+    db: Db,
+    connectionId: string,
+    limit: number,
+  ): PromiseLike<Pick<RefreshRow, "providerStopReason">[]>;
   activeRefresh(db: Db, connectionId: string): PromiseLike<RefreshRow[]>;
   activeRefreshes(db: Db): PromiseLike<RefreshRow[]>;
   occurrenceRefresh(

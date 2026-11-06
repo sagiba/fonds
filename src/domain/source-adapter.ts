@@ -49,8 +49,32 @@ export type FinancialAuthority =
 export interface AutomaticPostingCapability {
   pendingAmountBasis: TransactionInput["amountBasis"];
   postedAmountBasis: TransactionInput["amountBasis"];
+  /** Opt in to the unique exact-merchant first-arrival heuristic. */
+  exactNameHeuristic?: boolean;
   /**
-   * Pure source interpretation for a whole plausible component. Reject unknown
+   * Delayed heuristic identity linkage for a deployment that enables it. Facts
+   * stay as the source stated them; `sameMerchant` judges only presentation
+   * this source is known to vary, because uniqueness alone cannot tell two
+   * merchants apart when one name happens to begin the other.
+   */
+  settledHeuristic?: {
+    sameMerchant(pending: string | null, posted: string | null): boolean;
+    compatiblePair(
+      pending: TransactionFacts,
+      posted: TransactionFacts,
+    ): boolean;
+  };
+  /**
+   * Source roles the exact heuristic must not override. Missing metadata may
+   * relax `compatibleGroups`; a stated contradiction never does.
+   */
+  exactNameContradiction?(
+    pending: TransactionFacts,
+    posted: TransactionFacts,
+  ): boolean;
+  /**
+   * Pure source interpretation for a whole plausible component, applied before
+   * the exact heuristic. Reject unknown
    * kinds/issues or insufficient source evidence unless explicitly supported by
    * the provider policy. Rejecting a member vetoes the component, never filters it.
    */
@@ -112,6 +136,11 @@ export interface SourceAdapter {
   rejectEmptyRecentPosted?: boolean;
   /** Reject a wholly empty recent capture while covered current rows remain. */
   rejectEmptyRecent?: boolean;
+  /**
+   * Dotted paths the source regenerates between identical answers, ignored when
+   * comparing captures. Lists and JSON nested in strings add no path segment.
+   */
+  volatileCaptureFields?: readonly string[];
   /** Declared source evidence only, projected identically for stored and new rows; return {} to retain none. */
   retainProviderEvidence(evidence: JsonObject): JsonObject;
   /** Adapter-derived reconciliation state, never part of source-content comparison. */
