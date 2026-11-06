@@ -384,11 +384,13 @@ function retargetLines(
   }
 }
 
-/** Links resting on similarity rather than provider evidence or owner confirmation. */
+export const EXACT_POSTING_POLICY = "exact-unique-v1";
+export const SETTLED_POSTING_POLICY = "settled-similarity-v1";
 export const OWNER_EXACT_REPAIR_POLICY = "owner-exact-repair-v1";
+/** Links resting on similarity rather than provider evidence or owner confirmation. */
 export const HEURISTIC_POSTING_POLICIES: readonly string[] = [
-  "exact-unique-v1",
-  "settled-similarity-v1",
+  EXACT_POSTING_POLICY,
+  SETTLED_POSTING_POLICY,
   OWNER_EXACT_REPAIR_POLICY,
 ];
 
@@ -542,9 +544,7 @@ export function planPosting(
           ? {
               runId: automatic.runId,
               capturedAt: automatic.capturedAt,
-              ...(automatic.overlap?.postedId === posted.id
-                ? { overlap: automatic.overlap }
-                : {}),
+              ...(automatic.overlap ? { overlap: automatic.overlap } : {}),
             }
           : null,
       },

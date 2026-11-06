@@ -84,30 +84,17 @@ export function postingOverlapPairs({
   const survivors = new Set(
     rows.flatMap((row) => (row.supersededById ? [row.supersededById] : [])),
   );
-  const active = rows.filter(
-    (row) =>
-      row.presence !== "removed" &&
-      !row.supersededById &&
-      !survivors.has(row.id),
-  );
-  const groups = postingComponents(
-    active.filter((row) => row.status === "pending"),
-    active.filter((row) => row.status === "posted"),
-  );
+  const unlinked = (row: LedgerRow) =>
+    row.presence !== "removed" && !row.supersededById && !survivors.has(row.id);
+  const components = (candidates: LedgerRow[]) =>
+    postingComponents(
+      candidates.filter((row) => row.status === "pending"),
+      candidates.filter((row) => row.status === "posted"),
+    );
+  const active = rows.filter(unlinked);
+  const groups = components(active);
   // A correction cannot erase a competing identity's old key in this capture.
-  const priorAndCurrent = [
-    ...before.filter(
-      (row) =>
-        row.presence !== "removed" &&
-        !row.supersededById &&
-        !survivors.has(row.id),
-    ),
-    ...active,
-  ];
-  const blockingGroups = postingComponents(
-    priorAndCurrent.filter((row) => row.status === "pending"),
-    priorAndCurrent.filter((row) => row.status === "posted"),
-  );
+  const blockingGroups = components([...before.filter(unlinked), ...active]);
   const singleton = new Map(
     groups.flatMap((group) => {
       if (group.pending.length !== 1 || group.posted.length !== 1) {
@@ -156,10 +143,10 @@ export function postingOverlapPairs({
     if (
       witness &&
       (!usable ||
-        meaningfulAnnotation(plan.annotation(posted!.id)?.data) ||
-        witness.postedId !== posted!.id ||
+        meaningfulAnnotation(plan.annotation(posted.id)?.data) ||
+        witness.postedId !== posted.id ||
         witness.pendingFingerprint !== fingerprint(pending) ||
-        witness.postedFingerprint !== fingerprint(posted!) ||
+        witness.postedFingerprint !== fingerprint(posted) ||
         (previous?.presence === "not_returned" && observed(pending)))
     ) {
       plan.updateTransaction(pending.id, {
@@ -167,51 +154,48 @@ export function postingOverlapPairs({
       });
       witness = undefined;
     }
-    if (!usable) {
+    if (!usable || !fresh) {
       continue;
     }
-    // Only the posted identity's arrival can establish the witness. An old
-    // posting cannot acquire a relationship merely by remaining similar.
-    if (
-      fresh &&
-      !witness &&
-      previous?.presence === "seen" &&
-      !old.has(posted!.id) &&
-      pending.firstSeenAt < posted!.firstSeenAt &&
-      (observed(pending) || absent(pending)) &&
-      observed(posted!) &&
-      // Observed rows are written, so they are complete. A comparably absent
-      // authorization instead retains its prior complete source evidence.
-      [posted!, ...(observed(pending) ? [pending] : [])].every((row) =>
-        plan.full(row).details.sourceRefs.some((ref) => ref.runId === runId),
-      )
-    ) {
-      witness = {
-        postedId: posted!.id,
-        runId,
-        capturedAt,
-        pendingFingerprint: fingerprint(pending),
-        postedFingerprint: fingerprint(posted!),
-      };
-      plan.updateTransaction(pending.id, {
-        details: withWitness(plan.full(pending).details, witness),
-      });
+    if (!witness) {
+      // Only the posted identity's arrival can establish the witness. An old
+      // posting cannot acquire a relationship merely by remaining similar.
+      if (
+        previous?.presence === "seen" &&
+        !old.has(posted.id) &&
+        pending.firstSeenAt < posted.firstSeenAt &&
+        (observed(pending) || absent(pending)) &&
+        observed(posted) &&
+        // Observed rows are written, so they are complete. A comparably absent
+        // authorization instead retains its prior complete source evidence.
+        [posted, ...(observed(pending) ? [pending] : [])].every((row) =>
+          plan.full(row).details.sourceRefs.some((ref) => ref.runId === runId),
+        )
+      ) {
+        plan.updateTransaction(pending.id, {
+          details: withWitness(plan.full(pending).details, {
+            postedId: posted.id,
+            runId,
+            capturedAt,
+            pendingFingerprint: fingerprint(pending),
+            postedFingerprint: fingerprint(posted),
+          }),
+        });
+      }
+      continue;
     }
     if (
-      !fresh ||
-      !witness ||
       // The capture that creates a witness never spends it: same-capture
       // continuation owns that decision, including its sibling guards.
       witness.runId === runId ||
       !validWitness(witness.runId, witness.capturedAt) ||
-      !observed(posted!) ||
-      !absent(pending) ||
-      meaningfulAnnotation(plan.annotation(posted!.id)?.data)
+      !observed(posted) ||
+      !absent(pending)
     ) {
       continue;
     }
     const completePending = plan.full(pending);
-    const completePosted = plan.full(posted!);
+    const completePosted = plan.full(posted);
     const decision = automaticPostingPairs(
       [completePending],
       [completePosted],
