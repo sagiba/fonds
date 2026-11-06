@@ -1237,10 +1237,18 @@ export const captureBody = (
 export const insertCaptureArchive = (db: Executor, row: CaptureArchiveRow) =>
   db.insert(schema.captureArchives).values(row).onConflictDoNothing();
 
-/** A body stays while any unexpired row shares its content. */
-export const pruneCaptureArchives = (db: Executor, now: string) =>
+/**
+ * A body stays while any unexpired row shares its content. One connection at a
+ * time: its collection lock orders this after that connection's own archiving.
+ */
+export const pruneCaptureArchives = (
+  db: Executor,
+  connectionId: string,
+  now: string,
+) =>
   db.delete(schema.captureArchives).where(
-    sql`capture_archives.expires_at <= ${now} AND (
+    sql`capture_archives.connection_id = ${connectionId}
+      AND capture_archives.expires_at <= ${now} AND (
       capture_archives.body IS NULL OR NOT EXISTS (
         SELECT 1 FROM capture_archives AS live
         WHERE live.connection_id = capture_archives.connection_id

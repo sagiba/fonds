@@ -360,7 +360,11 @@ export interface Statements<Db> {
     contentDigest: string,
   ): PromiseLike<{ id: string }[]>;
   insertCaptureArchive(db: Db, row: CaptureArchiveRow): PromiseLike<unknown>;
-  pruneCaptureArchives(db: Db, now: string): PromiseLike<unknown>;
+  pruneCaptureArchives(
+    db: Db,
+    connectionId: string,
+    now: string,
+  ): PromiseLike<unknown>;
   setConfig(db: Db, id: string, config: ConnectionConfig): PromiseLike<unknown>;
   latestOccurrence(db: Db): PromiseLike<{ scheduledAt: string | null }[]>;
   claimOccurrence(

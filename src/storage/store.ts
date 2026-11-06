@@ -2298,7 +2298,9 @@ function buildStore<Db>(
     try {
       const now = new Date().toISOString();
       await db.execute(statements.pruneDebugBodies(db.root, now));
-      await db.execute(statements.pruneCaptureArchives(db.root, now));
+      await db.execute(
+        statements.pruneCaptureArchives(db.root, connection.id, now),
+      );
       emit({
         event: "fonds_sync",
         ...ids,

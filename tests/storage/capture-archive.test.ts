@@ -223,6 +223,34 @@ describe.each(backends)("%s capture archive", (backend) => {
     ]);
   });
 
+  it("leaves other connections' rows to their own collections", async () => {
+    await start();
+    await db.ensureConnection({ id: "other-source", provider: "cal" });
+    await db.ingestRun(
+      {
+        connectionId: "other-source",
+        runId: "other-run",
+        responses: [
+          {
+            accountKey: "account",
+            endpoint: "synthetic:recent",
+            capturedAt: "2040-08-01T00:00:00.000Z",
+            responseText: '{"rows":[]}',
+          },
+        ],
+      },
+      adapter,
+    );
+    await db.raw("UPDATE capture_archives SET expires_at=?", [
+      "2000-01-01T00:00:00.000Z",
+    ]);
+    await capture('{"rows":[],"a":1}', undefined, "mine");
+    expect((await archives()).map((item) => item.id)).toEqual([
+      "other-run",
+      "mine",
+    ]);
+  });
+
   it("drops an expired repeat while its body lives on", async () => {
     await start();
     const past = "2000-01-01T00:00:00.000Z";
@@ -395,6 +423,14 @@ describe("provider capture comparison", () => {
         provider,
       )
     ).digest;
+
+  it("does not mistake a key holding a dot for a volatile path", async () => {
+    const answer = (value: string) =>
+      JSON.stringify({ "card.cardGuid": value });
+    expect(await digest(isracardAdapter, answer("a"))).not.toBe(
+      await digest(isracardAdapter, answer("b")),
+    );
+  });
 
   it("ignores CAL's per-request group ID and nothing else", async () => {
     const answer = (groupPid: string, amount: number) =>

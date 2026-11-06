@@ -62,7 +62,7 @@ function comparable(
   if (value && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value).flatMap(([key, item]) => {
-        const field = path ? `${path}.${key}` : key;
+        const field = `${path}\0${key}`;
         return volatile.has(field)
           ? []
           : [[key, comparable(item, volatile, field)]];
@@ -77,7 +77,12 @@ export async function runCapture(
   run: Pick<RunInput, "collectorVersion" | "responses" | "failures">,
   adapter: SourceAdapter,
 ) {
-  const volatile = new Set(adapter.volatileCaptureFields);
+  // A separator no JSON key contains, so a key holding a dot cannot alias a path.
+  const volatile = new Set(
+    adapter.volatileCaptureFields?.map(
+      (path) => `\0${path.replaceAll(".", "\0")}`,
+    ),
+  );
   const failures = run.failures ?? [];
   return {
     text: JSON.stringify({
