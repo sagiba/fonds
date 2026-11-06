@@ -415,6 +415,20 @@ describe.each(backends)("%s settled identity heuristic", (backend) => {
       expect((await h.byKey("posted")).id).toBe(pending.id);
     },
   );
+  it.each([
+    ["same-merchant", {}],
+    ["another merchant's", { merchantName: "Another Merchant" }],
+  ] satisfies [string, Partial<TransactionInput>][])(
+    "is blocked by a retained %s rival no capture still returns",
+    async (_label, fields) => {
+      await h.capture(2, [authorization(), row("competitor", fields)], settled);
+      const pending = await h.byKey("pending");
+      await h.capture(3, [unknown()], settled);
+      await h.capture(5, [unknown()], settled);
+      await noLink(pending.id);
+      expect((await clock(pending.id))?.settlement).toBeUndefined();
+    },
+  );
   it("does not link a different business that shares a first word", async () => {
     await h.capture(
       2,
