@@ -1777,7 +1777,8 @@ function buildStore<Db>(
   /**
    * Debugging evidence only, so a failure here is logged and never stops the
    * financial work around it. A repeat keeps a row, because each sighting still
-   * happened, and the body it shares outlives it.
+   * happened; pruning keeps the body it shares. Reads and inserts take no lock on
+   * existing rows, and a retry inserts nothing.
    */
   async function archiveCapture(
     row: Pick<CaptureArchiveRow, "id" | "connectionId" | "kind" | "capturedAt">,
@@ -1791,24 +1792,18 @@ function buildStore<Db>(
     const started = performance.now();
     try {
       const { text, digest } = await capture();
-      const expiresAt = new Date(
-        Date.now() + archive.days * 86_400_000,
-      ).toISOString();
-      const repeated = await db.execute(
-        statements.extendCaptureArchive(
-          db.root,
-          row.connectionId,
-          digest,
-          expiresAt,
-        ),
+      const held = await db.execute(
+        statements.captureBody(db.root, row.connectionId, digest),
       );
-      const body = repeated.length > 0 ? null : archive.compress(text);
+      const body = held.length > 0 ? null : archive.compress(text);
       await db.execute(
         statements.insertCaptureArchive(db.root, {
           ...row,
           contentDigest: digest,
           body,
-          expiresAt,
+          expiresAt: new Date(
+            Date.now() + archive.days * 86_400_000,
+          ).toISOString(),
         }),
       );
       emit({
@@ -1845,7 +1840,7 @@ function buildStore<Db>(
       refreshId: run.refreshId,
     });
     const started = performance.now();
-    let staged: string | undefined;
+    let staged = false;
     emit({ event: "fonds_sync", ...ids, stage: "archive", outcome: "started" });
     await db
       .transaction(async (tx) => {
@@ -1869,7 +1864,7 @@ function buildStore<Db>(
             statements.insertRun(tx, retained),
             statements.insertRunBody(tx, retained),
           ]);
-          staged = retained.startedAt;
+          staged = true;
         }
       })
       .catch((error: unknown) => {
@@ -1891,20 +1886,6 @@ function buildStore<Db>(
       reason: staged ? "body_staged" : "receipt_exists",
       durationMs: elapsedMs(started),
     });
-    // Before extraction, so a capture the parser rejects is kept too.
-    if (staged) {
-      await archiveCapture(
-        {
-          id: run.runId,
-          connectionId: run.connectionId,
-          kind: "run",
-          capturedAt: staged,
-        },
-        () => runCapture(run, adapter),
-        emit,
-        ids,
-      );
-    }
     return applyRun(run.runId, adapter, onDiagnostic);
   }
 
@@ -1999,6 +1980,27 @@ function buildStore<Db>(
         new Error("Unapplied run has no recoverable source body"),
       );
     }
+    // Every application passes here while the body exists, recovery included,
+    // and before extraction, so a capture the parser rejects is kept too.
+    await archiveCapture(
+      {
+        id,
+        connectionId: connection.id,
+        kind: "run",
+        capturedAt: archived.startedAt,
+      },
+      () =>
+        runCapture(
+          {
+            collectorVersion: archived.collectorVersion,
+            responses: archived.snapshot.responses,
+            failures: archived.snapshot.failures ?? [],
+          },
+          adapter,
+        ),
+      emit,
+      ids,
+    );
     const started = performance.now();
     emit({
       event: "fonds_sync",
@@ -2350,6 +2352,19 @@ function buildStore<Db>(
         (await db.execute(statements.connections(db.root))).map(present),
       ),
     recordCardDiscovery: async (connectionId, input, onDiagnostic) => {
+      // Before validation, so a discovery the schema refuses is kept too.
+      const id = crypto.randomUUID();
+      await archiveCapture(
+        {
+          id,
+          connectionId,
+          kind: "card_discovery",
+          capturedAt: new Date().toISOString(),
+        },
+        () => discoveryCapture(input),
+        syncDiagnostics(onDiagnostic),
+        syncCorrelationIds({ captureId: id }),
+      );
       const discovery = cardDiscoverySchema.parse(input);
       await db.transaction(async (tx) => {
         const connection = (
@@ -2371,18 +2386,6 @@ function buildStore<Db>(
         );
         await savePlan(tx, plan);
       });
-      const id = crypto.randomUUID();
-      await archiveCapture(
-        {
-          id,
-          connectionId,
-          kind: "card_discovery",
-          capturedAt: discovery.observedAt,
-        },
-        () => discoveryCapture(discovery),
-        syncDiagnostics(onDiagnostic),
-        syncCorrelationIds({ captureId: id }),
-      );
     },
     listCards: async (input) => {
       const filters = catalogPageSchema.parse(input);

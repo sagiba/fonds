@@ -177,7 +177,8 @@ const bytes = customType<{ data: Uint8Array; driverData: Uint8Array }>({
 export const captureArchives = pgTable(
   "capture_archives",
   {
-    id: text().primaryKey(),
+    sequence: bigserial({ mode: "number" }).primaryKey(),
+    id: text().notNull().unique(),
     connectionId: text("connection_id")
       .notNull()
       .references(() => connections.id),

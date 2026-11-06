@@ -354,11 +354,10 @@ export interface Statements<Db> {
     keepUntil: string | null,
   ): Iterable<PromiseLike<unknown>>;
   pruneDebugBodies(db: Db, now: string): PromiseLike<unknown>;
-  extendCaptureArchive(
+  captureBody(
     db: Db,
     connectionId: string,
     contentDigest: string,
-    expiresAt: string,
   ): PromiseLike<{ id: string }[]>;
   insertCaptureArchive(db: Db, row: CaptureArchiveRow): PromiseLike<unknown>;
   pruneCaptureArchives(db: Db, now: string): PromiseLike<unknown>;

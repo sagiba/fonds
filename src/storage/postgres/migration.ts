@@ -20,6 +20,6 @@ export const postgresMigrations: readonly Migration[] = [
   {
     "version": 4,
     "name": "0004_capture_archive",
-    "sql": "CREATE TABLE capture_archives (\n  id TEXT COLLATE \"C\" PRIMARY KEY NOT NULL,\n  connection_id TEXT COLLATE \"C\" NOT NULL REFERENCES connections(id),\n  kind TEXT COLLATE \"C\" NOT NULL CHECK (kind IN ('run','card_discovery')),\n  captured_at TEXT COLLATE \"C\" NOT NULL,\n  content_digest TEXT COLLATE \"C\" NOT NULL,\n  body BYTEA,\n  expires_at TEXT COLLATE \"C\" NOT NULL\n);\nCREATE INDEX capture_archives_content ON capture_archives(connection_id, content_digest);\nCREATE INDEX capture_archives_expiry ON capture_archives(expires_at);\n"
+    "sql": "CREATE TABLE capture_archives (\n  sequence BIGSERIAL PRIMARY KEY CHECK (sequence BETWEEN 1 AND 9007199254740991),\n  id TEXT COLLATE \"C\" NOT NULL UNIQUE,\n  connection_id TEXT COLLATE \"C\" NOT NULL REFERENCES connections(id),\n  kind TEXT COLLATE \"C\" NOT NULL CHECK (kind IN ('run','card_discovery')),\n  captured_at TEXT COLLATE \"C\" NOT NULL,\n  content_digest TEXT COLLATE \"C\" NOT NULL,\n  body BYTEA,\n  expires_at TEXT COLLATE \"C\" NOT NULL\n);\nCREATE INDEX capture_archives_content ON capture_archives(connection_id, content_digest);\nCREATE INDEX capture_archives_expiry ON capture_archives(expires_at);\n"
   }
 ];

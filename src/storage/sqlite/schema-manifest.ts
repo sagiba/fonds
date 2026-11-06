@@ -83,7 +83,7 @@ export const schemaManifest = [
   {
     "type": "table",
     "name": "capture_archives",
-    "sql": "CREATE TABLE capture_archives (\n  id TEXT PRIMARY KEY NOT NULL,\n  connection_id TEXT NOT NULL REFERENCES connections(id),\n  kind TEXT NOT NULL CHECK (kind IN ('run','card_discovery')),\n  captured_at TEXT NOT NULL,\n  content_digest TEXT NOT NULL,\n  body BLOB,\n  expires_at TEXT NOT NULL\n) STRICT"
+    "sql": "CREATE TABLE capture_archives (\n  sequence INTEGER PRIMARY KEY AUTOINCREMENT CHECK (sequence BETWEEN 1 AND 9007199254740991),\n  id TEXT NOT NULL UNIQUE,\n  connection_id TEXT NOT NULL REFERENCES connections(id),\n  kind TEXT NOT NULL CHECK (kind IN ('run','card_discovery')),\n  captured_at TEXT NOT NULL,\n  content_digest TEXT NOT NULL,\n  body BLOB,\n  expires_at TEXT NOT NULL\n) STRICT"
   },
   {
     "type": "table",

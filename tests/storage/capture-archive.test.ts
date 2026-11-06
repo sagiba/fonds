@@ -19,7 +19,7 @@ import {
 const connectionId = "capture-source";
 const adapter: SourceAdapter = {
   ...synthetic,
-  volatileCaptureFields: ["sessionId"],
+  volatileCaptureFields: ["sessionId", "inner.sessionId"],
   extract: (text, ...rest) =>
     synthetic.extract(
       JSON.stringify((JSON.parse(text) as { rows: unknown[] }).rows),
@@ -80,7 +80,7 @@ describe.each(backends)("%s capture archive", (backend) => {
     );
   const archives = async () =>
     (await db.raw(
-      "SELECT id,kind,captured_at,body,expires_at FROM capture_archives ORDER BY captured_at,id",
+      "SELECT id,kind,captured_at,body,expires_at FROM capture_archives ORDER BY sequence",
     )) as unknown as ArchiveRow[];
   const bodies = async () => (await archives()).filter((item) => item.body);
 
@@ -128,7 +128,6 @@ describe.each(backends)("%s capture archive", (backend) => {
     const [first, repeat] = await archives();
     expect(first!.body).not.toBeNull();
     expect(repeat!.body).toBeNull();
-    expect(first!.expires_at).toBe(repeat!.expires_at);
   });
 
   it("sees through JSON nested in strings", async () => {
@@ -148,6 +147,26 @@ describe.each(backends)("%s capture archive", (backend) => {
     ["a changed type", '{"rows":[],"a":1}', '{"rows":[],"a":"1"}'],
     ["a reordered list", '{"rows":[],"a":[1,2]}', '{"rows":[],"a":[2,1]}'],
     [
+      "a number and its text",
+      '{"rows":[],"a":1}',
+      '{"rows":[],"a":"number:1"}',
+    ],
+    [
+      "an object and a string holding it",
+      '{"rows":[],"a":{"b":"c"}}',
+      '{"rows":[],"a":"{\\"b\\":\\"c\\"}"}',
+    ],
+    [
+      "a list and the tag of a string",
+      '{"rows":[],"a":["string","b"]}',
+      '{"rows":[],"a":"b"}',
+    ],
+    [
+      "a volatile name at another path",
+      '{"rows":[],"other":{"sessionId":"a"}}',
+      '{"rows":[],"other":{"sessionId":"b"}}',
+    ],
+    [
       "long numbers that differ past double precision",
       '{"rows":[],"a":12345678901234567890}',
       '{"rows":[],"a":12345678901234567891}',
@@ -164,30 +183,131 @@ describe.each(backends)("%s capture archive", (backend) => {
     await capture('{"rows":[],"a":1}', "2040-08-01T00:00:00.000Z");
     await capture('{"rows":[],"a":2}', "2040-08-02T00:00:00.000Z");
     await capture('{"rows":[],"a":1}', "2040-08-03T00:00:00.000Z");
-    const rows = await archives();
-    expect(rows.map((item) => item.body !== null)).toEqual([true, true, false]);
-    expect(rows[0]!.expires_at).toBe(rows[2]!.expires_at);
-  });
-
-  it("never shortens a stored body's life", async () => {
-    await start();
-    await capture('{"rows":[]}');
-    const later = "2099-01-01T00:00:00.000Z";
-    await db.raw("UPDATE capture_archives SET expires_at=?", [later]);
-    await capture('{"rows":[]}');
-    const rows = await archives();
-    expect(rows.filter((item) => item.body)).toHaveLength(2);
-    expect(rows.map((item) => item.expires_at)).toContain(later);
-  });
-
-  it("prunes expired rows after a later capture", async () => {
-    await start();
-    await capture('{"rows":[],"a":1}', "2040-08-01T00:00:00.000Z", "expired");
-    await db.raw("UPDATE capture_archives SET expires_at=?", [
-      "2000-01-01T00:00:00.000Z",
+    expect((await archives()).map((item) => item.body !== null)).toEqual([
+      true,
+      true,
+      false,
     ]);
-    await capture('{"rows":[],"a":2}', "2040-08-02T00:00:00.000Z", "kept");
-    expect((await archives()).map((item) => item.id)).toEqual(["kept"]);
+  });
+
+  it("shares a body whatever deadline it already has", async () => {
+    await start();
+    await capture('{"rows":[]}');
+    await db.raw("UPDATE capture_archives SET expires_at=?", [
+      "2099-01-01T00:00:00.000Z",
+    ]);
+    await capture('{"rows":[]}');
+    expect(await bodies()).toHaveLength(1);
+  });
+
+  it("keeps a body until its last repeat expires", async () => {
+    await start();
+    const past = "2000-01-01T00:00:00.000Z";
+    await capture('{"rows":[],"a":1}', undefined, "holder");
+    await db.raw("UPDATE capture_archives SET expires_at=?", [past]);
+    await capture('{"rows":[],"a":1}', undefined, "repeat");
+    await capture('{"rows":[],"a":2}', undefined, "other");
+    expect((await archives()).map((item) => item.id)).toEqual([
+      "holder",
+      "repeat",
+      "other",
+    ]);
+    await db.raw("UPDATE capture_archives SET expires_at=? WHERE id=?", [
+      past,
+      "repeat",
+    ]);
+    await capture('{"rows":[],"a":3}', undefined, "later");
+    expect((await archives()).map((item) => item.id)).toEqual([
+      "other",
+      "later",
+    ]);
+  });
+
+  it("drops an expired repeat while its body lives on", async () => {
+    await start();
+    const past = "2000-01-01T00:00:00.000Z";
+    await capture('{"rows":[]}', undefined, "holder");
+    await capture('{"rows":[]}', undefined, "repeat");
+    await db.raw("UPDATE capture_archives SET expires_at=? WHERE id=?", [
+      past,
+      "repeat",
+    ]);
+    await capture('{"rows":[],"a":1}', undefined, "later");
+    expect((await archives()).map((item) => item.id)).toEqual([
+      "holder",
+      "later",
+    ]);
+  });
+
+  it("archives a staged run on recovery, once", async () => {
+    let available = false;
+    await start({
+      captureArchive: {
+        days: 30,
+        compress: (text) => {
+          if (!available) {
+            throw new Error("synthetic archive failure");
+          }
+
+          return captureArchive(30).captureArchive!.compress(text);
+        },
+      },
+    });
+    const responseText = '{"rows":[]}';
+    const run = {
+      connectionId,
+      runId: "interrupted",
+      startedAt: "2040-08-01T00:00:00.000Z",
+      responses: [
+        {
+          accountKey: "account",
+          endpoint: "synthetic:recent",
+          capturedAt: "2040-08-01T00:00:00.000Z",
+          responseText,
+        },
+      ],
+    };
+    const refusing: SourceAdapter = {
+      ...adapter,
+      extract: () => {
+        throw new Error("synthetic interruption");
+      },
+    };
+    await db.ingestRun(run, refusing).catch(() => undefined);
+    expect(await archives()).toEqual([]);
+    available = true;
+    await db.ingestRun(run, adapter);
+    await db.ingestRun(run, adapter);
+    const rows = await archives();
+    expect(rows.map((item) => item.id)).toEqual(["interrupted"]);
+    expect(body(rows[0]!).responses[0]!.responseText).toBe(responseText);
+  });
+
+  it("orders discoveries and runs as they happened", async () => {
+    await start();
+    await capture('{"rows":[],"a":1}', undefined, "before");
+    await db.recordCardDiscovery(connectionId, {
+      observedAt: "2030-01-01T00:00:00.000Z",
+      cards: [{ cardKey: "card-1", last4: "1111" }],
+    });
+    await capture('{"rows":[],"a":2}', undefined, "after");
+    expect((await archives()).map((item) => item.kind)).toEqual([
+      "run",
+      "card_discovery",
+      "run",
+    ]);
+  });
+
+  it("keeps a card discovery the schema refuses", async () => {
+    await start();
+    const card = { cardKey: "card-1", last4: "1111" };
+    await expect(
+      db.recordCardDiscovery(connectionId, {
+        observedAt: "2040-08-01T00:00:00.000Z",
+        cards: [card, card],
+      }),
+    ).rejects.toThrow();
+    expect(await bodies()).toHaveLength(1);
   });
 
   it("stores repeats of a card discovery once", async () => {

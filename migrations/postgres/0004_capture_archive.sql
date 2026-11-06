@@ -1,5 +1,6 @@
 CREATE TABLE capture_archives (
-  id TEXT COLLATE "C" PRIMARY KEY NOT NULL,
+  sequence BIGSERIAL PRIMARY KEY CHECK (sequence BETWEEN 1 AND 9007199254740991),
+  id TEXT COLLATE "C" NOT NULL UNIQUE,
   connection_id TEXT COLLATE "C" NOT NULL REFERENCES connections(id),
   kind TEXT COLLATE "C" NOT NULL CHECK (kind IN ('run','card_discovery')),
   captured_at TEXT COLLATE "C" NOT NULL,

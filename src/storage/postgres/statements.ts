@@ -11,7 +11,6 @@ import {
   isNotNull,
   isNull,
   lt,
-  lte,
   max,
   ne,
   or,
@@ -1238,33 +1237,39 @@ export const pruneDebugBodies = (db: Executor, now: string) =>
         sql`${schema.syncRunBodies.expiresAt} <= ${now}`,
       ),
     );
-/** Keeps the body a repeated capture would have stored until the repeat expires. */
-export const extendCaptureArchive = (
+/** Whether a retained row already holds this content; never reads the body. */
+export const captureBody = (
   db: Executor,
   connectionId: string,
   contentDigest: string,
-  expiresAt: string,
 ) =>
   db
-    .update(schema.captureArchives)
-    .set({ expiresAt })
+    .select({ id: schema.captureArchives.id })
+    .from(schema.captureArchives)
     .where(
       and(
         eq(schema.captureArchives.connectionId, connectionId),
         eq(schema.captureArchives.contentDigest, contentDigest),
         isNotNull(schema.captureArchives.body),
-        lte(schema.captureArchives.expiresAt, expiresAt),
       ),
     )
-    .returning({ id: schema.captureArchives.id });
+    .limit(1);
 
 export const insertCaptureArchive = (db: Executor, row: CaptureArchiveRow) =>
   db.insert(schema.captureArchives).values(row).onConflictDoNothing();
 
+/** A body stays while any unexpired row shares its content. */
 export const pruneCaptureArchives = (db: Executor, now: string) =>
-  db
-    .delete(schema.captureArchives)
-    .where(lte(schema.captureArchives.expiresAt, now));
+  db.delete(schema.captureArchives).where(
+    sql`capture_archives.expires_at <= ${now} AND (
+      capture_archives.body IS NULL OR NOT EXISTS (
+        SELECT 1 FROM capture_archives AS live
+        WHERE live.connection_id = capture_archives.connection_id
+          AND live.content_digest = capture_archives.content_digest
+          AND live.expires_at > ${now}
+      )
+    )`,
+  );
 
 export const setConfig = (db: Executor, id: string, config: ConnectionConfig) =>
   db

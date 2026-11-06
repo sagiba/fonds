@@ -1,5 +1,6 @@
 CREATE TABLE capture_archives (
-  id TEXT PRIMARY KEY NOT NULL,
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT CHECK (sequence BETWEEN 1 AND 9007199254740991),
+  id TEXT NOT NULL UNIQUE,
   connection_id TEXT NOT NULL REFERENCES connections(id),
   kind TEXT NOT NULL CHECK (kind IN ('run','card_discovery')),
   captured_at TEXT NOT NULL,

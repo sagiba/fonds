@@ -15,7 +15,11 @@ export interface CaptureArchiveOptions {
   compress(text: string): Uint8Array;
 }
 
-/** Numbers stay text, so two long source identifiers can never compare equal. */
+/** Source number text, so long identifiers keep every digit and never equal a string. */
+class SourceNumber {
+  constructor(readonly text: string) {}
+}
+
 function parsedJson(text: string): unknown {
   const start = text.trimStart()[0];
   if (start !== "{" && start !== "[") {
@@ -23,7 +27,7 @@ function parsedJson(text: string): unknown {
   }
   try {
     return parse(text, undefined, {
-      parseNumber: (value) => `number:${value}`,
+      parseNumber: (value) => new SourceNumber(value),
     });
   } catch {
     return undefined;
@@ -32,22 +36,37 @@ function parsedJson(text: string): unknown {
 
 /**
  * Source content as a comparison sees it. Providers nest JSON inside strings and
- * reorder keys between identical answers, and `volatile` names fields a source
- * regenerates per session. Only the digest uses this form: bodies stay as received.
+ * reorder keys between identical answers, and `volatile` names field paths a
+ * source regenerates per session; lists and nested JSON add no path segment. Tags
+ * keep every remaining difference distinct, such as a number and its text, or an
+ * object and a string holding it. Only the digest uses this form: bodies stay as
+ * received.
  */
-function comparable(value: unknown, volatile: ReadonlySet<string>): unknown {
+function comparable(
+  value: unknown,
+  volatile: ReadonlySet<string>,
+  path = "",
+): unknown {
   if (typeof value === "string") {
     const nested = parsedJson(value);
-    return nested === undefined ? value : comparable(nested, volatile);
+    return nested === undefined
+      ? ["string", value]
+      : ["json", comparable(nested, volatile, path)];
+  }
+  if (value instanceof SourceNumber) {
+    return ["number", value.text];
   }
   if (Array.isArray(value)) {
-    return value.map((item) => comparable(item, volatile));
+    return value.map((item) => comparable(item, volatile, path));
   }
   if (value && typeof value === "object") {
     return Object.fromEntries(
-      Object.entries(value)
-        .filter(([key]) => !volatile.has(key))
-        .map(([key, item]) => [key, comparable(item, volatile)]),
+      Object.entries(value).flatMap(([key, item]) => {
+        const field = path ? `${path}.${key}` : key;
+        return volatile.has(field)
+          ? []
+          : [[key, comparable(item, volatile, field)]];
+      }),
     );
   }
   return value;

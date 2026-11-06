@@ -166,7 +166,8 @@ export const syncRunBodies = sqliteTable("sync_run_bodies", {
 export const captureArchives = sqliteTable(
   "capture_archives",
   {
-    id: text().primaryKey(),
+    sequence: integer().primaryKey({ autoIncrement: true }),
+    id: text().notNull().unique(),
     connectionId: text("connection_id")
       .notNull()
       .references(() => connections.id),
