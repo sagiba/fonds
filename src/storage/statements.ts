@@ -39,7 +39,6 @@ import type {
   Transaction,
 } from "../domain/records.js";
 import type { FailureReason, ProviderStopReason } from "../domain/refreshes.js";
-import type { CaptureArchiveRow } from "./capture-archive.js";
 import type { RetainedRun } from "./run-evidence.js";
 import type { LedgerClause, PlanScope } from "./sql.js";
 
@@ -110,6 +109,17 @@ export interface RefreshWindowRow {
 }
 
 /** Content-addressed evidence that cannot safely belong to a ledger transaction. */
+export interface CaptureArchiveRow {
+  id: string;
+  connectionId: string;
+  kind: "run" | "card_discovery";
+  capturedAt: string;
+  contentDigest: string;
+  /** Null when an earlier row with this digest holds the same content. */
+  body: Uint8Array | null;
+  expiresAt: string;
+}
+
 export interface DeferredEvidenceWrite {
   id: string;
   connectionId: string;

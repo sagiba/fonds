@@ -9,9 +9,9 @@ import {
   gte,
   inArray,
   isNotNull,
-  lte,
   isNull,
   lt,
+  lte,
   max,
   ne,
   or,
@@ -34,7 +34,6 @@ import { ANNOTATION_MAX_BYTES } from "../../domain/model.js";
 import type { RunHistoryDocument } from "../../domain/plans/run-history.js";
 import type { FinancialPlan } from "../../domain/plans/state.js";
 import type { Connection, ConnectionConfig } from "../../domain/records.js";
-import type { CaptureArchiveRow } from "../capture-archive.js";
 import type { RetainedRun } from "../run-evidence.js";
 import {
   backfillOutcomeRank,
@@ -62,7 +61,10 @@ import {
   transactionSeek,
   wireEventColumns,
 } from "../sql.js";
-import type { DeferredEvidenceWrite } from "../statements.js";
+import type {
+  CaptureArchiveRow,
+  DeferredEvidenceWrite,
+} from "../statements.js";
 import {
   decodeLedgerRow,
   decodeTransaction,

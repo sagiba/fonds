@@ -141,7 +141,6 @@ import type { SourceAdapter } from "../domain/source-adapter.js";
 import {
   CAPTURE_ARCHIVE_MAX_DAYS,
   type CaptureArchiveOptions,
-  type CaptureArchiveRow,
   discoveryCapture,
   runCapture,
 } from "./capture-archive.js";
@@ -163,6 +162,7 @@ import {
   type PlanScope,
 } from "./sql.js";
 import type {
+  CaptureArchiveRow,
   LatestAppliedRun,
   LedgerLoad,
   OrderedRun,

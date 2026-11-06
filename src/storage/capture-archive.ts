@@ -8,24 +8,11 @@ import { contentDigest } from "./run-evidence.js";
 
 export const CAPTURE_ARCHIVE_MAX_DAYS = 90;
 
-export type CaptureKind = "run" | "card_discovery";
-
 /** Retained source captures; the host supplies compression, so web targets stay free of it. */
 export interface CaptureArchiveOptions {
   /** Whole days from 1 to {@link CAPTURE_ARCHIVE_MAX_DAYS}. */
   days: number;
   compress(text: string): Uint8Array;
-}
-
-export interface CaptureArchiveRow {
-  id: string;
-  connectionId: string;
-  kind: CaptureKind;
-  capturedAt: string;
-  contentDigest: string;
-  /** Null when an earlier row with this digest holds the same content. */
-  body: Uint8Array | null;
-  expiresAt: string;
 }
 
 /** Numbers stay text, so two long source identifiers can never compare equal. */

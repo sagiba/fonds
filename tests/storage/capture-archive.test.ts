@@ -55,6 +55,7 @@ describe.each(backends)("%s capture archive", (backend) => {
     db = await open(backend, options);
     await db.ensureConnection({ id: connectionId, provider: "cal" });
   }
+
   const capture = (
     responseText: string,
     capturedAt = "2040-08-01T00:00:00.000Z",
