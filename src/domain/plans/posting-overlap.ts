@@ -185,8 +185,8 @@ export function postingOverlapPairs({
       continue;
     }
     if (
-      // The capture that creates a witness never spends it: same-capture
-      // continuation owns that decision, including its sibling guards.
+      // A witness is never spent by its own capture: creation stops above, and
+      // a run holds one response per account. This keeps that true if either changes.
       witness.runId === runId ||
       !validWitness(witness.runId, witness.capturedAt) ||
       !observed(posted) ||
