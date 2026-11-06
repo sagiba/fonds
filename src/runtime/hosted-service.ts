@@ -49,7 +49,7 @@ import {
   ownerRefreshes,
   type RefreshServiceOptions,
 } from "./refresh-service.js";
-import { repairAdapter, settledPostingSchema } from "./settled-posting.js";
+import { settledPostingSchema } from "./settled-posting.js";
 import { syncScopeDaysSchema } from "./sync-scope.js";
 import { sendSignedWebhook, verifyWebhookCallback } from "./webhook.js";
 
@@ -400,7 +400,6 @@ export function createHostedService(
   options.attachPool?.(financialPool);
   options.attachPool?.(authPool);
   const store = openPostgresDatabase(financialPool, {
-    repairAdapter,
     ...(config.syncScopeDays !== undefined && {
       syncScopeDays: config.syncScopeDays,
     }),

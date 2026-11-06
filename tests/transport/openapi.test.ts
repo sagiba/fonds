@@ -40,16 +40,6 @@ const ROUTES = [
   ["post", "/v1/annotations/undo", "undo_annotation"],
   [
     "post",
-    "/v1/transactions/{transactionId}/preview-exact-posting-repair",
-    "preview_exact_posting_repair",
-  ],
-  [
-    "post",
-    "/v1/transactions/{transactionId}/apply-exact-posting-repair",
-    "apply_exact_posting_repair",
-  ],
-  [
-    "post",
     "/v1/transactions/{transactionId}/link-pending",
     "link_pending_transaction",
   ],

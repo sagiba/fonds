@@ -13,7 +13,7 @@ import { CANDIDATE_DAYS } from "./sync-scope.js";
 
 const DAY = 86_400_000;
 
-/** Purchases this old have closed statements; older pairs are for owner repair. */
+/** Purchases this old have closed statements; older pairs are left to the owner. */
 const SETTLEMENT_HORIZON_DAYS = 40;
 export const SETTLEMENT_MAX_ROWS = 2000;
 export const SETTLEMENT_EVIDENCE_BYTES = 65536;

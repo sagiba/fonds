@@ -476,22 +476,6 @@ describe("operation commands", () => {
         stored.find((row) => row.sourceKey.includes(part))!.id;
       const pendingId = bySource("SYNTHETIC-AUTH-PENDING-POSTED");
       const postedId = bySource("SYNTHETIC-TXN-PENDING-POSTED");
-      const repair = {
-        transactionId: pendingId,
-        from: "1900-01-01",
-        to: "1900-01-31",
-        reason: "Synthetic preview",
-      };
-      const preview = (await compare(
-        "preview_exact_posting_repair",
-        repair,
-      )) as { pairs: unknown[] };
-      expect(preview.pairs).toEqual([]);
-      await compare("apply_exact_posting_repair", {
-        ...repair,
-        expected: preview.pairs,
-      });
-
       const version = (id: string) =>
         rows.data.find((row) => row.id === id)!.version;
       const posting = {

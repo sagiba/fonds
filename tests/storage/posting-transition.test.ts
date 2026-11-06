@@ -2,6 +2,10 @@ import "../helpers/application-loading-differential.js";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import {
+  presentWireTransaction,
+  transactionDetailOutputSchema,
+} from "../../src/application/wire-output.js";
 import type { TransactionInput } from "../../src/domain/model.js";
 import type { SourceAdapter } from "../../src/domain/source-adapter.js";
 import {
@@ -217,6 +221,39 @@ describe.each(backends)("%s disappearance witness", (backend) => {
     expect((await db.getTransaction(pending.id))!.details.issues).not.toContain(
       "linked_authorization_returned",
     );
+  });
+  it("keeps reading a stored repair link as inferred", async () => {
+    const { automaticPosting: _, ...manual } = postingAdapter;
+    await h.capture(2, [authorization()], manual);
+    const pending = await h.byKey("pending");
+    await h.capture(3, [row("posted")], manual);
+    const posted = await h.byKey("posted");
+    await db.linkPendingTransaction(await h.command(pending.id, posted.id));
+    // No code writes this policy, and only the policy tells these links apart.
+    await db.raw(
+      "UPDATE transaction_posting_links SET posting_link_json = replace(posting_link_json, ?, ?) WHERE transaction_id = ?",
+      ["owner-confirmation-v1", "owner-exact-repair-v1", pending.id],
+    );
+    expect(
+      transactionDetailOutputSchema.parse(
+        presentWireTransaction(
+          (await db.getTransaction(pending.id))!,
+          true,
+          false,
+        ),
+      ).postingMatch,
+    ).toMatchObject({
+      automatic: false,
+      heuristic: true,
+      policyVersion: "owner-exact-repair-v1",
+    });
+    await h.capture(4, [authorization(), row("posted")], manual);
+    expect((await db.getTransaction(pending.id))!.details.issues).toContain(
+      "linked_authorization_returned",
+    );
+    await db.unlinkPendingTransaction(await h.command(pending.id, posted.id));
+    expect((await db.getTransaction(pending.id))!.status).toBe("pending");
+    expect((await db.getTransaction(posted.id))!.supersededById).toBeNull();
   });
 });
 

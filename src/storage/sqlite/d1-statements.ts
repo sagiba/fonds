@@ -1,9 +1,7 @@
 import { eq, getTableColumns, sql } from "drizzle-orm";
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
-import { RepairRefusedError } from "../../domain/errors.js";
 import type { FinancialPlan } from "../../domain/plans/state.js";
-import { repairColumns, repairOversized } from "../sql.js";
 import * as schema from "./schema.js";
 import {
   applyPlan as applySqlitePlan,
@@ -40,30 +38,6 @@ export const lockConnectionOf = (db: Executor, transactionId: string) =>
     .from(schema.connections)
     .where(connectionOfTransaction(transactionId));
 
-/** Repair reads only bounded connection facts plus the D1 revision. */
-export const repairLockConnectionOf = async (db: Executor, id: string) => {
-  const fields = {
-    id: schema.connections.id,
-    provider: schema.connections.provider,
-    displayName: schema.connections.displayName,
-    createdAt: schema.connections.createdAt,
-  };
-  const result = await db
-    .select({
-      ...repairColumns(fields, "sqlite", 2048),
-      revision: revisions.revision,
-      oversized: repairOversized([{ columns: fields, limit: 2048 }], "sqlite"),
-    })
-    .from(schema.connections)
-    .where(connectionOfTransaction(id));
-  if (result.some((row) => row.oversized)) {
-    throw new RepairRefusedError("Repair connection field exceeds byte limit");
-  }
-  return result.map(({ oversized: _oversized, ...row }) => ({
-    ...row,
-    config: { schemaVersion: 1 as const },
-  }));
-};
 /** Advances an unchanged revision; otherwise the CHECK rolls back the whole batch. */
 export const guardRevision = (db: Executor, id: string, revision: number) =>
   db

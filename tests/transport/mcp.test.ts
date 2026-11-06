@@ -183,8 +183,6 @@ describe("MCP SDK v2 over HTTP", () => {
           "get_transaction_totals",
           "list_events",
           "list_sync_runs",
-          "preview_exact_posting_repair",
-          "apply_exact_posting_repair",
           "link_pending_transaction",
           "unlink_pending_transaction",
           "confirm_removal",
