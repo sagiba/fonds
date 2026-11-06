@@ -803,7 +803,7 @@ describe.each(backends)("%s bounded sync scope", (backend) => {
     });
   });
 
-  it("reads every old row whose alias text holds a backslash, named or not", async () => {
+  it("reads every old row whose alias text spells a solidus as an escape, named or not", async () => {
     await capture("escaped-alias-1", "2040-07-01T12:00:00Z", [
       row("named", { transactionDate: "2030-01-01", merchantName: "Named" }),
       row("unnamed", { transactionDate: "2030-01-02", merchantName: "Other" }),
@@ -826,9 +826,10 @@ describe.each(backends)("%s bounded sync scope", (backend) => {
     });
   });
 
-  it("reads only the rows near a one-row capture of a ledger whose every row carries an old key", async () => {
+  it("reads only the rows near a one-row capture of a ledger whose every row carries an old key embedding JSON", async () => {
     // Thirty posted rows, a week apart from 2039-01-01, then two in the
-    // capture's window; every one keeps the key it had before re-keying.
+    // capture's window; every one keeps the key it had before re-keying,
+    // which embeds JSON, so its alias text escapes quotes.
     const dates = [
       ...Array.from({ length: 30 }, (_, index) =>
         new Date(Date.UTC(2039, 0, 1) + index * 7 * 86_400_000)
@@ -846,9 +847,12 @@ describe.each(backends)("%s bounded sync scope", (backend) => {
       ),
     );
     await db.raw(
-      "UPDATE transactions SET source_aliases_json = '[\"old-' || source_key || '\"]' WHERE connection_id = ?",
+      `UPDATE transactions SET source_aliases_json = '["old:[\\"' || source_key || '\\"]"]' WHERE connection_id = ?`,
       [connectionId],
     );
+    expect(await db.getTransaction(await idOf("row-0"))).toMatchObject({
+      sourceAliases: ['old:["row-0"]'],
+    });
     const report = createSyncDiagnosticReport();
     await db.ingestRun(
       {
@@ -889,7 +893,7 @@ describe.each(backends)("%s bounded sync scope", (backend) => {
       ...["k-0", "k-1", "k-2"].map((key) =>
         row(key, { transactionDate: "2030-01-01", merchantName: "Old" }),
       ),
-      // Beyond the 40 days padded around the named rows' stored date.
+      // Beyond the candidate distance around the named rows' stored date.
       row("far", { transactionDate: "2031-06-01", merchantName: "Far" }),
     ]);
     // Each key is also its own identity base, and each names an alias:
@@ -932,6 +936,83 @@ describe.each(backends)("%s bounded sync scope", (backend) => {
     expect(await db.getTransaction(await idOf("far"))).toMatchObject({
       lastSeenRunId: "many-1",
     });
+  });
+
+  /** A row whose provider declares `baseKey` as its identity base. */
+  const based = (key: string, baseKey: string, transactionDate: string) =>
+    row(key, {
+      transactionDate,
+      merchantName: `Shop ${key}`,
+      details: {
+        ...emptyDetails(),
+        provider: { cal: { identity: { baseKey } } },
+      },
+    });
+
+  it("decides on identity text whose keys embed JSON, reading only the base an observation declares", async () => {
+    const voucher = (number: string) =>
+      `isracard:posted:voucher:${JSON.stringify(["account", number])}`;
+    // Dated apart, beyond the padding around one another.
+    await capture(
+      "json-1",
+      "2040-07-01T12:00:00Z",
+      [
+        based("v-1", voucher("1"), "2030-01-01"),
+        based("v-2", voucher("2"), "2031-06-01"),
+        based("v-3", voucher("3"), "2032-06-01"),
+      ],
+      { adapter: declaring },
+    );
+    const first = await idOf("v-1");
+    const [stored] = await db.raw(
+      "SELECT provider_identity_json FROM transaction_reconciliation WHERE transaction_id = ?",
+      [first],
+    );
+    expect(stored!.provider_identity_json).toBe(
+      '{"cal":{"baseKey":"isracard:posted:voucher:[\\"account\\",\\"1\\"]"}}',
+    );
+    // A historical row with another key and the first row's base is that
+    // known identity, never a second transaction.
+    const result = await capture(
+      "json-2",
+      "2040-07-10T12:00:00Z",
+      [based("v-1-renamed", voucher("1"), "2040-07-09")],
+      { adapter: declaring, scope: { kind: "history" } },
+    );
+    expect(result.created).toBe(0);
+    expect(await rowCount()).toBe(3);
+    expect(loadedIds()).toEqual([first]);
+  });
+
+  it("reads every row whose identity text spells a character as an escape, matching or not", async () => {
+    await capture(
+      "unicode-1",
+      "2040-07-01T12:00:00Z",
+      [
+        row("accented", { transactionDate: "2030-01-01", merchantName: "A" }),
+        row("other", { transactionDate: "2031-06-01", merchantName: "B" }),
+      ],
+      { adapter: declaring },
+    );
+    const accented = await idOf("accented");
+    const other = await idOf("other");
+    // Another writer's spelling of "café" and of "été".
+    const writeIdentity = (id: string, text: string) =>
+      db.raw(
+        "UPDATE transaction_reconciliation SET provider_identity_json = ? WHERE transaction_id = ?",
+        [text, id],
+      );
+    await writeIdentity(accented, '{"cal":{"baseKey":"caf\\u00e9"}}');
+    await writeIdentity(other, '{"cal":{"baseKey":"\\u00e9t\\u00e9"}}');
+    const result = await capture(
+      "unicode-2",
+      "2040-07-10T12:00:00Z",
+      [based("cafe-renamed", "café", "2040-07-09")],
+      { adapter: declaring, scope: { kind: "history" } },
+    );
+    expect(result.created).toBe(0);
+    expect(await rowCount()).toBe(2);
+    expect(loadedIds().sort()).toEqual([accented, other].sort());
   });
 
   it("finds identities a substring search cannot see in their stored text", async () => {
@@ -1222,11 +1303,8 @@ describe.each(backends)("%s configured sync scope", (backend) => {
     expect(results[1]).toStrictEqual(results[0]);
   });
 
-  it("pads a named row's stored date by the configured days, not only the candidate distance", async () => {
-    for (const [days, read] of [
-      [undefined, true],
-      [1, false],
-    ] as const) {
+  it("pads a named row's stored date by the candidate distance, whatever the configured days", async () => {
+    for (const days of [undefined, 1]) {
       const db = await opened(days);
       await db.ingestRun(
         run("named-1", "2040-07-05T12:00:00Z", [
@@ -1238,26 +1316,27 @@ describe.each(backends)("%s configured sync scope", (backend) => {
         "SELECT id FROM cards WHERE connection_id = ?",
         [connectionId],
       );
-      // A posted neighbour 19 days later: beyond the candidate distance,
-      // within the default padding.
-      await insertTransactionFixture(db, [
-        storedRow(connectionId, "q", {
+      // Posted neighbours 6 and 19 days later: within and beyond the
+      // candidate distance, both within the default padding.
+      const neighbour = (id: string, transactionDate: string) =>
+        storedRow(connectionId, id, {
           cardId: card!.id as string,
           merchantName: "Merchant",
           amountMinor: -100,
-          transactionDate: "2040-03-20",
+          transactionDate,
           lastSeenRunId: "named-1",
           lastSeenAt: "2040-07-05T12:00:00.000Z",
-          details: { ...storedRow(connectionId, "q").details, provider: {} },
-        }),
+          details: { ...storedRow(connectionId, id).details, provider: {} },
+        });
+      await insertTransactionFixture(db, [
+        neighbour("q6", "2040-03-07"),
+        neighbour("q19", "2040-03-20"),
       ]);
       // Another origin's older capture names the authorization, which keeps
       // its stored date and is only marked seen.
       await db.ingestRun(
         {
-          ...run("named-2", "2040-07-03T12:00:00Z", [
-            authorization("p", { transactionDate: "2040-06-20" }),
-          ]),
+          ...run("named-2", "2040-07-03T12:00:00Z", []),
           responses: [
             {
               accountKey: "account",
@@ -1271,16 +1350,25 @@ describe.each(backends)("%s configured sync scope", (backend) => {
         },
         pendingOnly,
       );
+      const label = String(days);
       const ids = loadingComparisons.at(-1)!.narrowRows.map(({ id }) => id);
-      expect(ids.includes("q"), String(days)).toBe(read);
       const p = await idOf(db, "p");
-      expect(ids, String(days)).toContain(p);
-      // Nineteen days is no candidate distance, whatever was read.
+      expect(ids, label).toContain(p);
+      expect(ids, label).toContain("q6");
+      expect(ids, label).not.toContain("q19");
+      // The seen authorization is suggested with its six-day neighbour; the
+      // nineteen-day one can never be a candidate.
       const stored = (await db.getTransaction(p))!;
-      expect(stored.transactionDate, String(days)).toBe("2040-03-01");
-      expect(stored.details.pendingPostingCandidates, String(days)).toBe(
-        undefined,
-      );
+      expect(stored.transactionDate, label).toBe("2040-03-01");
+      expect(stored.details.pendingPostingCandidates, label).toEqual(["q6"]);
+      expect(
+        (await db.getTransaction("q6"))!.details.pendingPostingCandidates,
+        label,
+      ).toEqual([p]);
+      expect(
+        (await db.getTransaction("q19"))!.details.pendingPostingCandidates,
+        label,
+      ).toBe(undefined);
     }
   });
 

@@ -69,6 +69,16 @@ export const syncDiagnosticSchema = z.object({
     .optional(),
   /** Whether a reconciliation's scope proved incomplete and it read every row. */
   scopeFallback: z.boolean().optional(),
+  /** Optional matching preflight, not financial facts or a claim of a match. */
+  settlement: z
+    .enum([
+      "disabled",
+      "ready",
+      "row_budget",
+      "no_pending_coverage",
+      "incomplete_capture",
+    ])
+    .optional(),
   counts: z
     .object({
       observed: count.optional(),

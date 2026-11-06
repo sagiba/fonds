@@ -41,12 +41,14 @@ import {
   type CredentialsKey,
   parseCredentialsKey,
 } from "./credential-vault.js";
+import { loginFailuresSchema } from "./login-failures.js";
 import { runtimeProvider } from "./providers.js";
 import {
   createRefreshService,
   ownerRefreshes,
   type RefreshServiceOptions,
 } from "./refresh-service.js";
+import { repairAdapter, settledPostingSchema } from "./settled-posting.js";
 import { syncScopeDaysSchema } from "./sync-scope.js";
 import { sendSignedWebhook, verifyWebhookCallback } from "./webhook.js";
 
@@ -87,6 +89,8 @@ export const hostedEnvironmentSchema = z.object({
   // 1 serves /v1/openapi.json without authentication; 0 or unset does not.
   FONDS_PUBLIC_API_DESCRIPTION: z.enum(["0", "1"]).optional(),
   FONDS_SYNC_SCOPE_DAYS: syncScopeDaysSchema.optional(),
+  FONDS_SETTLED_POSTING: settledPostingSchema.optional(),
+  FONDS_LOGIN_FAILURES_BEFORE_ATTENTION: loginFailuresSchema.optional(),
 });
 
 /** Names variables only; never includes received values. */
@@ -175,6 +179,13 @@ export function hostedConfiguration(
     }),
     ...(values.FONDS_SYNC_SCOPE_DAYS !== undefined && {
       syncScopeDays: values.FONDS_SYNC_SCOPE_DAYS,
+    }),
+    ...(values.FONDS_SETTLED_POSTING !== undefined && {
+      settledPosting: values.FONDS_SETTLED_POSTING,
+    }),
+    ...(values.FONDS_LOGIN_FAILURES_BEFORE_ATTENTION !== undefined && {
+      loginFailuresBeforeAttention:
+        values.FONDS_LOGIN_FAILURES_BEFORE_ATTENTION,
     }),
     ...(manualSecret && {
       collection: {
@@ -298,6 +309,9 @@ function collectionServices(
       targets: hostedCollectionTargets(config, store, financialPool),
       signal: shutdown,
       log: (entry) => console.info(JSON.stringify(entry)),
+      ...(config.loginFailuresBeforeAttention !== undefined && {
+        loginFailuresBeforeAttention: config.loginFailuresBeforeAttention,
+      }),
       // Each refresh also delivers changes made through the API since the last one.
       afterRefresh: async (signal) => {
         await deliver(signal);
@@ -380,12 +394,15 @@ export function createHostedService(
   );
   options.attachPool?.(financialPool);
   options.attachPool?.(authPool);
-  const store = openPostgresDatabase(
-    financialPool,
-    config.syncScopeDays === undefined
-      ? {}
-      : { syncScopeDays: config.syncScopeDays },
-  );
+  const store = openPostgresDatabase(financialPool, {
+    repairAdapter,
+    ...(config.syncScopeDays !== undefined && {
+      syncScopeDays: config.syncScopeDays,
+    }),
+    ...(config.settledPosting !== undefined && {
+      settledPosting: config.settledPosting,
+    }),
+  });
   const issuer = createBetterAuth(authPool, {
     publicOrigin: config.publicOrigin,
     secret: config.secret,

@@ -84,6 +84,18 @@ export const OPERATION_ROUTES = {
     { method: "PATCH", path: "/v1/transactions/:transactionId/annotation" },
   ],
   undo_annotation: [{ method: "POST", path: "/v1/annotations/undo" }],
+  preview_exact_posting_repair: [
+    {
+      method: "POST",
+      path: "/v1/transactions/:transactionId/preview-exact-posting-repair",
+    },
+  ],
+  apply_exact_posting_repair: [
+    {
+      method: "POST",
+      path: "/v1/transactions/:transactionId/apply-exact-posting-repair",
+    },
+  ],
   link_pending_transaction: [
     { method: "POST", path: "/v1/transactions/:transactionId/link-pending" },
   ],

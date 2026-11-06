@@ -111,6 +111,12 @@ export async function openDatabase(
       ...(options.syncScopeDays !== undefined && {
         syncScopeDays: options.syncScopeDays,
       }),
+      ...(options.settledPosting !== undefined && {
+        settledPosting: options.settledPosting,
+      }),
+      ...(options.repairAdapter !== undefined && {
+        repairAdapter: options.repairAdapter,
+      }),
     });
     return {
       ...database,

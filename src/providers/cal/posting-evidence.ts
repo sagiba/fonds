@@ -1,5 +1,7 @@
+import { isCountryCode } from "../../domain/countries.js";
 import type { JsonObject, TransactionFacts } from "../../domain/model.js";
 import { canonicalJson } from "../../domain/observations.js";
+import { merchantPresentation } from "../../domain/plans/posting-settlement.js";
 import { currentSourceRows } from "../../domain/provider-evidence.js";
 
 /** Opaque CAL discriminators; null is missing evidence, never false or zero. */
@@ -103,7 +105,6 @@ function rowEvidence(
     // Abroad and merchant ID may be missing (null), but not malformed.
     abroad === undefined ||
     merchantProviderId === undefined ||
-    // CAL type 8 is an installment even when its raw count is zero.
     sourceTypeCode === "8" ||
     paymentCount !== 0
   ) {
@@ -145,6 +146,39 @@ export function calPostingEvidence(
     )
     ? representative.evidence
     : null;
+}
+
+/** CAL type 8 is an installment even when its raw count is zero. */
+function installmentSource(row: Pick<TransactionFacts, "details">): boolean {
+  return currentSourceRows(row.details.provider.cal ?? {}).some(
+    (raw) =>
+      object(raw) &&
+      aliases(raw, ["trnTypeCode", "transactionTypeCode"], code) === "8",
+  );
+}
+
+/**
+ * A contradiction only where both rows state it. `abroad` is excluded: observed
+ * pairs for one purchase state it differently, so it says nothing about identity.
+ */
+export function calExactContradiction(
+  pending: Pick<TransactionFacts, "details">,
+  posted: Pick<TransactionFacts, "details">,
+): boolean {
+  if (installmentSource(pending) || installmentSource(posted)) {
+    return true;
+  }
+  // Decoded alone: another missing field must not hide a stated difference.
+  const merchantIds = (row: Pick<TransactionFacts, "details">) =>
+    currentSourceRows(row.details.provider.cal ?? {}).flatMap((raw) => {
+      const value = object(raw)
+        ? aliases(raw, ["merchantId"], identifier)
+        : undefined;
+      return value === null || value === undefined ? [] : [value];
+    });
+  return merchantIds(pending).some((left) =>
+    merchantIds(posted).some((right) => left !== right),
+  );
 }
 
 /** NFC only: preserve case, punctuation, quotes and compatibility distinctions. */
@@ -219,3 +253,53 @@ export function compatibleCalPostingGroups(
     )
   );
 }
+
+/** The length at which observed pending names are cut, mid-word. */
+const PENDING_NAME_LENGTH = 25;
+
+/**
+ * Observed presentations of one merchant: the pending name adds a location
+ * ending in a three-letter country code, or is cut at its source length. Any
+ * other prefix may be another business, so it does not match.
+ */
+export function calSettledMerchant(
+  pending: string | null,
+  posted: string | null,
+): boolean {
+  const left = merchantPresentation(pending);
+  const right = merchantPresentation(posted);
+  if (left === null || right === null) {
+    return false;
+  }
+  const location = pending?.trim().match(/ (\p{Lu}{3})$/u)?.[1];
+  return (
+    left === right ||
+    (location !== undefined &&
+      isCountryCode(location) &&
+      left.startsWith(`${right} `)) ||
+    (left.length === PENDING_NAME_LENGTH && right.startsWith(left))
+  );
+}
+
+/** Name variants are settlement's to judge; this keeps roles and stated facts. */
+function compatibleCalSettledPair(
+  pending: TransactionFacts,
+  posted: TransactionFacts,
+): boolean {
+  return (
+    (pending.kind === "unknown" || pending.kind === "purchase") &&
+    posted.kind === "purchase" &&
+    [pending, posted].every((row) =>
+      row.details.issues.every(
+        (issue) => issue === "possible_pending_posted_match",
+      ),
+    ) &&
+    !calExactContradiction(pending, posted)
+  );
+}
+
+/** Applies only where the deployment enables settled posting. */
+export const calSettlementPolicy = {
+  compatiblePair: compatibleCalSettledPair,
+  sameMerchant: calSettledMerchant,
+};

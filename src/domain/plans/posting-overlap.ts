@@ -1,4 +1,8 @@
-import { isBilledLine, type TransactionFacts } from "../model.js";
+import {
+  isBilledLine,
+  type TransactionDetails,
+  type TransactionFacts,
+} from "../model.js";
 import { canonicalJson } from "../observations.js";
 import type { Transaction } from "../records.js";
 import type { AutomaticPostingCapability } from "../source-adapter.js";
@@ -25,6 +29,26 @@ function fingerprint(
   ]);
 }
 
+type Witness = NonNullable<TransactionDetails["postingOverlap"]>;
+
+function withWitness(
+  details: TransactionDetails,
+  witness: Witness | undefined,
+): TransactionDetails {
+  const { postingOverlap: held, ...rest } = details;
+  if (held?.settlement) {
+    const { arrival: _replaced, ...settlement } = held.settlement;
+    return {
+      ...rest,
+      postingOverlap: {
+        ...held,
+        settlement: { ...settlement, ...(witness ? { arrival: witness } : {}) },
+      },
+    };
+  }
+  return witness ? { ...rest, postingOverlap: witness } : rest;
+}
+
 interface OverlapOptions {
   plan: FinancialPlan;
   before: LedgerRow[];
@@ -39,8 +63,8 @@ interface OverlapOptions {
 }
 
 /**
- * Remember an observed unique overlap, not a similarity suggestion. Absence and
- * classification can arrive in different captures; neither alone proves a link.
+ * Remember a unique overlap or same-capture transition, not a similarity suggestion.
+ * Absence and classification can arrive in different captures; neither alone proves a link.
  * The caller supplies only fresh, complete, comparable recent captures.
  */
 export function postingOverlapPairs({
@@ -108,7 +132,9 @@ export function postingOverlapPairs({
   for (const pending of rows.filter((row) => row.status === "pending")) {
     const posted = singleton.get(pending.id);
     const previous = old.get(pending.id);
-    let witness = pending.details.postingOverlap;
+    // A settlement clock may hold an overlap witness; it never replaces one.
+    const held = pending.details.postingOverlap;
+    let witness = held?.settlement ? held.settlement.arrival : held;
     const usable =
       posted !== undefined &&
       [pending, posted].every(
@@ -136,9 +162,9 @@ export function postingOverlapPairs({
         witness.postedFingerprint !== fingerprint(posted!) ||
         (previous?.presence === "not_returned" && observed(pending)))
     ) {
-      const { postingOverlap: _discarded, ...details } =
-        plan.full(pending).details;
-      plan.updateTransaction(pending.id, { details });
+      plan.updateTransaction(pending.id, {
+        details: withWitness(plan.full(pending).details, undefined),
+      });
       witness = undefined;
     }
     if (!usable) {
@@ -152,10 +178,11 @@ export function postingOverlapPairs({
       previous?.presence === "seen" &&
       !old.has(posted!.id) &&
       pending.firstSeenAt < posted!.firstSeenAt &&
-      observed(pending) &&
+      (observed(pending) || absent(pending)) &&
       observed(posted!) &&
-      // Observed rows are written, so they are complete.
-      [pending, posted!].every((row) =>
+      // Observed rows are written, so they are complete. A comparably absent
+      // authorization instead retains its prior complete source evidence.
+      [posted!, ...(observed(pending) ? [pending] : [])].every((row) =>
         plan.full(row).details.sourceRefs.some((ref) => ref.runId === runId),
       )
     ) {
@@ -167,12 +194,15 @@ export function postingOverlapPairs({
         postedFingerprint: fingerprint(posted!),
       };
       plan.updateTransaction(pending.id, {
-        details: { ...plan.full(pending).details, postingOverlap: witness },
+        details: withWitness(plan.full(pending).details, witness),
       });
     }
     if (
       !fresh ||
       !witness ||
+      // The capture that creates a witness never spends it: same-capture
+      // continuation owns that decision, including its sibling guards.
+      witness.runId === runId ||
       !validWitness(witness.runId, witness.capturedAt) ||
       !observed(posted!) ||
       !absent(pending) ||
@@ -189,7 +219,10 @@ export function postingOverlapPairs({
       capability,
     );
     if (decision.pairs.has(completePosted)) {
-      pairs.set(completePosted, completePending);
+      pairs.set(completePosted, {
+        ...completePending,
+        details: { ...completePending.details, postingOverlap: witness },
+      });
     }
   }
   return pairs;

@@ -1,7 +1,9 @@
 import type { JsonObject, TransactionFacts } from "../../domain/model.js";
 import { decimalToMinor } from "../../domain/money.js";
+import { merchantPresentation } from "../../domain/plans/posting-settlement.js";
 import { currentSourceRows } from "../../domain/provider-evidence.js";
 import { isracardEvidenceGeneration } from "./evidence.js";
+import { legacyCurrency } from "./extract.js";
 
 function object(value: unknown): value is JsonObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -168,3 +170,150 @@ export function compatibleIsracardPostingGroups(
   const name = approvalMerchant(approval);
   return name !== null && name === postedMerchant(purchase);
 }
+
+/**
+ * Observed processor presentation: an approval writes `PAYPAL *` and may repeat
+ * the merchant's short first token at its end. No other token is removed.
+ */
+export function settledIsracardMerchant(
+  pending: string | null,
+  posted: string | null,
+): boolean {
+  const presented = (name: string | null) =>
+    merchantPresentation(name)?.replace(/^PAYPAL\s*\*\s*/u, "PAYPAL ") ?? null;
+  const shortened = (name: string) => {
+    const tokens = name.split(" ");
+    const last = tokens.pop()!;
+    return tokens.length >= 4 &&
+      new Set(tokens).size >= 4 &&
+      /^[\p{L}\p{N}]{2,4}$/u.test(last) &&
+      tokens.includes(last)
+      ? tokens.join(" ")
+      : undefined;
+  };
+  const left = presented(pending);
+  const right = presented(posted);
+  return (
+    left !== null &&
+    right !== null &&
+    (left === right || shortened(left) === right)
+  );
+}
+
+/**
+ * Narrow identity-risk opt-in, not a new financial interpretation. Legacy rows
+ * retain unknown kind/basis and every warning. Explicit contradictions and
+ * unsupported source roles remain ineligible even when their names look alike.
+ */
+export function compatibleIsracardSettledPair(
+  pending: TransactionFacts,
+  posted: TransactionFacts,
+): boolean {
+  if (
+    pending.kind !== "unknown" ||
+    approvalMerchant(pending) === null ||
+    pending.details.issues.some(
+      (issue) =>
+        ![
+          "source_derived_amount_direction",
+          "possible_pending_posted_match",
+        ].includes(issue),
+    )
+  ) {
+    return false;
+  }
+  if (posted.kind === "purchase") {
+    return (
+      postedMerchant(posted) !== null &&
+      posted.details.issues.every((issue) =>
+        [
+          "source_derived_amount_direction",
+          "possible_pending_posted_match",
+        ].includes(issue),
+      )
+    );
+  }
+  if (
+    posted.kind !== "unknown" ||
+    posted.amountBasis !== "unknown" ||
+    posted.currency !== "ILS" ||
+    posted.providerTransactionCode !== null ||
+    posted.counterpartyName !== null ||
+    posted.description !== null ||
+    posted.originalAmountMinor !== null ||
+    posted.originalCurrency !== null ||
+    posted.details.issues.some(
+      (issue) =>
+        ![
+          "isracard_unverified_semantics",
+          "unsupported_transaction_type",
+          "unverified_amount_basis",
+          "source_derived_amount_direction",
+          "possible_pending_posted_match",
+        ].includes(issue),
+    ) ||
+    ![
+      "isracard_unverified_semantics",
+      "unsupported_transaction_type",
+      "unverified_amount_basis",
+      "source_derived_amount_direction",
+    ].every((issue) => posted.details.issues.includes(issue))
+  ) {
+    return false;
+  }
+  const namespace = posted.details.provider.isracard ?? {};
+  const rows = currentSourceRows(namespace);
+  const observations = namespace.observations;
+  if (
+    rows.length !== 1 ||
+    !object(rows[0]) ||
+    isracardEvidenceGeneration(rows[0]) !== "legacy" ||
+    !Array.isArray(observations) ||
+    observations.length !== 1 ||
+    !object(observations[0]) ||
+    observations[0].generation !== "legacy" ||
+    typeof observations[0].path !== "string" ||
+    !/\.txn(?:Israel|Abroad)\[/u.test(observations[0].path)
+  ) {
+    return false;
+  }
+  const row = rows[0];
+  // Legacy keeps a domestic row's facts in plain fields and an abroad-section
+  // row's in `Outbound` fields, even when that row is stated in local currency.
+  const abroad = observations[0].path.includes(".txnAbroad[");
+  const payment = abroad ? row.paymentSumOutbound : row.paymentSum;
+  const deal = abroad ? row.dealSumOutbound : row.dealSum;
+  const name = abroad ? row.fullSupplierNameOutbound : row.fullSupplierNameHeb;
+  const empty = (value: unknown) =>
+    value === undefined || value === null || value === "";
+  const local = (value: unknown) => legacyCurrency(value) === "ILS";
+  if (
+    !local(row.currencyId) ||
+    !(empty(row.currentPaymentCurrency) || local(row.currentPaymentCurrency)) ||
+    !(empty(row.kodMatbeaMekori) || local(row.kodMatbeaMekori)) ||
+    !empty(row.moreInfo) ||
+    !empty(row.dealSumType) ||
+    !(empty(row.paymentSumSign) || row.paymentSumSign === "+") ||
+    (!abroad && !empty(row.paymentSumOutbound)) ||
+    (!abroad && !empty(row.dealSumOutbound)) ||
+    merchant(name) !== merchant(posted.merchantName)
+  ) {
+    return false;
+  }
+  try {
+    return (
+      typeof payment === "string" &&
+      typeof deal === "string" &&
+      -decimalToMinor(payment, "ILS") === posted.amountMinor &&
+      decimalToMinor(payment, "ILS") === decimalToMinor(deal, "ILS")
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Applies only where the deployment enables settled posting. */
+export const isracardSettlementPolicy = {
+  compatiblePair: compatibleIsracardSettledPair,
+  sameMerchant: settledIsracardMerchant,
+};

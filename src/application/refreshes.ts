@@ -44,7 +44,7 @@ export const REFRESH_COOLDOWN_MS = 60_000;
 
 /**
  * After a soft provider stop, scheduled refreshes skip as `cooldown` for this
- * long; the first one after it is the single automatic retry.
+ * long; the first one after it retries.
  */
 export const SOFT_STOP_COOLDOWN_MS = 6 * 60 * 60_000;
 
@@ -52,12 +52,45 @@ export const SOFT_STOP_COOLDOWN_MS = 6 * 60 * 60_000;
 export const ATTENTION_RETRY_INTERVAL_MS = 60 * 60_000;
 
 /**
- * A provider stop without a verdict on the credentials: the provider limited
- * or refused requests. It needs no operator unless the next executed refresh
- * of the connection stops the same way.
+ * While attention is required, the scheduler retries the connection itself
+ * this long after its last executed refresh: attention slows refreshing down
+ * rather than stopping it, so a block nobody is watching still ends.
  */
-export const isSoftStop = (refresh: Pick<Refresh, "providerStopReason">) =>
+export const ATTENTION_AUTO_RETRY_MS = 24 * 60 * 60_000;
+
+/**
+ * Consecutive executed refreshes stopped by a refused login after which the
+ * connection requires attention. A provider's verdict on one login can be
+ * wrong while the credentials stay valid, so a single refusal only cools the
+ * connection down. Repeated refused logins can lock the provider account, so
+ * the default stays small; 1 blocks after the first refusal.
+ */
+export const LOGIN_FAILURES_BEFORE_ATTENTION = 2;
+export const MAX_LOGIN_FAILURES_BEFORE_ATTENTION = 5;
+
+/** How a finishing refresh decides attention; the refresh service owns it. */
+export interface AttentionPolicy {
+  /** 1 to MAX_LOGIN_FAILURES_BEFORE_ATTENTION. */
+  loginFailuresBeforeAttention: number;
+}
+
+type Stopped = Pick<Refresh, "providerStopReason">;
+
+/** The provider limited or refused requests without a verdict on the credentials. */
+export const isRateLimitStop = (refresh: Stopped) =>
   refresh.providerStopReason === "rate_limited";
+
+/** The provider refused the login or demanded a challenge. */
+export const isLoginStop = (refresh: Stopped) =>
+  refresh.providerStopReason === "authentication_failed" ||
+  refresh.providerStopReason === "authentication_challenge";
+
+/**
+ * A provider stop that cools scheduled refreshes down instead of blocking
+ * them: it needs an operator only when it repeats (see `finalAttention`).
+ */
+export const isSoftStop = (refresh: Stopped) =>
+  isRateLimitStop(refresh) || isLoginStop(refresh);
 
 /** Refreshes that ran, as opposed to active or skipped ones. */
 export const isExecuted = (refresh: Pick<Refresh, "status">) =>
@@ -71,10 +104,26 @@ type Executed = Pick<
 >;
 
 /**
+ * The earliest instant a scheduled start is admitted after the connection's
+ * last executed refresh; null when it records no finish to wait from.
+ */
+export function scheduledAdmissionAt(last: Executed): number | null {
+  if (!last.finishedAt) {
+    return null;
+  }
+  const hold = last.requiresAttention
+    ? ATTENTION_AUTO_RETRY_MS
+    : isSoftStop(last)
+      ? SOFT_STOP_COOLDOWN_MS
+      : REFRESH_COOLDOWN_MS;
+  return Date.parse(last.finishedAt) + hold;
+}
+
+/**
  * Why the connection's last executed refresh holds back an ordinary start, if
- * it does. An owner's manual start retries past an attention block, unless a
- * manual refresh already met it within ATTENTION_RETRY_INTERVAL_MS; a
- * scheduled start waits out SOFT_STOP_COOLDOWN_MS after a soft stop.
+ * it does. A scheduled start waits until `scheduledAdmissionAt`. An owner's
+ * manual start retries past an attention block, unless a manual refresh
+ * already met it within ATTENTION_RETRY_INTERVAL_MS.
  */
 export function admissionHold(
   last: Executed | undefined,
@@ -84,30 +133,32 @@ export function admissionHold(
   if (!last) {
     return null;
   }
+  if (candidate.trigger === "scheduled") {
+    const admittedAt = scheduledAdmissionAt(last);
+    if (admittedAt === null || now >= admittedAt) {
+      return null;
+    }
+    return last.requiresAttention ? "requires_attention" : "cooldown";
+  }
   const since = last.finishedAt
     ? now - Date.parse(last.finishedAt)
     : Number.POSITIVE_INFINITY;
   if (last.requiresAttention) {
-    const ownerRetry =
-      candidate.trigger === "manual" &&
-      !(last.trigger === "manual" && since < ATTENTION_RETRY_INTERVAL_MS);
-    return ownerRetry ? null : "requires_attention";
+    return last.trigger === "manual" && since < ATTENTION_RETRY_INTERVAL_MS
+      ? "requires_attention"
+      : null;
   }
-  if (since < REFRESH_COOLDOWN_MS) {
-    return "cooldown";
-  }
-  return candidate.trigger === "scheduled" &&
-    isSoftStop(last) &&
-    since < SOFT_STOP_COOLDOWN_MS
-    ? "cooldown"
-    : null;
+  return since < REFRESH_COOLDOWN_MS ? "cooldown" : null;
 }
 
 /**
- * Whether a refresh finishing with `status` requires attention, given the
- * connection's previous executed refresh: its own authentication stop, a soft
- * stop right after another, or anything short of completion after a refresh
- * that required attention, so only a completed retry clears a block.
+ * Whether a refresh finishing with `status` requires attention. `previous` is
+ * the connection's last executed refresh; `earlier` its last executed
+ * refreshes that a rate limit did not stop, newest first, at least
+ * `loginFailuresBeforeAttention - 1` of them when that many exist. Only a
+ * completed refresh clears a block. A rate limit escalates only right after
+ * another; refused logins only as an unbroken run, which rate limits between
+ * them neither extend nor break.
  */
 export function finalAttention(
   finishing: Pick<
@@ -115,17 +166,27 @@ export function finalAttention(
     "status" | "requiresAttention" | "providerStopReason"
   >,
   previous: Executed | undefined,
+  earlier: readonly Stopped[],
+  policy: AttentionPolicy,
 ): boolean {
   if (finishing.requiresAttention) {
     return true;
   }
-  if (finishing.status === "completed" || !previous) {
+  if (finishing.status === "completed") {
     return false;
   }
-  return (
-    previous.requiresAttention ||
-    (isSoftStop(finishing) && isSoftStop(previous))
-  );
+  if (previous?.requiresAttention) {
+    return true;
+  }
+  if (isRateLimitStop(finishing)) {
+    return previous !== undefined && isRateLimitStop(previous);
+  }
+  if (!isLoginStop(finishing)) {
+    return false;
+  }
+  const broken = earlier.findIndex((refresh) => !isLoginStop(refresh));
+  const run = 1 + (broken === -1 ? earlier.length : broken);
+  return run >= policy.loginFailuresBeforeAttention;
 }
 
 /** A refresh still active this long after it was created fails as expired. */
@@ -369,7 +430,15 @@ export function refreshHealthEvents(
 
 /** Refresh progress; only a collection's lease-fenced store offers it. */
 export interface RefreshWriter {
-  updateRefresh(id: string, progress: RefreshProgress): Promise<void>;
+  /**
+   * A write that finishes the refresh decides its attention under `policy`,
+   * LOGIN_FAILURES_BEFORE_ATTENTION when absent.
+   */
+  updateRefresh(
+    id: string,
+    progress: RefreshProgress,
+    policy?: AttentionPolicy,
+  ): Promise<void>;
 }
 
 /** Inclusive calendar months covering a range, newest first, clipped to it. */

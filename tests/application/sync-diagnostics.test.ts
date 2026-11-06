@@ -98,6 +98,28 @@ describe("structured sync diagnostics", () => {
     expect(log).toHaveBeenCalledTimes(1);
   });
 
+  it("allows only fixed settlement statuses and strips private configuration", () => {
+    const report = createSyncDiagnosticReport();
+    for (const settlement of [
+      "disabled",
+      "ready",
+      "row_budget",
+      "no_pending_coverage",
+      "incomplete_capture",
+    ]) {
+      report.log({
+        ...diagnostic,
+        settlement,
+        config: { secret: "private" },
+      });
+    }
+    report.log({ ...diagnostic, settlement: "private merchant or credential" });
+    expect(report.report().entries).toHaveLength(5);
+    expect(JSON.stringify(report.report())).not.toMatch(
+      /private|secret|config/u,
+    );
+  });
+
   it("carries the database bytes a reconciliation read as a count", () => {
     const report = createSyncDiagnosticReport();
     const entry: SyncDiagnostic = {

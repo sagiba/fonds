@@ -13,17 +13,23 @@ import {
 } from "../application/collection-lock.js";
 import type { InternalStore } from "../application/financial-store.js";
 import {
+  type AttentionPolicy,
   emptyCounts,
   isActive,
+  LOGIN_FAILURES_BEFORE_ATTENTION,
+  MAX_LOGIN_FAILURES_BEFORE_ATTENTION,
   monthWindows,
   PROVIDER_STOP_REASONS,
   type Refresh,
   REFRESH_MAX_AGE_MS,
   type RefreshEstimate,
+  type RefreshProgress,
   type RefreshResumeResult,
   type RefreshStartResult,
   type RefreshTrigger,
+  scheduledAdmissionAt,
   skippedRefresh,
+  type SkipReason,
   validateRefreshRange,
   type WindowStatus,
 } from "../application/refreshes.js";
@@ -107,6 +113,12 @@ export interface RefreshServiceOptions {
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   log?: (entry: object) => void;
   debugArchiveDays?: number;
+  /**
+   * Consecutive refused logins after which a connection requires attention,
+   * 1 to MAX_LOGIN_FAILURES_BEFORE_ATTENTION; LOGIN_FAILURES_BEFORE_ATTENTION
+   * when absent.
+   */
+  loginFailuresBeforeAttention?: number;
 }
 
 type Outcome = "done" | "yielded" | "paced" | "busy" | "interrupted";
@@ -189,6 +201,17 @@ export function createRefreshService(options: RefreshServiceOptions) {
   const emit = syncDiagnostics(log);
   const shutdown = options.signal ?? new AbortController().signal;
   const loginIntervalMs = options.loginIntervalMs ?? LOGIN_INTERVAL_MS;
+  const attention: AttentionPolicy = {
+    loginFailuresBeforeAttention:
+      options.loginFailuresBeforeAttention ?? LOGIN_FAILURES_BEFORE_ATTENTION,
+  };
+  if (
+    !Number.isInteger(attention.loginFailuresBeforeAttention) ||
+    attention.loginFailuresBeforeAttention < 1 ||
+    attention.loginFailuresBeforeAttention > MAX_LOGIN_FAILURES_BEFORE_ATTENTION
+  ) {
+    throw new Error("Invalid login failures before attention");
+  }
   const sleep =
     options.sleep ??
     ((ms: number, signal: AbortSignal) => delay(ms, undefined, { signal }));
@@ -232,11 +255,31 @@ export function createRefreshService(options: RefreshServiceOptions) {
     };
   }
 
+  /**
+   * Logs a scheduled connection's skip: when a scheduled start would next be
+   * admitted, or null when no time is known (an active refresh, a missed gap).
+   */
+  function logSkip(
+    provider: string,
+    skipReason: SkipReason,
+    retryAt: number | null,
+  ) {
+    log({
+      event: "fonds_refresh",
+      provider,
+      trigger: "scheduled",
+      status: "skipped",
+      skipReason,
+      retryAt: retryAt === null ? null : new Date(retryAt).toISOString(),
+    });
+  }
+
   /** Records a refresh, or why none started; a scheduled occurrence records its skip. */
   async function admit(
-    connectionId: string,
+    target: CollectionTarget,
     input: RefreshStart,
   ): Promise<{ result: RefreshStartResult; launch: string[] }> {
+    const { connectionId } = target;
     const admission = await store.admitRefresh(record(connectionId, input), {
       operator: Boolean(input.operator),
       now: Date.now(),
@@ -260,6 +303,13 @@ export function createRefreshService(options: RefreshServiceOptions) {
       };
     }
     const { reason, met } = admission;
+    if (admission.skipped) {
+      logSkip(
+        target.adapter.provider,
+        reason,
+        reason === "busy" ? null : scheduledAdmissionAt(met),
+      );
+    }
     // A start never continues the active refresh it met: that is `resume`.
     return {
       result: { connectionId, refresh: admission.skipped ?? met, reason },
@@ -315,6 +365,8 @@ export function createRefreshService(options: RefreshServiceOptions) {
     if (!current || !isActive(current)) {
       return "done";
     }
+    const update = (progress: RefreshProgress) =>
+      locked.updateRefresh(id, progress, attention);
     const cannotFinishUnit = () =>
       deadline !== undefined && deadline - performance.now() < UNIT_DEADLINE_MS;
     // A refresh that cannot finish one unit here stays as it is, for elsewhere.
@@ -354,7 +406,7 @@ export function createRefreshService(options: RefreshServiceOptions) {
     const now = new Date().toISOString();
     if (Date.now() - Date.parse(current.createdAt) > REFRESH_MAX_AGE_MS) {
       const window = finishActiveWindow();
-      await locked.updateRefresh(id, {
+      await update({
         status: "failed",
         ...(window && { window }),
         failureReason: "expired",
@@ -371,7 +423,7 @@ export function createRefreshService(options: RefreshServiceOptions) {
     // A provider stop already recorded is final; it is never requested again.
     if (current.requiresAttention || current.providerStopReason) {
       const window = finishActiveWindow();
-      await locked.updateRefresh(id, {
+      await update({
         status: failureStatus(),
         ...(window && { window }),
         startedAt: current.startedAt ?? now,
@@ -407,7 +459,7 @@ export function createRefreshService(options: RefreshServiceOptions) {
     };
     let recovering = false;
     let recoveryStarted = 0;
-    await locked.updateRefresh(id, {
+    await update({
       status: "running",
       startedAt: current.startedAt ?? now,
     });
@@ -439,7 +491,7 @@ export function createRefreshService(options: RefreshServiceOptions) {
       });
       if (requiresAttention || providerStopped) {
         const window = finishActiveWindow();
-        await locked.updateRefresh(id, {
+        await update({
           status: failureStatus(),
           ...(window && { window }),
           finishedAt: new Date().toISOString(),
@@ -480,7 +532,7 @@ export function createRefreshService(options: RefreshServiceOptions) {
           activeWindow = window.from;
           activeWindowAccepted = acceptedWindows.has(window.from);
           statuses.set(window.from, "running");
-          await locked.updateRefresh(id, {
+          await update({
             window: { from: window.from, status: "running" },
           });
         }
@@ -525,7 +577,7 @@ export function createRefreshService(options: RefreshServiceOptions) {
         }
         // A stop finishes the refresh in the same write as its checkpoint,
         // so no resume requests the provider again.
-        await locked.updateRefresh(id, {
+        await update({
           counts,
           requiresAttention,
           ...(window && {
@@ -586,7 +638,7 @@ export function createRefreshService(options: RefreshServiceOptions) {
       status = failureStatus();
       counts = { ...counts, failures: Math.max(1, counts.failures) };
     }
-    await locked.updateRefresh(id, {
+    await update({
       status,
       ...(failedWindow && { window: failedWindow }),
       finishedAt: new Date().toISOString(),
@@ -792,13 +844,16 @@ export function createRefreshService(options: RefreshServiceOptions) {
         validateRefreshRange(input.range);
       }
       const { targets, failures } = await discover();
-      if (!targets.some((target) => target.connectionId === connectionId)) {
+      const target = targets.find(
+        (candidate) => candidate.connectionId === connectionId,
+      );
+      if (!target) {
         // A connection that could not be discovered is not known to be missing.
         throw failures
           ? new Error("Refresh targets could not be discovered")
           : new NotFoundError("Refresh connection not found");
       }
-      const { result, launch: ids } = await admit(connectionId, input);
+      const { result, launch: ids } = await admit(target, input);
       launch(ids);
       return result;
     },
@@ -859,7 +914,7 @@ export function createRefreshService(options: RefreshServiceOptions) {
       const admitted: Awaited<ReturnType<typeof admit>>[] = [];
       try {
         for (const target of (await discover()).targets) {
-          admitted.push(await admit(target.connectionId, input));
+          admitted.push(await admit(target, input));
         }
       } finally {
         // Refreshes recorded before a failure still run.
@@ -944,7 +999,7 @@ export function createRefreshService(options: RefreshServiceOptions) {
      */
     async recordMissed(gap: MissedOccurrences) {
       for (const target of (await discover()).targets) {
-        await store.admitRefresh(
+        const admission = await store.admitRefresh(
           {
             ...skippedRefresh(
               record(target.connectionId, {
@@ -961,6 +1016,9 @@ export function createRefreshService(options: RefreshServiceOptions) {
           },
           { operator: false, now: Date.now() },
         );
+        if (admission.reason === null) {
+          logSkip(target.adapter.provider, "missed", null);
+        }
       }
     },
 
@@ -1037,6 +1095,7 @@ export async function runOperatorRefresh(input: {
   range?: CollectionRange | undefined;
   log?: (entry: object) => void;
   debugArchiveDays?: number;
+  loginFailuresBeforeAttention?: number | undefined;
 }) {
   const service = createRefreshService({
     store: input.store,
@@ -1044,6 +1103,9 @@ export async function runOperatorRefresh(input: {
     log: input.log ?? (() => {}),
     ...(input.debugArchiveDays !== undefined && {
       debugArchiveDays: input.debugArchiveDays,
+    }),
+    ...(input.loginFailuresBeforeAttention !== undefined && {
+      loginFailuresBeforeAttention: input.loginFailuresBeforeAttention,
     }),
   });
   const start: RefreshStart = {
@@ -1069,11 +1131,15 @@ export async function runOperatorResume(input: {
   targets(): Promise<CollectionDiscovery>;
   refreshId: string;
   log?: (entry: object) => void;
+  loginFailuresBeforeAttention?: number | undefined;
 }) {
   const service = createRefreshService({
     store: input.store,
     targets: input.targets,
     log: input.log ?? (() => {}),
+    ...(input.loginFailuresBeforeAttention !== undefined && {
+      loginFailuresBeforeAttention: input.loginFailuresBeforeAttention,
+    }),
   });
   const result = await service.resume(input.refreshId);
   await service.settled();

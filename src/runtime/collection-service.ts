@@ -214,6 +214,7 @@ export interface CollectionServiceOptions extends Omit<
   events?: EventService;
   /** Interrupts executions when the service shuts down; they resume later. */
   signal: AbortSignal;
+  loginFailuresBeforeAttention?: number | undefined;
 }
 
 /** Refreshes over every collectable connection, with Events delivery, on any backend. */
@@ -225,6 +226,9 @@ export function createCollectionService(options: CollectionServiceOptions) {
     targets: collectionTargets({ ...options, log }),
     signal: options.signal,
     log,
+    ...(options.loginFailuresBeforeAttention !== undefined && {
+      loginFailuresBeforeAttention: options.loginFailuresBeforeAttention,
+    }),
     // Each refresh also delivers changes made through the API since the last one.
     ...(events && {
       afterRefresh: async (signal: AbortSignal) => {
@@ -341,6 +345,7 @@ export interface LocalCollectionBackend {
   credentials: CredentialStore;
   eventSubscriptions: EventSubscriptionStore;
   credentialsKey(): CredentialsKey | undefined;
+  loginFailuresBeforeAttention?: number | undefined;
 }
 
 export interface LocalServiceOptions {
@@ -394,6 +399,7 @@ export function createLocalService(
     store: backend.store,
     credentials: backend.credentials,
     credentialsKey: backend.credentialsKey,
+    loginFailuresBeforeAttention: backend.loginFailuresBeforeAttention,
     events,
     signal: options.signal,
     log: log,

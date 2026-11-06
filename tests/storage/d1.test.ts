@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { ConflictError } from "../../src/domain/errors.js";
 import { emptyDetails } from "../../src/domain/model.js";
+import type { SourceAdapter } from "../../src/domain/source-adapter.js";
 import { sqliteMigrations } from "../../src/storage/sqlite/migration.js";
 import {
   d1Enabled,
@@ -75,7 +76,11 @@ function directWriteStore(direct: string[]) {
   } as D1Database);
 }
 
-function capture(store: Pick<Harness, "ingestRun">, runId: string) {
+function capture(
+  store: Pick<Harness, "ingestRun">,
+  runId: string,
+  adapter: SourceAdapter = synthetic,
+) {
   return store.ingestRun(
     {
       connectionId,
@@ -93,7 +98,7 @@ function capture(store: Pick<Harness, "ingestRun">, runId: string) {
         },
       ],
     },
-    synthetic,
+    adapter,
   );
 }
 

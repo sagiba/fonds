@@ -105,7 +105,8 @@ tests, preserve titles and snapshot contents, compare suite and test counts, and
 run with `CI=1` so a missing snapshot cannot be silently recreated.
 
 `scripts/` holds target builders, the documentation checks, the Docker smoke
-test and the opt-in synthetic benchmark (`npm run benchmark:reconciliation`).
+test, the opt-in synthetic benchmark (`npm run benchmark:reconciliation`) and the
+value-free HAR profiler for [provider work](../../.claude/skills/add-provider/SKILL.md).
 Scripts and `deploy/neon/` are linted, their TypeScript files are typechecked, and none ships in the
 production build. `npm run build` cleans `dist/` first so removed modules cannot
 survive as stale output.
@@ -119,6 +120,7 @@ survive as stale output.
 | `migrations/`      | Numbered migrations per dialect and the D1 copies; see schema-artifact maintenance below                   |
 | `tests/d1-local/`  | Opt-in Miniflare manifest and lockfile for the local D1 suites, installed separately from the root package |
 | `docs/`            | Top-level design/API/database references, with guides, providers and internals in subdirectories           |
+| `.claude/skills/`  | Repository agent skills; `.agents/skills` links here for other agents                                      |
 
 Keep the root lockfile for reproducible development installations and the
 deployment lockfiles for selected-driver installations. Add a separate package

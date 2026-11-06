@@ -35,20 +35,37 @@ are ISO 8601 UTC.
 
 ## Pending-to-posted policy
 
-Providers rarely supply a shared identifier for an authorization and its later
-posting, so Fonds infers the [match](api.md#pending-to-posted-matching)
-conservatively, keeps it reversible and keeps the pending ID. Other models make a
-different choice:
+The supported sources demonstrate no shared authorization/posting identifier. Fonds therefore infers the [match](api.md#pending-to-posted-matching)
+while retaining source components and an unlink path. Keeping the pending ID
+preserves owner annotations; it does not turn a heuristic into provider proof.
 
-| Model     | Behavior                                                                          |
-| --------- | --------------------------------------------------------------------------------- |
-| Plaid     | Replaces the pending record with a new one that carries `pending_transaction_id`. |
-| Stripe    | Keeps a separate Authorization that Transactions refer to.                        |
-| Airwallex | Lists `matched_authorizations[]` on the transaction.                              |
-| Up, Monzo | Usually keep one ID but do not guarantee it.                                      |
+Membership, identity and notification are separate concerns. An authorization
+leaving a covered current source does not prove cancellation or identify a
+posting. Retained history allows later continuity without displaying the old
+observation as another current charge. [Design](design.md#pending-to-posted-matching)
+owns these invariants; the API owns public behavior.
 
-Keeping the ID is a Fonds policy, chosen because the owner's notes, tags and review
-decisions belong to the purchase, not to the provider's record.
+External precedents inform the design, not issuer-specific matching predicates:
+
+- [Plaid](https://plaid.com/docs/transactions/transactions-data/) replaces a pending
+  record with a posted record and supplies `pending_transaction_id` when matched;
+  it explicitly documents unmatched cases.
+- [MX](https://docs.mx.com/api-reference/atrium/reference/transactions/overview/)
+  documents both status updates and replacement with a different identifier.
+- Stripe keeps a separate Authorization referenced by Transactions; Airwallex
+  exposes `matched_authorizations[]`. Up and Monzo usually keep one ID but do not
+  guarantee it.
+- [Actual Budget](https://github.com/actualbudget/actual/blob/master/packages/loot-core/src/server/accounts/sync.ts)
+  uses ID-first import reconciliation with amount/date fallback.
+  [Sure](https://github.com/we-promise/sure/blob/main/app/models/account/provider_import_adapter.rb)
+  implements pending reconciliation. Neither generic import reconciliation nor
+  string similarity supplies missing purchase identity. Repeated purchases,
+  changed descriptors and late postings still need explicit policy.
+
+A wrong link is an attribution error, not necessarily erased source data.
+Unlink restores components but does not infer how to redistribute annotation
+edits made while linked. Notification consumers should distinguish a newly
+observed record from new spending; see the [assistant guide](guides/using-with-an-assistant.md#refresh-and-notifications).
 
 ## Merchant categories
 

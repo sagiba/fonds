@@ -31,6 +31,7 @@ export async function startPostgresStdio(processEnv: NodeJS.ProcessEnv) {
     store: session.store,
     credentials: session.credentials,
     credentialsKey: () => session.credentialsKey,
+    loginFailuresBeforeAttention: session.loginFailuresBeforeAttention,
     signal: collections.signal,
     log: stderrLog,
   });

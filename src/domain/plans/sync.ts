@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  type AnnotationData,
   collectionFailureCodeSchema,
   isBilledLine,
   isCityName,
@@ -45,7 +46,11 @@ import {
   transactionContent,
 } from "../transaction-content.js";
 import { reviewState } from "./annotation.js";
-import { automaticPostingPairs, postingComponents } from "./auto-posting.js";
+import {
+  automaticPostingPairs,
+  exactMerchantPostingGroups,
+  postingComponents,
+} from "./auto-posting.js";
 import { purchaseResolver, resolveTransaction } from "./catalog.js";
 import { reconcileFinancialBundle } from "./financial-authority.js";
 import {
@@ -62,11 +67,17 @@ import {
   UNVERIFIED_LEGACY_IDENTITY,
 } from "./legacy-identity.js";
 import {
+  LINKED_AUTHORIZATION_RETURNED,
+  OWNER_EXACT_REPAIR_POLICY,
   planPosting,
   postingRejected,
   refreshDuplicatePlans,
 } from "./lifecycle.js";
 import { postingOverlapPairs } from "./posting-overlap.js";
+import {
+  postingSettlementPairs,
+  SETTLED_POSTING_POLICY,
+} from "./posting-settlement.js";
 import {
   acceptCollectionHealth,
   partitionKey,
@@ -223,7 +234,7 @@ export interface SyncResult {
 }
 
 /** Bump when shared reconciliation rules change, independently of archived parser versions. */
-export const RECONCILIATION_POLICY_VERSION = "source-presence-v14";
+export const RECONCILIATION_POLICY_VERSION = "source-presence-v16";
 
 export function reconciliationFailure(warnings: readonly string[]) {
   const failureCode = reconciliationFailureCodeSchema.options.find((code) =>
@@ -495,7 +506,10 @@ function retainEvidence(
     ];
   }
   const persistentIssues = earlier.issues.filter(
-    (issue) => issue === "ambiguous_identity" || issue === POSTING_MATCH_ISSUE,
+    (issue) =>
+      issue === "ambiguous_identity" ||
+      issue === POSTING_MATCH_ISSUE ||
+      issue === LINKED_AUTHORIZATION_RETURNED,
   );
   input.details.issues = [
     ...new Set([...input.details.issues, ...persistentIssues]),
@@ -802,6 +816,7 @@ interface PostingContinuationOptions {
   comparableAbsence: (row: LedgerRow) => boolean;
   baseline: boolean;
   full: (row: LedgerRow) => Transaction;
+  annotationFor: (transactionId: string) => AnnotationData | undefined;
 }
 
 function freshPostingCapture(
@@ -846,8 +861,12 @@ function planPostingContinuations({
   comparableAbsence,
   baseline,
   full,
+  annotationFor,
 }: PostingContinuationOptions) {
-  const empty = new Map<TransactionFacts, Transaction>();
+  const empty = {
+    pairs: new Map<TransactionFacts, Transaction>(),
+    heuristic: new Set<TransactionFacts>(),
+  };
   if (!adapter.automaticPosting || result.historical || baseline) {
     return empty;
   }
@@ -944,19 +963,67 @@ function planPostingContinuations({
       group.posted.some((row) => newPosted.has(row as TransactionFacts)),
   );
   const pending = components.flatMap((group) => group.pending);
+  const completePending = pending.map(complete);
+  const completePosted = components
+    .flatMap((group) => group.posted)
+    .map(complete);
+  const disappearingComplete = new Map(
+    pending.flatMap((row) => {
+      const stored = "id" in row ? disappearing.get(row) : undefined;
+      return stored ? [[complete(row), full(stored)] as const] : [];
+    }),
+  );
   const { pairs } = automaticPostingPairs(
-    pending.map(complete),
-    components.flatMap((group) => group.posted).map(complete),
-    new Map(
-      pending.flatMap((row) => {
-        const stored = "id" in row ? disappearing.get(row) : undefined;
-        return stored ? [[complete(row), full(stored)] as const] : [];
-      }),
-    ),
+    completePending,
+    completePosted,
+    disappearingComplete,
     adapter.automaticPosting,
     newPosted,
+    annotationFor,
   );
-  return pairs;
+  const heuristic = new Set<TransactionFacts>();
+  if (adapter.automaticPosting.exactNameHeuristic) {
+    const { pairs: exact } = automaticPostingPairs(
+      completePending,
+      completePosted,
+      disappearingComplete,
+      {
+        ...adapter.automaticPosting,
+        compatibleGroups: (pending, posted) =>
+          exactMerchantPostingGroups(
+            pending,
+            posted,
+            adapter.automaticPosting?.exactNameContradiction,
+          ),
+      },
+      newPosted,
+      annotationFor,
+    );
+    for (const [posted, pending] of exact) {
+      if (!pairs.has(posted)) {
+        pairs.set(posted, pending);
+        heuristic.add(posted);
+      }
+    }
+  }
+  return { pairs, heuristic };
+}
+
+/** Same card and money one day apart; equal dates are already a component. */
+function adjacentDayCandidate(pending: LedgerRow, posted: LedgerRow): boolean {
+  return (
+    pending.cardId !== null &&
+    pending.cardId === posted.cardId &&
+    pending.amountMinor !== null &&
+    pending.amountMinor === posted.amountMinor &&
+    pending.currency !== null &&
+    pending.currency === posted.currency &&
+    pending.transactionDate !== null &&
+    posted.transactionDate !== null &&
+    Math.abs(
+      Date.parse(pending.transactionDate) - Date.parse(posted.transactionDate),
+    ) === DAY_MILLISECONDS
+  );
 }
 
 /** Same card, date and kind, with same-sign amounts in different currencies. */
@@ -1083,6 +1150,14 @@ function refreshPendingCandidates(
     for (const group of groups) {
       for (const pending of group.pending) {
         for (const posted of group.posted) {
+          addCandidate(pending, posted);
+        }
+      }
+    }
+    // Sources can date one purchase a day apart, so a neighbor is review evidence.
+    for (const posted of postedRows) {
+      for (const pending of pendingRows) {
+        if (adjacentDayCandidate(pending, posted)) {
           addCandidate(pending, posted);
         }
       }
@@ -1324,6 +1399,7 @@ function reconcileLinkedComponents({
       continue;
     }
     let pending = structuredClone(link.pending);
+    let returned = false;
     const authorizations = inputs.filter(
       (input) =>
         input.status === "pending" &&
@@ -1406,6 +1482,7 @@ function reconcileLinkedComponents({
           lastSeenAt: response.capturedAt,
           lastSeenRunId: runId,
         };
+        returned = !sourceAbsence && inferredLink(link);
       }
     } else if (pending.presence !== "removed" && absence.covers(pending)) {
       pending.presence = "not_returned";
@@ -1427,9 +1504,58 @@ function reconcileLinkedComponents({
               ),
             }
           : {}),
+        ...(returned
+          ? {
+              issues: [
+                ...new Set([
+                  ...row.details.issues,
+                  LINKED_AUTHORIZATION_RETURNED,
+                ]),
+              ],
+            }
+          : {}),
         postingLink: { ...link, pending },
       },
     });
+  }
+}
+
+/** Every link not confirmed by the owner rests on an inference a return can contradict. */
+function inferredLink(link: NonNullable<TransactionDetails["postingLink"]>) {
+  return link.automatic || link.policyVersion === OWNER_EXACT_REPAIR_POLICY;
+}
+
+/**
+ * A discovery that may continue an authorization already observed is announced
+ * as what it is. The row and its event remain: nothing here decides identity.
+ */
+function qualifyContinuationDiscoveries(
+  plan: FinancialPlan,
+  accountKey: string,
+  runId: string,
+) {
+  for (const entry of plan.events) {
+    if (
+      entry.type !== "transaction.created" ||
+      entry.runId !== runId ||
+      !entry.transactionId
+    ) {
+      continue;
+    }
+    const row = plan.transaction(entry.transactionId);
+    if (
+      row?.sourceScope === accountKey &&
+      row.status === "posted" &&
+      row.details.pendingPostingCandidates?.some((id) => {
+        const candidate = plan.transaction(id);
+        return (
+          candidate?.status === "pending" &&
+          candidate.firstSeenAt < row.firstSeenAt
+        );
+      })
+    ) {
+      entry.type = "transaction.posting_candidate";
+    }
   }
 }
 
@@ -1991,6 +2117,7 @@ export function planRun(
       comparableAbsence: absence.covers,
       baseline: baselineAccounts.has(response.accountKey),
       full,
+      annotationFor: (id) => plan.annotation(id)?.data,
     });
     const markSeen = (id: string, observed = true) => {
       seenIds.add(id);
@@ -2281,7 +2408,9 @@ export function planRun(
         };
       }
       const continuation =
-        !found && !absence.prior(input) ? continuations.get(input) : undefined;
+        !found && !absence.prior(input)
+          ? continuations.pairs.get(input)
+          : undefined;
       if (continuation) {
         // Retain an audit row without allocating a discovery identity or created event.
         recordPaymentContextConflicts(input, continuation.details);
@@ -2309,12 +2438,16 @@ export function planRun(
             expectedPendingAnnotationVersion:
               plan.annotation(continuation.id)?.version ?? 0,
             expectedPostedAnnotationVersion: 0,
-            reason: "Same-capture posting continuation",
+            reason: continuations.heuristic.has(input)
+              ? "Unique exact merchant, date, card and purchase amount heuristic"
+              : "Same-capture posting continuation",
             actor: "system",
           },
           now,
           {
-            policyVersion: RECONCILIATION_POLICY_VERSION,
+            policyVersion: continuations.heuristic.has(input)
+              ? "exact-unique-v1"
+              : RECONCILIATION_POLICY_VERSION,
             runId,
             capturedAt: response.capturedAt,
           },
@@ -2646,11 +2779,61 @@ export function planRun(
               plan.annotation(posted.id)?.version ?? 0,
             actor: "system",
             reason:
-              "Observed overlap followed by comparable authorization absence",
+              "Witnessed posting arrival and comparable authorization absence",
           },
           now,
           {
             policyVersion: RECONCILIATION_POLICY_VERSION,
+            runId,
+            capturedAt: response.capturedAt,
+            overlap: pending.details.postingOverlap!,
+          },
+        );
+        purchases.add(plan.transaction(pending.id)!);
+        markSeen(pending.id);
+        markSeen(posted.id);
+        updated++;
+      }
+    }
+    if (
+      adapter.automaticPosting?.settledHeuristic &&
+      !result.historical &&
+      !baselineAccounts.has(response.accountKey) &&
+      result.partitions.every((part) => part.success) &&
+      freshPostingCapture(adapter, result, response, history)
+    ) {
+      const pairs = postingSettlementPairs({
+        plan,
+        before: current,
+        accountKey: response.accountKey,
+        policy: adapter.automaticPosting.settledHeuristic,
+        runId,
+        capturedAt: response.capturedAt,
+        absent: (row) =>
+          !seenIds.has(row.id) &&
+          absence.covers(row) &&
+          !history.historical(row) &&
+          row.lastSeenAt < response.capturedAt,
+      });
+      for (const [posted, pending] of pairs) {
+        planPosting(
+          plan,
+          {
+            pendingId: pending.id,
+            postedId: posted.id,
+            expectedPendingVersion: pending.version,
+            expectedPostedVersion: posted.version,
+            expectedPendingAnnotationVersion:
+              plan.annotation(pending.id)?.version ?? 0,
+            expectedPostedAnnotationVersion:
+              plan.annotation(posted.id)?.version ?? 0,
+            actor: "system",
+            reason:
+              "Heuristic identity link after 24-hour recheck; no competitor in observed ledger, not verified issuer identity",
+          },
+          now,
+          {
+            policyVersion: SETTLED_POSTING_POLICY,
             runId,
             capturedAt: response.capturedAt,
             overlap: pending.details.postingOverlap!,
@@ -2721,6 +2904,7 @@ export function planRun(
       adapter.automaticPosting !== undefined,
       recentCutoff,
     );
+    qualifyContinuationDiscoveries(plan, response.accountKey, runId);
   }
   // Accepted rows of a failed partition still change lines, so every parent is reevaluated.
   refreshInstallmentParents(plan);
