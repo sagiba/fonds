@@ -126,7 +126,7 @@ describe.skipIf(!postgresUrl)(
             "SELECT cache_size FROM pg_sequences WHERE schemaname=current_schema() ORDER BY sequencename",
           )
         ).rows.map((row) => String(row.cache_size)),
-      ).toEqual(["1", "1", "1"]);
+      ).toEqual(["1", "1", "1", "1"]);
     });
     it("waits for another session's connection-row lock before ingest, apply and config writes", async () => {
       const deferred = {
