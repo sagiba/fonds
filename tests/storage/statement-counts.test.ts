@@ -332,7 +332,7 @@ for (const backend of backends) {
           Math.ceil(transactionCount / reconciliationRows) +
           Math.ceil(transactionCount / postingLinkRows) +
           Math.ceil(changes / changeRows) +
-          6 + // Receipt/body staging, run application, staged-body release, expired-body pruning and the run-history summary.
+          7 + // Receipt/body staging, run application, staged-body release, expired-body and capture pruning and the run-history summary.
           2 * guard,
       );
     });

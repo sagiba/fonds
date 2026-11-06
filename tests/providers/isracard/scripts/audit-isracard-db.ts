@@ -292,6 +292,7 @@ const ISSUE_CODES = new Set([
 const KNOWN_TABLES = new Set([
   "accounts",
   "annotations",
+  "capture_archives",
   "cards",
   "collection_leases",
   "connections",
