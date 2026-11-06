@@ -89,9 +89,9 @@ export const reviewedLicenses = {
     license: "MIT",
     source: `${registry}/fast-deep-equal/-/fast-deep-equal-3.1.3.tgz`,
   },
-  "fast-uri@3.1.0": {
+  "fast-uri@3.1.8": {
     license: "BSD-3-Clause",
-    source: `${registry}/fast-uri/-/fast-uri-3.1.0.tgz`,
+    source: `${registry}/fast-uri/-/fast-uri-3.1.8.tgz`,
   },
   "json-schema-traverse@1.0.0": {
     license: "MIT",
@@ -104,12 +104,12 @@ export const reviewedLicenses = {
  * lockfile (for the MCP server, pnpm-lock.yaml at its 2.3.1 tag).
  */
 export const embeddedLibraries = {
-  "@modelcontextprotocol/server@2.3.1": [
+  "@modelcontextprotocol/server@2.4.0": [
     "ajv@8.18.0",
     "ajv-formats@3.0.1",
     "content-type@1.0.5",
     "fast-deep-equal@3.1.3",
-    "fast-uri@3.1.0",
+    "fast-uri@3.1.8",
     "json-schema-traverse@1.0.0",
   ],
 };
