@@ -114,6 +114,7 @@ export async function openDatabase(
       ...(options.settledPosting !== undefined && {
         settledPosting: options.settledPosting,
       }),
+      ...(options.captureArchive && { captureArchive: options.captureArchive }),
       ...(options.repairAdapter !== undefined && {
         repairAdapter: options.repairAdapter,
       }),

@@ -136,6 +136,8 @@ export interface SourceAdapter {
   rejectEmptyRecentPosted?: boolean;
   /** Reject a wholly empty recent capture while covered current rows remain. */
   rejectEmptyRecent?: boolean;
+  /** Fields the source regenerates between identical answers, ignored when comparing captures. */
+  volatileCaptureFields?: readonly string[];
   /** Declared source evidence only, projected identically for stored and new rows; return {} to retain none. */
   retainProviderEvidence(evidence: JsonObject): JsonObject;
   /** Adapter-derived reconciliation state, never part of source-content comparison. */

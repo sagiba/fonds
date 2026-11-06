@@ -19,6 +19,7 @@ import {
   createBetterAuth,
   type GoogleLogin,
 } from "./auth/better-auth.js";
+import { captureArchive, captureArchiveDaysSchema } from "./capture-archive.js";
 import {
   COLLECTION_TRIGGER_PATH,
   continuationRequest,
@@ -90,6 +91,7 @@ export const hostedEnvironmentSchema = z.object({
   FONDS_PUBLIC_API_DESCRIPTION: z.enum(["0", "1"]).optional(),
   FONDS_SYNC_SCOPE_DAYS: syncScopeDaysSchema.optional(),
   FONDS_SETTLED_POSTING: settledPostingSchema.optional(),
+  FONDS_CAPTURE_ARCHIVE_DAYS: captureArchiveDaysSchema.optional(),
   FONDS_LOGIN_FAILURES_BEFORE_ATTENTION: loginFailuresSchema.optional(),
 });
 
@@ -182,6 +184,9 @@ export function hostedConfiguration(
     }),
     ...(values.FONDS_SETTLED_POSTING !== undefined && {
       settledPosting: values.FONDS_SETTLED_POSTING,
+    }),
+    ...(values.FONDS_CAPTURE_ARCHIVE_DAYS !== undefined && {
+      captureArchiveDays: values.FONDS_CAPTURE_ARCHIVE_DAYS,
     }),
     ...(values.FONDS_LOGIN_FAILURES_BEFORE_ATTENTION !== undefined && {
       loginFailuresBeforeAttention:
@@ -402,6 +407,7 @@ export function createHostedService(
     ...(config.settledPosting !== undefined && {
       settledPosting: config.settledPosting,
     }),
+    ...captureArchive(config.captureArchiveDays ?? 0),
   });
   const issuer = createBetterAuth(authPool, {
     publicOrigin: config.publicOrigin,

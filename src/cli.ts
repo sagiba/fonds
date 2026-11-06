@@ -2,6 +2,7 @@ import { existsSync, lstatSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { captureArchiveOptions } from "./runtime/capture-archive.js";
 import { outsideDirectory, protectedDirectory } from "./runtime/checkout.js";
 import { cliCommand } from "./runtime/cli-invocation.js";
 import {
@@ -168,6 +169,10 @@ postgresql:// FONDS_DATABASE_URL makes fonds use PostgreSQL instead.`,
               (message) => new CommandInputError(message),
             ),
             ...postingOptions(env, (message) => new CommandInputError(message)),
+            ...captureArchiveOptions(
+              env,
+              (message) => new CommandInputError(message),
+            ),
             loginFailuresBeforeAttention: loginFailuresBeforeAttention(
               env,
               (message) => new CommandInputError(message),

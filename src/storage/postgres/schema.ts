@@ -170,6 +170,32 @@ export const syncRunBodies = pgTable("sync_run_bodies", {
   expiresAt: text("expires_at"),
 });
 
+const bytes = customType<{ data: Uint8Array; driverData: Uint8Array }>({
+  dataType: () => "bytea",
+});
+
+export const captureArchives = pgTable(
+  "capture_archives",
+  {
+    id: text().primaryKey(),
+    connectionId: text("connection_id")
+      .notNull()
+      .references(() => connections.id),
+    kind: text({ enum: ["run", "card_discovery"] }).notNull(),
+    capturedAt: text("captured_at").notNull(),
+    contentDigest: text("content_digest").notNull(),
+    body: bytes(),
+    expiresAt: text("expires_at").notNull(),
+  },
+  (table) => [
+    index("capture_archives_content").on(
+      table.connectionId,
+      table.contentDigest,
+    ),
+    index("capture_archives_expiry").on(table.expiresAt),
+  ],
+);
+
 export const deferredEvidence = pgTable("deferred_evidence", {
   id: text().primaryKey(),
   connectionId: text("connection_id")

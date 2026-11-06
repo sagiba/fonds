@@ -2,6 +2,16 @@
 export const schemaManifest = [
   {
     "type": "index",
+    "name": "capture_archives_content",
+    "sql": "CREATE INDEX capture_archives_content ON capture_archives(connection_id, content_digest)"
+  },
+  {
+    "type": "index",
+    "name": "capture_archives_expiry",
+    "sql": "CREATE INDEX capture_archives_expiry ON capture_archives(expires_at)"
+  },
+  {
+    "type": "index",
     "name": "event_subscriptions_due",
     "sql": "CREATE INDEX event_subscriptions_due ON event_subscriptions(next_attempt_at) WHERE status = 'active'"
   },
@@ -69,6 +79,11 @@ export const schemaManifest = [
     "type": "table",
     "name": "annotations",
     "sql": "CREATE TABLE annotations (\n  transaction_id TEXT PRIMARY KEY NOT NULL REFERENCES transactions(id),\n  version INTEGER NOT NULL CHECK (version BETWEEN 1 AND 9007199254740991),\n  data_json TEXT NOT NULL CHECK (json_valid(data_json)),\n  updated_at TEXT NOT NULL\n) STRICT"
+  },
+  {
+    "type": "table",
+    "name": "capture_archives",
+    "sql": "CREATE TABLE capture_archives (\n  id TEXT PRIMARY KEY NOT NULL,\n  connection_id TEXT NOT NULL REFERENCES connections(id),\n  kind TEXT NOT NULL CHECK (kind IN ('run','card_discovery')),\n  captured_at TEXT NOT NULL,\n  content_digest TEXT NOT NULL,\n  body BLOB,\n  expires_at TEXT NOT NULL\n) STRICT"
   },
   {
     "type": "table",

@@ -139,6 +139,13 @@ import type {
 import { PROVIDER_STOP_REASONS } from "../domain/refreshes.js";
 import type { SourceAdapter } from "../domain/source-adapter.js";
 import {
+  CAPTURE_ARCHIVE_MAX_DAYS,
+  type CaptureArchiveOptions,
+  type CaptureArchiveRow,
+  discoveryCapture,
+  runCapture,
+} from "./capture-archive.js";
+import {
   contentDigest,
   prepareRun,
   replayResult,
@@ -547,6 +554,8 @@ export interface StoreOptions {
   syncScopeDays?: number;
   /** Delayed heuristic identity linkage; `off` by default. */
   settledPosting?: SettledPostingMode;
+  /** Keeps what each collection received; absent, bodies are released as usual. */
+  captureArchive?: CaptureArchiveOptions;
   /** The provider rules exact repair must honor; absent, it applies only shared rules. */
   repairAdapter?: (provider: string) => SourceAdapter | undefined;
 }
@@ -633,6 +642,17 @@ function buildStore<Db>(
   const commitWrites = db.commit ?? commitInOrder;
   const scopeDays = options.syncScopeDays ?? SYNC_SCOPE_DAYS;
   const settledMode = options.settledPosting ?? "off";
+  const archive = options.captureArchive;
+  if (
+    archive &&
+    !(
+      Number.isInteger(archive.days) &&
+      archive.days >= 1 &&
+      archive.days <= CAPTURE_ARCHIVE_MAX_DAYS
+    )
+  ) {
+    throw new RangeError("Capture archive days out of range");
+  }
   if (!SETTLED_POSTING_MODES.includes(settledMode)) {
     throw new RangeError("Unknown settled posting mode");
   }
@@ -1754,6 +1774,64 @@ function buildStore<Db>(
     return result;
   }
 
+  /**
+   * Debugging evidence only, so a failure here is logged and never stops the
+   * financial work around it. A repeat keeps a row, because each sighting still
+   * happened, and the body it shares outlives it.
+   */
+  async function archiveCapture(
+    row: Pick<CaptureArchiveRow, "id" | "connectionId" | "kind" | "capturedAt">,
+    capture: () => Promise<{ text: string; digest: string }>,
+    emit: ReturnType<typeof syncDiagnostics>,
+    ids: ReturnType<typeof syncCorrelationIds>,
+  ): Promise<void> {
+    if (!archive) {
+      return;
+    }
+    const started = performance.now();
+    try {
+      const { text, digest } = await capture();
+      const expiresAt = new Date(
+        Date.now() + archive.days * 86_400_000,
+      ).toISOString();
+      const repeated = await db.execute(
+        statements.extendCaptureArchive(
+          db.root,
+          row.connectionId,
+          digest,
+          expiresAt,
+        ),
+      );
+      const body = repeated.length > 0 ? null : archive.compress(text);
+      await db.execute(
+        statements.insertCaptureArchive(db.root, {
+          ...row,
+          contentDigest: digest,
+          body,
+          expiresAt,
+        }),
+      );
+      emit({
+        event: "fonds_sync",
+        ...ids,
+        stage: "archive",
+        outcome: "completed",
+        reason: body ? "capture_archived" : "capture_repeated",
+        durationMs: elapsedMs(started),
+        ...(body && { counts: { archivedBytes: body.byteLength } }),
+      });
+    } catch {
+      emit({
+        event: "fonds_sync",
+        ...ids,
+        stage: "archive",
+        outcome: "failed",
+        reason: "capture_archive_failed",
+        failureCategory: "persistence",
+      });
+    }
+  }
+
   async function ingestRun(
     input: RunInput,
     adapter: SourceAdapter,
@@ -1767,7 +1845,7 @@ function buildStore<Db>(
       refreshId: run.refreshId,
     });
     const started = performance.now();
-    let staged = false;
+    let staged: string | undefined;
     emit({ event: "fonds_sync", ...ids, stage: "archive", outcome: "started" });
     await db
       .transaction(async (tx) => {
@@ -1791,7 +1869,7 @@ function buildStore<Db>(
             statements.insertRun(tx, retained),
             statements.insertRunBody(tx, retained),
           ]);
-          staged = true;
+          staged = retained.startedAt;
         }
       })
       .catch((error: unknown) => {
@@ -1813,6 +1891,20 @@ function buildStore<Db>(
       reason: staged ? "body_staged" : "receipt_exists",
       durationMs: elapsedMs(started),
     });
+    // Before extraction, so a capture the parser rejects is kept too.
+    if (staged) {
+      await archiveCapture(
+        {
+          id: run.runId,
+          connectionId: run.connectionId,
+          kind: "run",
+          capturedAt: staged,
+        },
+        () => runCapture(run, adapter),
+        emit,
+        ids,
+      );
+    }
     return applyRun(run.runId, adapter, onDiagnostic);
   }
 
@@ -2202,9 +2294,9 @@ function buildStore<Db>(
     });
     // Expiration is maintenance after the atomic financial commit; failure cannot undo it.
     try {
-      await db.execute(
-        statements.pruneDebugBodies(db.root, new Date().toISOString()),
-      );
+      const now = new Date().toISOString();
+      await db.execute(statements.pruneDebugBodies(db.root, now));
+      await db.execute(statements.pruneCaptureArchives(db.root, now));
       emit({
         event: "fonds_sync",
         ...ids,
@@ -2257,7 +2349,7 @@ function buildStore<Db>(
       Promise.all(
         (await db.execute(statements.connections(db.root))).map(present),
       ),
-    recordCardDiscovery: async (connectionId, input) => {
+    recordCardDiscovery: async (connectionId, input, onDiagnostic) => {
       const discovery = cardDiscoverySchema.parse(input);
       await db.transaction(async (tx) => {
         const connection = (
@@ -2279,6 +2371,18 @@ function buildStore<Db>(
         );
         await savePlan(tx, plan);
       });
+      const id = crypto.randomUUID();
+      await archiveCapture(
+        {
+          id,
+          connectionId,
+          kind: "card_discovery",
+          capturedAt: discovery.observedAt,
+        },
+        () => discoveryCapture(discovery),
+        syncDiagnostics(onDiagnostic),
+        syncCorrelationIds({ captureId: id }),
+      );
     },
     listCards: async (input) => {
       const filters = catalogPageSchema.parse(input);

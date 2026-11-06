@@ -39,6 +39,7 @@ import type {
   Transaction,
 } from "../domain/records.js";
 import type { FailureReason, ProviderStopReason } from "../domain/refreshes.js";
+import type { CaptureArchiveRow } from "./capture-archive.js";
 import type { RetainedRun } from "./run-evidence.js";
 import type { LedgerClause, PlanScope } from "./sql.js";
 
@@ -343,6 +344,14 @@ export interface Statements<Db> {
     keepUntil: string | null,
   ): Iterable<PromiseLike<unknown>>;
   pruneDebugBodies(db: Db, now: string): PromiseLike<unknown>;
+  extendCaptureArchive(
+    db: Db,
+    connectionId: string,
+    contentDigest: string,
+    expiresAt: string,
+  ): PromiseLike<{ id: string }[]>;
+  insertCaptureArchive(db: Db, row: CaptureArchiveRow): PromiseLike<unknown>;
+  pruneCaptureArchives(db: Db, now: string): PromiseLike<unknown>;
   setConfig(db: Db, id: string, config: ConnectionConfig): PromiseLike<unknown>;
   latestOccurrence(db: Db): PromiseLike<{ scheduledAt: string | null }[]>;
   claimOccurrence(

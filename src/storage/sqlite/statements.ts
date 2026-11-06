@@ -9,6 +9,7 @@ import {
   gte,
   inArray,
   isNotNull,
+  lte,
   isNull,
   lt,
   max,
@@ -33,6 +34,7 @@ import { ANNOTATION_MAX_BYTES } from "../../domain/model.js";
 import type { RunHistoryDocument } from "../../domain/plans/run-history.js";
 import type { FinancialPlan } from "../../domain/plans/state.js";
 import type { Connection, ConnectionConfig } from "../../domain/records.js";
+import type { CaptureArchiveRow } from "../capture-archive.js";
 import type { RetainedRun } from "../run-evidence.js";
 import {
   backfillOutcomeRank,
@@ -1213,6 +1215,34 @@ export const pruneDebugBodies = (db: Executor, now: string) =>
         sql`${schema.syncRunBodies.expiresAt} <= ${now}`,
       ),
     );
+/** Keeps the body a repeated capture would have stored until the repeat expires. */
+export const extendCaptureArchive = (
+  db: Executor,
+  connectionId: string,
+  contentDigest: string,
+  expiresAt: string,
+) =>
+  db
+    .update(schema.captureArchives)
+    .set({ expiresAt })
+    .where(
+      and(
+        eq(schema.captureArchives.connectionId, connectionId),
+        eq(schema.captureArchives.contentDigest, contentDigest),
+        isNotNull(schema.captureArchives.body),
+        lte(schema.captureArchives.expiresAt, expiresAt),
+      ),
+    )
+    .returning({ id: schema.captureArchives.id });
+
+export const insertCaptureArchive = (db: Executor, row: CaptureArchiveRow) =>
+  db.insert(schema.captureArchives).values(row).onConflictDoNothing();
+
+export const pruneCaptureArchives = (db: Executor, now: string) =>
+  db
+    .delete(schema.captureArchives)
+    .where(lte(schema.captureArchives.expiresAt, now));
+
 export const setConfig = (db: Executor, id: string, config: ConnectionConfig) =>
   db
     .update(schema.connections)
