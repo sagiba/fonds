@@ -360,7 +360,7 @@ describe.each(backends)("%s settled identity heuristic", (backend) => {
     await noLink(pending.id);
     expect((await clock(pending.id))?.settlement).toBeUndefined();
   });
-  it("leaves purchases past the horizon to owner repair", async () => {
+  it("leaves purchases past the horizon to the owner", async () => {
     const old = { transactionDate: "2040-05-22" };
     await h.capture(2, [authorization("pending", old)], settled);
     const pending = await h.byKey("pending");
@@ -413,6 +413,20 @@ describe.each(backends)("%s settled identity heuristic", (backend) => {
       await noLink(pending.id);
       await h.capture(4, [unknown(postedFields)], settled);
       expect((await h.byKey("posted")).id).toBe(pending.id);
+    },
+  );
+  it.each([
+    ["same-merchant", {}],
+    ["another merchant's", { merchantName: "Another Merchant" }],
+  ] satisfies [string, Partial<TransactionInput>][])(
+    "is blocked by a retained %s rival no capture still returns",
+    async (_label, fields) => {
+      await h.capture(2, [authorization(), row("competitor", fields)], settled);
+      const pending = await h.byKey("pending");
+      await h.capture(3, [unknown()], settled);
+      await h.capture(5, [unknown()], settled);
+      await noLink(pending.id);
+      expect((await clock(pending.id))?.settlement).toBeUndefined();
     },
   );
   it("does not link a different business that shares a first word", async () => {
@@ -722,29 +736,5 @@ describe.each(backends)("%s settled identity heuristic", (backend) => {
     const recovered = await h.state();
     await db.applyRun("posting-4", settled);
     expect(await h.state()).toEqual(recovered);
-  });
-  it("lets repair preview an account holding a window, and refuses an invalidated pair", async () => {
-    const exact = (key: string, fields: Partial<TransactionInput> = {}) =>
-      row(key, { merchantName: "Synthetic Exact", ...fields });
-    await h.capture(2, [authorization()], settled);
-    const pending = await h.byKey("pending");
-    await h.capture(3, [row("posted")], settled);
-    expect((await clock(pending.id))?.settlement).toBeDefined();
-    const scope = {
-      transactionId: pending.id,
-      from: "2040-06-01",
-      to: "2040-07-31",
-      reason: "Synthetic preview",
-      mode: "preview" as const,
-    };
-    expect((await db.repairExactPostings(scope)).pairs).toHaveLength(1);
-    await h.capture(
-      4,
-      [authorization(), row("posted"), exact("other")],
-      settled,
-    );
-    await h.capture(5, [row("posted"), exact("other")], settled);
-    expect((await clock(pending.id))?.settlement?.invalidatedAt).toBeDefined();
-    expect((await db.repairExactPostings(scope)).pairs).toEqual([]);
   });
 });

@@ -1,6 +1,9 @@
 import type { JsonObject, TransactionFacts } from "../../domain/model.js";
 import { decimalToMinor } from "../../domain/money.js";
-import { merchantPresentation } from "../../domain/plans/posting-settlement.js";
+import {
+  merchantPresentation,
+  merchantText,
+} from "../../domain/plans/auto-posting.js";
 import { currentSourceRows } from "../../domain/provider-evidence.js";
 import { isracardEvidenceGeneration } from "./evidence.js";
 import { legacyCurrency } from "./extract.js";
@@ -9,17 +12,13 @@ function object(value: unknown): value is JsonObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-/** Match only presentation whitespace and canonical Unicode, preserving case and punctuation. */
-function merchant(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const normalized = value
-    .normalize("NFC")
-    .replace(/\p{White_Space}+/gu, " ")
-    .trim();
-  return /[\p{L}\p{N}]/u.test(normalized) ? normalized : null;
-}
+const POSTING_ISSUES = [
+  "source_derived_amount_direction",
+  "possible_pending_posted_match",
+];
+
+const onlyPostingIssues = (row: TransactionFacts) =>
+  row.details.issues.every((issue) => POSTING_ISSUES.includes(issue));
 
 function approvalMerchant(row: TransactionFacts): string | null {
   const rows = currentSourceRows(row.details.provider.isracard ?? {});
@@ -70,7 +69,7 @@ function approvalMerchant(row: TransactionFacts): string | null {
   } catch {
     return null;
   }
-  return merchant(approval.businessName);
+  return merchantText(approval.businessName);
 }
 
 function postedMerchant(row: TransactionFacts): string | null {
@@ -131,7 +130,7 @@ function postedMerchant(row: TransactionFacts): string | null {
     ) {
       return null;
     }
-    const current = merchant(observation.businessName);
+    const current = merchantText(observation.businessName);
     if (current === null || (name !== null && name !== current)) {
       return null;
     }
@@ -157,13 +156,7 @@ export function compatibleIsracardPostingGroups(
   if (
     approval.kind !== "unknown" ||
     purchase.kind !== "purchase" ||
-    ![approval, purchase].every((row) =>
-      row.details.issues.every(
-        (issue) =>
-          issue === "source_derived_amount_direction" ||
-          issue === "possible_pending_posted_match",
-      ),
-    )
+    ![approval, purchase].every(onlyPostingIssues)
   ) {
     return false;
   }
@@ -212,26 +205,12 @@ export function compatibleIsracardSettledPair(
   if (
     pending.kind !== "unknown" ||
     approvalMerchant(pending) === null ||
-    pending.details.issues.some(
-      (issue) =>
-        ![
-          "source_derived_amount_direction",
-          "possible_pending_posted_match",
-        ].includes(issue),
-    )
+    !onlyPostingIssues(pending)
   ) {
     return false;
   }
   if (posted.kind === "purchase") {
-    return (
-      postedMerchant(posted) !== null &&
-      posted.details.issues.every((issue) =>
-        [
-          "source_derived_amount_direction",
-          "possible_pending_posted_match",
-        ].includes(issue),
-      )
-    );
+    return postedMerchant(posted) !== null && onlyPostingIssues(posted);
   }
   if (
     posted.kind !== "unknown" ||
@@ -296,7 +275,7 @@ export function compatibleIsracardSettledPair(
     !(empty(row.paymentSumSign) || row.paymentSumSign === "+") ||
     (!abroad && !empty(row.paymentSumOutbound)) ||
     (!abroad && !empty(row.dealSumOutbound)) ||
-    merchant(name) !== merchant(posted.merchantName)
+    merchantText(name) !== merchantText(posted.merchantName)
   ) {
     return false;
   }

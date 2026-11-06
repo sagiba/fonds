@@ -33,6 +33,30 @@ export type PostingFacts = Pick<
   };
 };
 
+/**
+ * Canonical Unicode and spacing only, preserving case and punctuation; `null`
+ * when nothing identifies a merchant.
+ */
+export function merchantText(
+  value: unknown,
+  present = (text: string) => text,
+): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const text = present(
+    value
+      .normalize("NFC")
+      .replace(/\p{White_Space}+/gu, " ")
+      .trim(),
+  );
+  return /[\p{L}\p{N}]/u.test(text) ? text : null;
+}
+
+/** Case and spacing never distinguish a merchant; `null` when nothing identifies one. */
+export const merchantPresentation = (name: string | null) =>
+  merchantText(name, (text) => text.toUpperCase());
+
 /** Purchase-currency money for linking; billing is only a same-currency fallback. */
 export function postingMoney(row: PostingFacts) {
   return row.status === "posted" &&
@@ -138,12 +162,6 @@ export function automaticPostingPairs(
   const pairs = new Map<TransactionFacts, Transaction>();
   for (const group of postingComponents(pending, posted)) {
     if (
-      group.pending.length === 0 ||
-      !group.posted.some((row) => newPosted.has(row))
-    ) {
-      continue;
-    }
-    if (
       group.pending.length !== group.posted.length ||
       !group.pending.every(
         (row) => disappearing.has(row) && eligiblePosting(row, capability),
@@ -212,16 +230,10 @@ export function exactMerchantPostingGroups(
   if (contradiction?.(left, right)) {
     return false;
   }
-  const normalized = (name: string | null) =>
-    name
-      ?.normalize("NFC")
-      .replace(/\p{White_Space}+/gu, " ")
-      .trim();
-  const name = normalized(left.merchantName);
+  const name = merchantText(left.merchantName);
   return (
-    !!name &&
-    /[\p{L}\p{N}]/u.test(name) &&
-    name === normalized(right.merchantName) &&
+    name !== null &&
+    name === merchantText(right.merchantName) &&
     (left.kind === "unknown" || left.kind === "purchase") &&
     right.kind === "purchase" &&
     left.installmentNumber === null &&

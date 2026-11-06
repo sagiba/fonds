@@ -384,11 +384,14 @@ function retargetLines(
   }
 }
 
-/** Links resting on similarity rather than provider evidence or owner confirmation. */
+export const EXACT_POSTING_POLICY = "exact-unique-v1";
+export const SETTLED_POSTING_POLICY = "settled-similarity-v1";
+/** No code writes this policy; stored links carry it and stay inferred. */
 export const OWNER_EXACT_REPAIR_POLICY = "owner-exact-repair-v1";
+/** Links resting on similarity rather than provider evidence or owner confirmation. */
 export const HEURISTIC_POSTING_POLICIES: readonly string[] = [
-  "exact-unique-v1",
-  "settled-similarity-v1",
+  EXACT_POSTING_POLICY,
+  SETTLED_POSTING_POLICY,
   OWNER_EXACT_REPAIR_POLICY,
 ];
 
@@ -398,7 +401,6 @@ export function planPosting(
   input: z.input<typeof postingSchema>,
   now: string,
   automatic?: AutomaticPosting,
-  ownerPolicyVersion?: string,
 ): Transaction {
   const command = postingSchema.parse(input);
   // Both participants are written, so every check reads complete rows.
@@ -529,10 +531,7 @@ export function planPosting(
       ],
       postingLink: {
         schemaVersion: 1,
-        policyVersion:
-          automatic?.policyVersion ??
-          ownerPolicyVersion ??
-          "owner-confirmation-v1",
+        policyVersion: automatic?.policyVersion ?? "owner-confirmation-v1",
         automatic: automatic !== undefined,
         postedId: posted.id,
         pending: { ...pending, details: pendingDetails },
@@ -542,9 +541,7 @@ export function planPosting(
           ? {
               runId: automatic.runId,
               capturedAt: automatic.capturedAt,
-              ...(automatic.overlap?.postedId === posted.id
-                ? { overlap: automatic.overlap }
-                : {}),
+              ...(automatic.overlap ? { overlap: automatic.overlap } : {}),
             }
           : null,
       },
@@ -584,10 +581,7 @@ export function planPosting(
   let survivorAnnotation = pendingAnnotation?.data;
   if (selected && !automatic) {
     const origin = selected === pendingAnnotation ? pending : posted;
-    // Repair is owner-invoked but unconfirmed: an approval goes stale, as on an automatic link.
-    const data = ownerPolicyVersion
-      ? canonicalAnnotation(annotationSchema.parse(selected.data))
-      : postingAnnotation(selected.data, origin, survivor);
+    const data = postingAnnotation(selected.data, origin, survivor);
     survivorAnnotation = data;
     if (
       !pendingAnnotation ||

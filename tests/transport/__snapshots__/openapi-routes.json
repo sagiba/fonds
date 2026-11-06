@@ -445,54 +445,6 @@
       "500"
     ]
   },
-  "POST /v1/transactions/{transactionId}/preview-exact-posting-repair": {
-    "operationId": "preview_exact_posting_repair",
-    "scopes": [
-      "financial:read"
-    ],
-    "parameters": [
-      "path transactionId (required)"
-    ],
-    "body": [
-      "from (required)",
-      "to (required)",
-      "reason (required)"
-    ],
-    "responses": [
-      "200",
-      "400",
-      "401",
-      "403",
-      "404",
-      "413",
-      "500"
-    ]
-  },
-  "POST /v1/transactions/{transactionId}/apply-exact-posting-repair": {
-    "operationId": "apply_exact_posting_repair",
-    "scopes": [
-      "financial:write"
-    ],
-    "parameters": [
-      "path transactionId (required)"
-    ],
-    "body": [
-      "from (required)",
-      "to (required)",
-      "reason (required)",
-      "expected (required)"
-    ],
-    "responses": [
-      "200",
-      "400",
-      "401",
-      "403",
-      "404",
-      "409",
-      "413",
-      "500"
-    ]
-  },
   "POST /v1/transactions/{transactionId}/link-pending": {
     "operationId": "link_pending_transaction",
     "scopes": [

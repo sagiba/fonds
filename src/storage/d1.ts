@@ -82,7 +82,6 @@ export function openD1Database(
     ...sqlite,
     lockConnection: d1.lockConnection,
     lockConnectionOf: d1.lockConnectionOf,
-    repairLockConnectionOf: d1.repairLockConnectionOf,
     applyPlan: d1.applyPlan,
   };
 

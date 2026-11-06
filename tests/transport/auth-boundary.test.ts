@@ -49,8 +49,6 @@ const expectedScopes = {
   get_refresh: "financial:read",
   list_refreshes: "financial:read",
   undo_annotation: "financial:write",
-  preview_exact_posting_repair: "financial:read",
-  apply_exact_posting_repair: "financial:write",
   link_pending_transaction: "financial:write",
   unlink_pending_transaction: "financial:write",
   confirm_removal: "financial:write",
@@ -76,16 +74,6 @@ const routes = [
   ["resume_refresh", "POST", "/v1/refreshes/synthetic/resume"],
   ["list_refreshes", "GET", "/v1/connections/synthetic/refreshes"],
   ["undo_annotation", "POST", "/v1/annotations/undo"],
-  [
-    "preview_exact_posting_repair",
-    "POST",
-    "/v1/transactions/synthetic/preview-exact-posting-repair",
-  ],
-  [
-    "apply_exact_posting_repair",
-    "POST",
-    "/v1/transactions/synthetic/apply-exact-posting-repair",
-  ],
   [
     "link_pending_transaction",
     "POST",

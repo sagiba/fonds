@@ -199,7 +199,7 @@ on a fresh capture 24 hours after arrival and accepted absence, preserving unkno
 facts. Dates may differ by a day; each provider states which name presentations it
 is known to vary, because a shared prefix alone cannot separate two merchants. Every check repeats then from retained rows, so failed or partial captures
 only delay it. Competitors, corrections, reappearance or posted annotations veto
-it, and purchases past 40 days are left to owner repair. An unseen purchase can
+it, and purchases past 40 days are left to the owner. An unseen purchase can
 still be misattributed. An inferred link whose authorization returns stays linked
 and asks for review.
 
@@ -214,8 +214,8 @@ Owner decisions carry the current transaction and annotation versions and a
 reason ([API](api.md#pending-to-posted-matching)):
 
 - **Link** keeps the pending ID. Conflicting nonempty annotations block it; equal
-  ones survive, or the posted one moves to an empty survivor. Automatic links and
-  owner-run repair leave annotations unchanged, so dependent approvals can become stale.
+  ones survive, or the posted one moves to an empty survivor. Automatic links
+  leave annotations unchanged, so dependent approvals can become stale.
 - **Unlink** restores both rows on their own IDs with their annotations, and the
   pair is never suggested or matched automatically again. Unchanged retries are
   quiet.
