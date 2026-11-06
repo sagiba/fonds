@@ -1,7 +1,10 @@
 import { isCountryCode } from "../../domain/countries.js";
 import type { JsonObject, TransactionFacts } from "../../domain/model.js";
 import { canonicalJson } from "../../domain/observations.js";
-import { merchantPresentation } from "../../domain/plans/posting-settlement.js";
+import {
+  merchantPresentation,
+  merchantText,
+} from "../../domain/plans/auto-posting.js";
 import { currentSourceRows } from "../../domain/provider-evidence.js";
 
 /** Opaque CAL discriminators; null is missing evidence, never false or zero. */
@@ -185,7 +188,6 @@ export function calExactContradiction(
 function normalizedEvidence(evidence: CalPostingEvidence | null) {
   if (
     evidence === null ||
-    evidence.merchantName === null ||
     evidence.categoryCode === null ||
     evidence.sourceTypeCode === null ||
     evidence.cardPresent === null ||
@@ -194,13 +196,8 @@ function normalizedEvidence(evidence: CalPostingEvidence | null) {
   ) {
     return null;
   }
-  const merchantName = evidence.merchantName
-    .normalize("NFC")
-    .replace(/\p{White_Space}+/gu, " ")
-    .trim();
-  return /[\p{L}\p{N}]/u.test(merchantName)
-    ? { ...evidence, merchantName }
-    : null;
+  const merchantName = merchantText(evidence.merchantName);
+  return merchantName === null ? null : { ...evidence, merchantName };
 }
 
 function homogeneousEvidence(rows: readonly TransactionFacts[]) {

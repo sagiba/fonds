@@ -87,7 +87,7 @@ export const merchantCategoryCodeSchema = z
   .regex(/^[0-9]{4}$/);
 export const CANONICAL_TEXT_MAX_LENGTH = 4096;
 export const RESOURCE_ID_MAX_LENGTH = 1024;
-export const ANNOTATION_MAX_BYTES = 64 * 1024;
+const ANNOTATION_MAX_BYTES = 64 * 1024;
 // Canonical SQL text must be portable; raw source and JSON documents remain exact.
 const canonicalTextSchema = z
   .string()

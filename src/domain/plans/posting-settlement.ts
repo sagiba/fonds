@@ -2,7 +2,7 @@ import { isBilledLine } from "../model.js";
 import { canonicalJson } from "../observations.js";
 import type { Transaction } from "../records.js";
 import type { AutomaticPostingCapability } from "../source-adapter.js";
-import { meaningfulAnnotation } from "./lifecycle.js";
+import { meaningfulAnnotation, SETTLED_POSTING_POLICY } from "./lifecycle.js";
 import {
   type FinancialPlan,
   isNarrow,
@@ -11,11 +11,10 @@ import {
 } from "./state.js";
 import { CANDIDATE_DAYS } from "./sync-scope.js";
 
-export const SETTLED_POSTING_POLICY = "settled-similarity-v1";
 const DAY = 86_400_000;
 
-/** Purchases this old have closed statements; older pairs are for owner repair. */
-export const SETTLEMENT_HORIZON_DAYS = 40;
+/** Purchases this old have closed statements; older pairs are left to the owner. */
+const SETTLEMENT_HORIZON_DAYS = 40;
 export const SETTLEMENT_MAX_ROWS = 2000;
 export const SETTLEMENT_EVIDENCE_BYTES = 65536;
 
@@ -54,17 +53,7 @@ export const settlementScanStart = (capturedAt: string) =>
 
 type Policy = NonNullable<AutomaticPostingCapability["settledHeuristic"]>;
 
-/** Case and spacing never distinguish a merchant; `null` when nothing identifies one. */
-export function merchantPresentation(name: string | null): string | null {
-  const value = name
-    ?.normalize("NFC")
-    .replace(/\p{White_Space}+/gu, " ")
-    .trim()
-    .toUpperCase();
-  return value && /[\p{L}\p{N}]/u.test(value) ? value : null;
-}
-
-export function settlementEligible(row: LedgerRow): boolean {
+function settlementEligible(row: LedgerRow): boolean {
   return (
     row.identityStrength === "native" &&
     !retiredFromMatching(row) &&
@@ -169,10 +158,9 @@ export function postingSettlementPairs(
 ): Map<Transaction, Transaction> {
   const { plan, before, accountKey, policy, runId, capturedAt, absent } =
     options;
-  const snapshot = plan.snapshot.settlement;
-  const scanned = snapshot?.accounts.get(accountKey);
+  const scanned = plan.snapshot.settlement?.accounts.get(accountKey);
   const pairs = new Map<Transaction, Transaction>();
-  if (!snapshot || !scanned) {
+  if (!scanned) {
     return pairs;
   }
   const safety = new Map(scanned.map((row) => [row.id, row.hydrationSafe]));
