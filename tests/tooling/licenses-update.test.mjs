@@ -195,7 +195,7 @@ describe("license update helper", () => {
   it("asks for lockfile versions when a new release embeds libraries", async () => {
     const base = installed({
       "@modelcontextprotocol/server": {
-        version: "2.4.0",
+        version: "2.5.0",
         license: "Apache-2.0",
         files: {
           LICENSE: "Synthetic license text",
@@ -214,7 +214,7 @@ describe("license update helper", () => {
     expect(unreviewed).toBe(1);
     expect(output).toContain("that release's lockfile");
     expect(output).toContain(
-      "previously recorded for @modelcontextprotocol/server@2.3.1: ajv@8.18.0",
+      "previously recorded for @modelcontextprotocol/server@2.4.0: ajv@8.18.0",
     );
     expect(fetchCandidate).not.toHaveBeenCalled();
   });
@@ -482,7 +482,7 @@ describe("license update helper edge cases", () => {
   it("reports a refused license on a recorded embedded library", async () => {
     const base = installed({
       "@modelcontextprotocol/server": {
-        version: "2.3.1",
+        version: "2.4.0",
         license: "Apache-2.0",
         files: {
           LICENSE: "Synthetic license text",
@@ -498,7 +498,7 @@ describe("license update helper edge cases", () => {
       "ajv-formats@3.0.1",
       "content-type@1.0.5",
       "fast-deep-equal@3.1.3",
-      "fast-uri@3.1.0",
+      "fast-uri@3.1.8",
       "json-schema-traverse@1.0.0",
     ]) {
       writeFileSync(join(reviewed, library), "Synthetic license text");
@@ -515,7 +515,7 @@ describe("license update helper edge cases", () => {
       );
       expect(unreviewed).toBe(1);
       expect(output).toContain(
-        "ajv@8.18.0, embedded in @modelcontextprotocol/server@2.3.1: license GPL-3.0-only needs review",
+        "ajv@8.18.0, embedded in @modelcontextprotocol/server@2.4.0: license GPL-3.0-only needs review",
       );
       expect(output).toContain("needs a human decision");
       expect(fetchCandidate).not.toHaveBeenCalled();
@@ -580,7 +580,7 @@ describe("license update helper edge cases", () => {
   it("names an embedded library's own repository", async () => {
     const base = installed({
       "@modelcontextprotocol/server": {
-        version: "2.3.1",
+        version: "2.4.0",
         license: "Apache-2.0",
         files: {
           LICENSE: "Synthetic license text",

@@ -135,7 +135,7 @@ describe("third-party notices for bundled packages", () => {
   it("adds the reviewed texts of recorded embedded libraries", async () => {
     const base = installed({
       "@modelcontextprotocol/server": {
-        version: "2.3.1",
+        version: "2.4.0",
         license: "Apache-2.0",
         files: {
           LICENSE: "Synthetic license text",
@@ -151,7 +151,7 @@ describe("third-party notices for bundled packages", () => {
     );
     expect(count).toBe(7);
     expect(text).toMatch(
-      /ajv@8\.18\.0 \(MIT\), embedded in @modelcontextprotocol\/server@2\.3\.1\n\nSource: https:\/\/registry\.npmjs\.org\/ajv\/-\/ajv-8\.18\.0\.tgz\n\nThe MIT License/,
+      /ajv@8\.18\.0 \(MIT\), embedded in @modelcontextprotocol\/server@2\.4\.0\n\nSource: https:\/\/registry\.npmjs\.org\/ajv\/-\/ajv-8\.18\.0\.tgz\n\nThe MIT License/,
     );
   });
 
