@@ -29,11 +29,13 @@ import {
 import { startNodeService } from "../../src/runtime/node-service.js";
 import {
   aliasNames,
+  operationCommandNames,
   operationFields,
   operationForCommand,
   operationHelp,
   operationInput,
   operationOptions,
+  operationUsage,
   runEmbeddedOperation,
   runOperationCli,
 } from "../../src/runtime/operation-cli.js";
@@ -245,6 +247,43 @@ describe("operation commands", () => {
       ).not.toThrow();
     },
   );
+
+  it("offers link and unlink but no repair commands", async () => {
+    let stderr = "";
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+      stderr += String(chunk);
+      return true;
+    });
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      for (const command of [
+        "preview-exact-posting-repair",
+        "apply-exact-posting-repair",
+      ]) {
+        expect(operationForCommand(command)).toBeUndefined();
+        expect(operationCommandNames()).not.toContain(command);
+        expect(operationUsage()).not.toContain(command);
+        stderr = "";
+        expect(await main([command, "--help"])).toBe(1);
+        expect(stderr).toMatch(/^Unknown command\./);
+        expect(
+          await runEmbeddedOperation([command], () => {
+            throw new Error("an unknown command opens no database");
+          }),
+        ).toBe(1);
+      }
+      for (const command of [
+        "link",
+        "link-pending-transaction",
+        "unlink-pending-transaction",
+      ]) {
+        expect(operationCommandNames()).toContain(command);
+        expect(await main([command, "--help"])).toBe(0);
+      }
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
 
   it("points invalid flags to the help of the command as typed", async () => {
     let stderr = "";

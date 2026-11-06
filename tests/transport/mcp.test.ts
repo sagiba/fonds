@@ -152,6 +152,33 @@ describe("MCP SDK v2 over HTTP", () => {
   });
 
   it.each(modes)(
+    "offers link and unlink but no repair tools over %s",
+    async (mode) => {
+      const client = await connect(mode);
+      const names = (await client.listTools()).tools.map((tool) => tool.name);
+      for (const name of [
+        "link_pending_transaction",
+        "unlink_pending_transaction",
+      ]) {
+        expect(names).toContain(name);
+        // An empty command reaches the tool and fails its input check.
+        await expect(
+          client.callTool({ name, arguments: {} }),
+        ).resolves.toMatchObject({ isError: true });
+      }
+      for (const name of [
+        "preview_exact_posting_repair",
+        "apply_exact_posting_repair",
+      ]) {
+        expect(names).not.toContain(name);
+        await expect(client.callTool({ name, arguments: {} })).rejects.toThrow(
+          `Tool ${name} not found`,
+        );
+      }
+    },
+  );
+
+  it.each(modes)(
     "advertises schemas and uses the %s protocol handshake",
     async (mode) => {
       await db.recordCardDiscovery(connectionId, {

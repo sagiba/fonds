@@ -504,6 +504,50 @@ describe("OpenAPI document", () => {
     ]);
   });
 
+  it("serves link and unlink but no repair routes", async () => {
+    const document = await hostedDocument();
+    const service = hostedService();
+    const operationIds = Object.values(document.paths).flatMap((methods) =>
+      Object.values(methods).map((entry) => entry.operationId),
+    );
+    for (const route of ["preview", "apply"]) {
+      const path = `${route}-exact-posting-repair`;
+      expect(operationIds).not.toContain(`${route}_exact_posting_repair`);
+      expect(document.paths).not.toHaveProperty([
+        `/v1/transactions/{transactionId}/${path}`,
+      ]);
+      expect(
+        (
+          await hostedRequest(
+            service,
+            "post",
+            `/v1/transactions/synthetic/${path}`,
+            {},
+          )
+        ).status,
+      ).toBe(404);
+    }
+    for (const [path, operationId] of [
+      ["link-pending", "link_pending_transaction"],
+      ["unlink-pending", "unlink_pending_transaction"],
+    ]) {
+      expect(
+        operation(document, "post", `/v1/transactions/{transactionId}/${path}`)
+          .operationId,
+      ).toBe(operationId);
+      expect(
+        (
+          await hostedRequest(
+            service,
+            "post",
+            `/v1/transactions/synthetic/${path}`,
+            {},
+          )
+        ).status,
+      ).toBe(200);
+    }
+  });
+
   it("is not served by a hosted deployment that has not opted in", async () => {
     const service = hostedService(echoApplication, false);
     const anonymous = await service.app.request(
