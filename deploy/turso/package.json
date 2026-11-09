@@ -9,11 +9,11 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "@hono/node-server": "2.1.5",
+    "@hono/node-server": "2.1.6",
     "@libsql/client": "0.18.0",
     "@modelcontextprotocol/server": "2.4.0",
     "drizzle-orm": "0.45.4",
-    "hono": "4.13.14",
+    "hono": "4.13.16",
     "lossless-json": "4.3.3",
     "zod": "4.6.7"
   },
