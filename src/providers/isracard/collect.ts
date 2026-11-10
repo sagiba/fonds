@@ -412,6 +412,7 @@ export async function* collectIsracard(
       createIsracardTransport({
         httpClient: options.httpClient,
         ...(options.limits ? { limits: options.limits } : {}),
+        ...(options.onDiagnostic && { onDiagnostic: options.onDiagnostic }),
       });
     transport = session?.transport ?? freshTransport();
     // A session from an earlier collection may have expired since: one

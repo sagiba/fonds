@@ -74,8 +74,24 @@ export interface IsracardHttpClient {
   }): Promise<IsracardHttpResponse>;
 }
 
+/** One request's outcome: names and codes only, never bodies or credentials. */
+export interface IsracardTransportDiagnostic {
+  endpoint: IsracardEndpointName;
+  httpStatus: number | null;
+  contentType: "json" | "html" | "other";
+  outcome: IsracardFailureCode | "success";
+  stage: "complete";
+  /** Login `status` or validation `returnCode`, when a single character. */
+  providerCode?: string;
+}
+
+export type IsracardEndpointName = keyof typeof ISRACARD_ENDPOINTS;
+
 export interface IsracardTransportOptions {
   httpClient: IsracardHttpClient;
+  onDiagnostic?: (
+    diagnostic: IsracardTransportDiagnostic,
+  ) => void | Promise<void>;
   signal?: AbortSignal;
   limits?: { timeoutMs?: number; maxResponseBytes?: number };
 }
@@ -349,6 +365,33 @@ export function isIsracardDigitalSuccess(
   return payload.isSuccess === true && isSuccessErrorCode(payload.errorCode);
 }
 
+function endpointName(endpoint: string): IsracardEndpointName {
+  return (Object.keys(ISRACARD_ENDPOINTS) as IsracardEndpointName[]).find(
+    (name) => ISRACARD_ENDPOINTS[name] === endpoint,
+  )!;
+}
+
+/**
+ * The answer code login and validation state. Known codes are one character, and
+ * no credential is that short, so a reflected credential can never be logged.
+ */
+function providerCode(
+  endpoint: string,
+  payload: Record<string, unknown> | undefined,
+): string | undefined {
+  const bean = payload?.ValidateIdDataBean;
+  const value =
+    endpoint === ISRACARD_ENDPOINTS.login
+      ? payload?.status
+      : endpoint === ISRACARD_ENDPOINTS.validate && isIsracardObject(bean)
+        ? bean.returnCode
+        : undefined;
+  return (typeof value === "string" || typeof value === "number") &&
+    /^[A-Za-z0-9]$/.test(String(value))
+    ? String(value)
+    : undefined;
+}
+
 /** Each endpoint family reports application-level success differently. */
 function assertEndpointSuccess(
   endpoint: string,
@@ -605,6 +648,28 @@ export function createIsracardTransport(
       }
       const timer = setTimeout(onAbort, timeoutMs);
       let response: IsracardHttpResponse | undefined;
+      let parsed: Record<string, unknown> | undefined;
+      const diagnose = (outcome: IsracardTransportDiagnostic["outcome"]) => {
+        const type = String(response?.headers["content-type"] ?? "");
+        const code = providerCode(endpoint, parsed);
+        try {
+          const logged = options.onDiagnostic?.({
+            endpoint: endpointName(endpoint),
+            httpStatus: response?.status ?? null,
+            contentType: type.includes("json")
+              ? "json"
+              : type.includes("html")
+                ? "html"
+                : "other",
+            outcome,
+            stage: "complete",
+            ...(code !== undefined && { providerCode: code }),
+          });
+          void Promise.resolve(logged).catch(() => undefined);
+        } catch {
+          // Diagnostics never change a request's outcome.
+        }
+      };
       try {
         if (controller.signal.aborted) {
           throw new IsracardTransportError("network_error");
@@ -704,6 +769,7 @@ export function createIsracardTransport(
           throw new IsracardTransportError("authentication_challenge");
         }
         const payload = parseIsracardObject(responseText);
+        parsed = payload;
         if (hasChallenge(payload)) {
           throw new IsracardTransportError("authentication_challenge");
         }
@@ -712,14 +778,18 @@ export function createIsracardTransport(
         }
         assertEndpointSuccess(endpoint, payload);
         storeCookies(url, response.headers);
+        diagnose("success");
         return { responseText, payload, httpStatus: response.status };
       } catch (error) {
-        throw error instanceof IsracardTransportError
-          ? error
-          : new IsracardTransportError(
-              "network_error",
-              controller.signal.aborted,
-            );
+        const failure =
+          error instanceof IsracardTransportError
+            ? error
+            : new IsracardTransportError(
+                "network_error",
+                controller.signal.aborted,
+              );
+        diagnose(failure.code);
+        throw failure;
       } finally {
         clearTimeout(timer);
         requestSignal?.removeEventListener("abort", onAbort);
