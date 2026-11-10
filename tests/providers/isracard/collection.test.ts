@@ -56,6 +56,12 @@ function setup(cards: Record<string, unknown>[] = [firstCard]) {
       _body?: object,
       _query?: Record<string, string>,
     ) => {
+      if (endpoint === ISRACARD_ENDPOINTS.validate) {
+        return financial({
+          Header: { Status: "1" },
+          ValidateIdDataBean: { returnCode: "1" },
+        });
+      }
       if (endpoint === ISRACARD_ENDPOINTS.login) {
         return financial({ status: "1" });
       }
@@ -493,6 +499,12 @@ describe("Isracard conservative bounded collection", () => {
   it("flushes successful DigitalV3 evidence before stopping on legacy 429, with no next month or retry", async () => {
     const { options, request } = setup();
     request.mockImplementation(async (endpoint) => {
+      if (endpoint === ISRACARD_ENDPOINTS.validate) {
+        return financial({
+          Header: { Status: "1" },
+          ValidateIdDataBean: { returnCode: "1" },
+        });
+      }
       if (endpoint === ISRACARD_ENDPOINTS.login) {
         return financial({ status: "1" });
       }
@@ -853,6 +865,85 @@ describe("Isracard conservative bounded collection", () => {
       ).toHaveLength(1);
     },
   );
+
+  describe("a refused login", () => {
+    const refuse = (
+      request: ReturnType<typeof setup>["request"],
+      validate: () => Promise<IsracardResponse>,
+    ) => {
+      const original = request.getMockImplementation()!;
+      request.mockImplementation(async (endpoint, body, query) => {
+        if (endpoint === ISRACARD_ENDPOINTS.login) {
+          throw new IsracardTransportError("authentication_failed");
+        }
+        if (endpoint === ISRACARD_ENDPOINTS.validate) {
+          return validate();
+        }
+        return original(endpoint, body, query);
+      });
+    };
+    const validation = (returnCode: string) => async () =>
+      financial({
+        Header: { Status: "1" },
+        ValidateIdDataBean: { returnCode },
+      });
+    const codes = (result: CollectionEvent[]) =>
+      result.flatMap((event) =>
+        event.type === "failure" ? [event.failure.code] : [],
+      );
+
+    it("asks which detail failed without sending the password, and reports an expired one", async () => {
+      const { options, request } = setup();
+      refuse(request, validation("4"));
+      const result = await events(options);
+      expect(codes(result)).toContain("credentials_expired");
+      expect(codes(result)).not.toContain("authentication_failed");
+      expect(request.mock.calls.map(([endpoint]) => endpoint)).toEqual([
+        ISRACARD_ENDPOINTS.login,
+        ISRACARD_ENDPOINTS.validate,
+      ]);
+      const [, body] = request.mock.calls[1]!;
+      expect(JSON.stringify(body)).not.toContain("synthetic-password");
+      expect(body).toMatchObject({
+        id: "synthetic-username",
+        cardSuffix: "991234",
+      });
+    });
+
+    it.each([
+      ["a valid identity", validation("1")],
+      ["another answer", validation("2")],
+      [
+        "a failed check",
+        async () => {
+          throw new IsracardTransportError("network_error", false);
+        },
+      ],
+    ])("keeps the refusal when validation gives %s", async (_, validate) => {
+      const { options, request } = setup();
+      refuse(request, validate);
+      const result = await events(options);
+      expect(codes(result)).toContain("authentication_failed");
+      expect(codes(result)).not.toContain("credentials_expired");
+    });
+
+    it("never validates after other login failures", async () => {
+      const { options, request } = setup();
+      const original = request.getMockImplementation()!;
+      request.mockImplementation(async (endpoint, body, query) => {
+        if (endpoint === ISRACARD_ENDPOINTS.login) {
+          throw new IsracardTransportError("authentication_challenge");
+        }
+        return original(endpoint, body, query);
+      });
+      await events(options);
+      expect(
+        request.mock.calls.some(
+          ([endpoint]) => endpoint === ISRACARD_ENDPOINTS.validate,
+        ),
+      ).toBe(false);
+    });
+  });
 
   it("stops after three consecutive backend failures rather than spending the full call budget", async () => {
     const { options, request } = setup();

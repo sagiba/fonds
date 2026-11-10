@@ -15,6 +15,8 @@ export const ISRACARD_WEB_HOSTS: ReadonlySet<string> = new Set([
 const ISRACARD_COOKIE_DOMAIN = "isracard.co.il";
 
 export const ISRACARD_ENDPOINTS = {
+  validate:
+    "https://digital.isracard.co.il/services/ProxyRequestHandler.ashx?reqName=ValidateIdData",
   login:
     "https://digital.isracard.co.il/services/ProxyRequestHandler.ashx?reqName=performLogonI",
   cards:
@@ -353,7 +355,11 @@ function assertEndpointSuccess(
   payload: Record<string, unknown>,
 ): void {
   if (endpoint === ISRACARD_ENDPOINTS.login) {
-    if (String(payload.status) !== "1") {
+    const status = String(payload.status);
+    if (status === "3") {
+      throw new IsracardTransportError("credentials_expired");
+    }
+    if (status !== "1") {
       throw new IsracardTransportError("authentication_failed");
     }
     return;
@@ -625,7 +631,8 @@ export function createIsracardTransport(
           ? "/personalarea/Login/"
           : "/transactions";
         const contentType =
-          endpoint === ISRACARD_ENDPOINTS.login
+          endpoint === ISRACARD_ENDPOINTS.login ||
+          endpoint === ISRACARD_ENDPOINTS.validate
             ? "application/x-www-form-urlencoded; charset=UTF-8"
             : "application/json";
         const request = options.httpClient.request({

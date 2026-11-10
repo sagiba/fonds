@@ -129,7 +129,7 @@ import type {
   Run,
   Transaction,
 } from "../domain/records.js";
-import { PROVIDER_STOP_REASONS } from "../domain/refreshes.js";
+import { providerStopReasonFor } from "../domain/refreshes.js";
 import type { SourceAdapter } from "../domain/source-adapter.js";
 import {
   CAPTURE_ARCHIVE_MAX_DAYS,
@@ -849,6 +849,7 @@ function buildStore<Db>(
               requiresAttention:
                 fields.requiresAttention ?? row.requiresAttention,
               providerStopReason: row.providerStopReason,
+              failureCodes: row.failureCodes,
             },
             previous,
             earlier,
@@ -2228,11 +2229,9 @@ function buildStore<Db>(
                       result.status !== "failed"),
                   providerStopReason:
                     refresh.providerStopReason ??
-                    PROVIDER_STOP_REASONS.find((code) =>
-                      run.snapshot.failures?.some(
-                        (failure) => failure.code === code,
-                      ),
-                    ) ??
+                    (run.snapshot.failures ?? [])
+                      .map((failure) => providerStopReasonFor(failure.code))
+                      .find((reason) => reason !== undefined) ??
                     null,
                   failureCodes: [
                     ...new Set([

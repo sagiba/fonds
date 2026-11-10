@@ -155,8 +155,9 @@ schedule, only a resume continues it or records its expiry.
 A rate limit, or a login refused without a credential verdict, stops the
 refresh as `rate_limited`, an authentication failure or challenge as itself;
 scheduled refreshes skip as `cooldown` for six hours, then retry. A second
-`rate_limited` stop in a row, or `FONDS_LOGIN_FAILURES_BEFORE_ATTENTION`
-authentication stops in a row (rate limits aside), needs attention, which slows
+`rate_limited` stop in a row, `FONDS_LOGIN_FAILURES_BEFORE_ATTENTION`
+authentication stops in a row (rate limits aside), or one `credentials_expired`
+login, which only a new password can fix, needs attention, which slows
 refreshing without stopping it: scheduled refreshes retry once a day until one
 completes; [events](../api.md#events) announce the block and its end. Each
 skipped scheduled connection logs `fonds_refresh` with `skipReason` and `retryAt`.

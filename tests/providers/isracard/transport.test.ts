@@ -193,7 +193,7 @@ describe("Isracard bounded session transport", () => {
   it("never retries a password or treats a failed legacy status as an empty month", async () => {
     const request = vi
       .fn()
-      .mockResolvedValueOnce(response('{"status":"3"}'))
+      .mockResolvedValueOnce(response('{"status":"2"}'))
       .mockResolvedValueOnce(response('{"Header":{"Status":"0"}}'));
     const transport = createIsracardTransport({ httpClient: { request } });
     await expect(
@@ -207,6 +207,16 @@ describe("Isracard bounded session transport", () => {
       }),
     ).rejects.toMatchObject({ code: "invalid_response" });
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports a login that asks for a new password as an expired password", async () => {
+    const request = vi.fn().mockResolvedValueOnce(response('{"status":"3"}'));
+    await expect(
+      createIsracardTransport({ httpClient: { request } }).request(
+        ISRACARD_ENDPOINTS.login,
+        {},
+      ),
+    ).rejects.toMatchObject({ code: "credentials_expired" });
   });
 
   it("does not classify a merchant's ordinary text as a challenge", async () => {

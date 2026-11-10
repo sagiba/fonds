@@ -924,7 +924,7 @@ describe("refresh failure codes", () => {
         ...wire,
         failureCodes: [...refreshFailureCodeSchema.options].sort(),
       }).failureCodes,
-    ).toHaveLength(7);
+    ).toHaveLength(8);
   });
 
   it.each(["expired", "collection", "persistence", "Synthetic reason", ""])(

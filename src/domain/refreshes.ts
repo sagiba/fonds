@@ -26,6 +26,19 @@ export const PROVIDER_STOP_REASONS = [
 
 export type ProviderStopReason = (typeof PROVIDER_STOP_REASONS)[number];
 
+/**
+ * The stop reason a collection failure records. An expired password is a refused
+ * login, so it stops the refresh like one; its own failure code tells them apart.
+ */
+export function providerStopReasonFor(
+  code: string,
+): ProviderStopReason | undefined {
+  if (code === "credentials_expired") {
+    return "authentication_failed";
+  }
+  return PROVIDER_STOP_REASONS.find((reason) => reason === code);
+}
+
 export const WINDOW_STATUSES = [
   "pending",
   "running",
