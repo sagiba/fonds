@@ -5,6 +5,7 @@ import {
   finalAttention,
   type ProviderStopReason,
 } from "../../src/application/refreshes.js";
+import { providerStopReasonOf } from "../../src/domain/refreshes.js";
 
 const finished = "2040-06-01T08:00:00.000Z";
 const minute = 60_000;
@@ -83,14 +84,36 @@ describe("refresh admission", () => {
   );
 });
 
+describe("provider stop reasons", () => {
+  it("keeps their priority and stops an expired password as a refused login", () => {
+    expect(
+      providerStopReasonOf(["rate_limited", "authentication_failed"]),
+    ).toBe("authentication_failed");
+    expect(providerStopReasonOf(["network_error", "credentials_expired"])).toBe(
+      "authentication_failed",
+    );
+    expect(providerStopReasonOf(["network_error"])).toBeUndefined();
+  });
+});
+
 describe("final attention", () => {
   const refused = {
     status: "failed" as const,
     requiresAttention: false,
     providerStopReason: "authentication_failed" as const,
+    failureCodes: ["authentication_failed" as const],
   };
   const policy = (loginFailuresBeforeAttention: number) => ({
     loginFailuresBeforeAttention,
+  });
+
+  it("needs attention at the first expired password", () => {
+    const expired = {
+      ...refused,
+      failureCodes: ["credentials_expired" as const],
+    };
+    expect(finalAttention(expired, undefined, [], policy(5))).toBe(true);
+    expect(finalAttention(refused, undefined, [], policy(5))).toBe(false);
   });
 
   it("needs attention when refused logins in a row reach the threshold", () => {
@@ -162,7 +185,12 @@ describe("final attention", () => {
     ] as const) {
       expect(
         finalAttention(
-          { status: "failed", requiresAttention: false, providerStopReason },
+          {
+            status: "failed",
+            requiresAttention: false,
+            providerStopReason,
+            failureCodes: [],
+          },
           blocked,
           [],
           policy(5),
@@ -175,6 +203,7 @@ describe("final attention", () => {
           status: "completed",
           requiresAttention: false,
           providerStopReason: null,
+          failureCodes: [],
         },
         blocked,
         [],
@@ -184,7 +213,12 @@ describe("final attention", () => {
     // A refresh that recorded its own need, as manual recovery does, keeps it.
     expect(
       finalAttention(
-        { status: "failed", requiresAttention: true, providerStopReason: null },
+        {
+          status: "failed",
+          requiresAttention: true,
+          providerStopReason: null,
+          failureCodes: [],
+        },
         undefined,
         [],
         policy(5),

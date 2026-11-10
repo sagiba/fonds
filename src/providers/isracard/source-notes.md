@@ -26,6 +26,13 @@ generations; a fresh component replaces its earlier evidence.
   Node's default order is blocked on that POST while GETs are admitted, and
   ordinary Node fetch or HTTP/2 SETTINGS changes alone did not reproduce the
   accepted request. No mobile API was demonstrated.
+- **Observed, password expiry:** with an expired password, `performLogonI` answered
+  `status` `2`, `returnCode` `E` and a generic "details do not match" message.
+  `ValidateIdData`, posted with the login's content type and the identity and
+  card suffix but no password, answered `Header.Status` `1` and
+  `ValidateIdDataBean.returnCode` `4` with "password expired". As JSON it answered
+  an empty body. `performLogonI` `status` `3` as a password-change request comes
+  from a public client implementation, not an observation.
 - **Policy:** certificate verification stays enabled, only the fixed origins are
   reachable and redirects are not followed. Challenges, password failures and
   rate limits stop the invocation, so a password is never retried.

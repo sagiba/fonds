@@ -76,9 +76,10 @@ const LOGIN_ATTEMPT_KEY = "providerLoginAttemptAt";
 const RETRY_DELAYS_MS = [2_000, 4_000, 8_000, 16_000, 32_000];
 
 /** Failures after which no further window of the refresh is requested. */
-const STOPPING_CODES: ReadonlySet<CollectionFailure["code"]> = new Set(
-  PROVIDER_STOP_REASONS,
-);
+const STOPPING_CODES: ReadonlySet<CollectionFailure["code"]> = new Set([
+  ...PROVIDER_STOP_REASONS,
+  "credentials_expired",
+]);
 
 export interface RefreshStart {
   trigger: RefreshTrigger;

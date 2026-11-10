@@ -13,6 +13,8 @@ export type ReconciliationFailureCode = z.infer<
 export const collectionFailureCodeSchema = z.enum([
   "network_error",
   "authentication_failed",
+  /** The provider refused the login because the password expired; retrying cannot help. */
+  "credentials_expired",
   "authentication_challenge",
   "rate_limited",
   "budget_exhausted",

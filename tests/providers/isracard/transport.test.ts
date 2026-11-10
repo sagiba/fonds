@@ -193,7 +193,7 @@ describe("Isracard bounded session transport", () => {
   it("never retries a password or treats a failed legacy status as an empty month", async () => {
     const request = vi
       .fn()
-      .mockResolvedValueOnce(response('{"status":"3"}'))
+      .mockResolvedValueOnce(response('{"status":"2"}'))
       .mockResolvedValueOnce(response('{"Header":{"Status":"0"}}'));
     const transport = createIsracardTransport({ httpClient: { request } });
     await expect(
@@ -207,6 +207,97 @@ describe("Isracard bounded session transport", () => {
       }),
     ).rejects.toMatchObject({ code: "invalid_response" });
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports a login that asks for a new password as an expired password", async () => {
+    const request = vi.fn().mockResolvedValueOnce(response('{"status":"3"}'));
+    await expect(
+      createIsracardTransport({ httpClient: { request } }).request(
+        ISRACARD_ENDPOINTS.login,
+        {},
+      ),
+    ).rejects.toMatchObject({ code: "credentials_expired" });
+  });
+
+  it("logs each answer's code without its body or the request", async () => {
+    const diagnostics: unknown[] = [];
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(response('{"status":"2","firstName":"Synthetic"}'))
+      .mockResolvedValueOnce(
+        response(
+          '{"Header":{"Status":"1"},"ValidateIdDataBean":{"returnCode":"4","userName":"Synthetic"}}',
+        ),
+      )
+      .mockResolvedValueOnce(response('{"status":{"code":"1"}}'));
+    const transport = createIsracardTransport({
+      httpClient: { request },
+      onDiagnostic: (diagnostic) => {
+        diagnostics.push(diagnostic);
+      },
+    });
+    await expect(
+      transport.request(ISRACARD_ENDPOINTS.login, {
+        Sisma: "synthetic-secret",
+      }),
+    ).rejects.toMatchObject({ code: "authentication_failed" });
+    await transport.request(ISRACARD_ENDPOINTS.validate, {});
+    await expect(
+      transport.request(ISRACARD_ENDPOINTS.login, {}),
+    ).rejects.toMatchObject({ code: "authentication_failed" });
+    expect(diagnostics).toEqual([
+      {
+        endpoint: "login",
+        httpStatus: 200,
+        contentType: "other",
+        outcome: "authentication_failed",
+        stage: "complete",
+        providerCode: "2",
+      },
+      {
+        endpoint: "validate",
+        httpStatus: 200,
+        contentType: "other",
+        outcome: "success",
+        stage: "complete",
+        providerCode: "4",
+      },
+      {
+        endpoint: "login",
+        httpStatus: 200,
+        contentType: "other",
+        outcome: "authentication_failed",
+        stage: "complete",
+      },
+    ]);
+    expect(JSON.stringify(diagnostics)).not.toMatch(
+      /Synthetic|synthetic-secret/,
+    );
+  });
+
+  it("never logs a code long enough to be a credential, and survives a failing log", async () => {
+    const diagnostics: unknown[] = [];
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(response('{"status":"Ab12"}'))
+      .mockResolvedValueOnce(
+        response(
+          '{"Header":{"Status":"1"},"ValidateIdDataBean":{"returnCode":"6789"}}',
+        ),
+      );
+    const transport = createIsracardTransport({
+      httpClient: { request },
+      onDiagnostic: async (diagnostic) => {
+        diagnostics.push(diagnostic);
+        throw new Error("synthetic log failure");
+      },
+    });
+    await expect(
+      transport.request(ISRACARD_ENDPOINTS.login, {}),
+    ).rejects.toMatchObject({ code: "authentication_failed" });
+    await transport.request(ISRACARD_ENDPOINTS.validate, {});
+    expect(diagnostics).toHaveLength(2);
+    expect(JSON.stringify(diagnostics)).not.toMatch(/Ab12|6789/);
   });
 
   it("does not classify a merchant's ordinary text as a challenge", async () => {

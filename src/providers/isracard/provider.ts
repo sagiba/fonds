@@ -66,6 +66,9 @@ export function createIsracardProvider(
               maxDetails: options.maxDetails,
             }),
             httpClient: createHttpClient(),
+            ...(options.onDiagnostic && {
+              onDiagnostic: options.onDiagnostic,
+            }),
           }),
       };
     },

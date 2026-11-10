@@ -163,7 +163,7 @@ export function admissionHold(
 export function finalAttention(
   finishing: Pick<
     Refresh,
-    "status" | "requiresAttention" | "providerStopReason"
+    "status" | "requiresAttention" | "providerStopReason" | "failureCodes"
   >,
   previous: Executed | undefined,
   earlier: readonly Stopped[],
@@ -176,6 +176,10 @@ export function finalAttention(
     return false;
   }
   if (previous?.requiresAttention) {
+    return true;
+  }
+  // Only the owner can renew an expired password, so waiting for a streak helps nothing.
+  if (finishing.failureCodes.includes("credentials_expired")) {
     return true;
   }
   if (isRateLimitStop(finishing)) {

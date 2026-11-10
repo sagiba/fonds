@@ -17,7 +17,7 @@
   "docs/design.md": 1958,
   "docs/guides/chatgpt-connect.md": 620,
   "docs/guides/docker.md": 717,
-  "docs/guides/hosted-service.md": 2213,
+  "docs/guides/hosted-service.md": 2223,
   "docs/guides/local-setup.md": 1742,
   "docs/guides/neon-deployment.md": 2680,
   "docs/guides/storage-backends.md": 942,
@@ -29,11 +29,11 @@
   "docs/internals/repository-layout.md": 1337,
   "docs/internals/storage-testing.md": 1361,
   "docs/providers/cal.md": 778,
-  "docs/providers/isracard.md": 1213,
+  "docs/providers/isracard.md": 1232,
   "docs/reference-models.md": 880,
   "docs/security-model.md": 958,
   "src/providers/cal/source-notes.md": 2699,
-  "src/providers/isracard/source-notes.md": 3586,
+  "src/providers/isracard/source-notes.md": 3652,
   "tests/providers/cal/fixtures/README.md": 469,
   "tests/providers/isracard/fixtures/README.md": 476
 }
