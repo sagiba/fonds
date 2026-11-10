@@ -273,6 +273,31 @@ describe("Isracard bounded session transport", () => {
     );
   });
 
+  it("never logs a code long enough to be a credential, and survives a failing log", async () => {
+    const diagnostics: unknown[] = [];
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(response('{"status":"Ab12"}'))
+      .mockResolvedValueOnce(
+        response(
+          '{"Header":{"Status":"1"},"ValidateIdDataBean":{"returnCode":"6789"}}',
+        ),
+      );
+    const transport = createIsracardTransport({
+      httpClient: { request },
+      onDiagnostic: async (diagnostic) => {
+        diagnostics.push(diagnostic);
+        throw new Error("synthetic log failure");
+      },
+    });
+    await expect(
+      transport.request(ISRACARD_ENDPOINTS.login, {}),
+    ).rejects.toMatchObject({ code: "authentication_failed" });
+    await transport.request(ISRACARD_ENDPOINTS.validate, {});
+    expect(diagnostics).toHaveLength(2);
+    expect(JSON.stringify(diagnostics)).not.toMatch(/Ab12|6789/);
+  });
+
   it("does not classify a merchant's ordinary text as a challenge", async () => {
     const result = response(
       '{"isSuccess":true,"data":{"businessName":"Just a moment cafe"}}',

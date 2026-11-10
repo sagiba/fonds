@@ -81,7 +81,7 @@ export interface IsracardTransportDiagnostic {
   contentType: "json" | "html" | "other";
   outcome: IsracardFailureCode | "success";
   stage: "complete";
-  /** Login `status` or validation `returnCode`, when a short scalar. */
+  /** Login `status` or validation `returnCode`, when a single character. */
   providerCode?: string;
 }
 
@@ -89,7 +89,9 @@ export type IsracardEndpointName = keyof typeof ISRACARD_ENDPOINTS;
 
 export interface IsracardTransportOptions {
   httpClient: IsracardHttpClient;
-  onDiagnostic?: (diagnostic: IsracardTransportDiagnostic) => void;
+  onDiagnostic?: (
+    diagnostic: IsracardTransportDiagnostic,
+  ) => void | Promise<void>;
   signal?: AbortSignal;
   limits?: { timeoutMs?: number; maxResponseBytes?: number };
 }
@@ -369,7 +371,10 @@ function endpointName(endpoint: string): IsracardEndpointName {
   )!;
 }
 
-/** The answer code login and validation state, when it is a short scalar. */
+/**
+ * The answer code login and validation state. Known codes are one character, and
+ * no credential is that short, so a reflected credential can never be logged.
+ */
 function providerCode(
   endpoint: string,
   payload: Record<string, unknown> | undefined,
@@ -382,7 +387,7 @@ function providerCode(
         ? bean.returnCode
         : undefined;
   return (typeof value === "string" || typeof value === "number") &&
-    /^[A-Za-z0-9]{1,4}$/.test(String(value))
+    /^[A-Za-z0-9]$/.test(String(value))
     ? String(value)
     : undefined;
 }
@@ -648,7 +653,7 @@ export function createIsracardTransport(
         const type = String(response?.headers["content-type"] ?? "");
         const code = providerCode(endpoint, parsed);
         try {
-          options.onDiagnostic?.({
+          const logged = options.onDiagnostic?.({
             endpoint: endpointName(endpoint),
             httpStatus: response?.status ?? null,
             contentType: type.includes("json")
@@ -660,6 +665,7 @@ export function createIsracardTransport(
             stage: "complete",
             ...(code !== undefined && { providerCode: code }),
           });
+          void Promise.resolve(logged).catch(() => undefined);
         } catch {
           // Diagnostics never change a request's outcome.
         }

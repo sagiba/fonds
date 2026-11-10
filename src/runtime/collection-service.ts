@@ -101,7 +101,7 @@ const transportDiagnosticSchema = z.object({
   /** A provider's short answer code, such as Isracard's login status. */
   providerCode: z
     .string()
-    .regex(/^[A-Za-z0-9]{1,4}$/)
+    .regex(/^[A-Za-z0-9]$/)
     .optional(),
 });
 
