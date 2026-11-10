@@ -232,7 +232,9 @@ describe("Isracard bounded session transport", () => {
       .mockResolvedValueOnce(response('{"status":{"code":"1"}}'));
     const transport = createIsracardTransport({
       httpClient: { request },
-      onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      onDiagnostic: (diagnostic) => {
+        diagnostics.push(diagnostic);
+      },
     });
     await expect(
       transport.request(ISRACARD_ENDPOINTS.login, {
