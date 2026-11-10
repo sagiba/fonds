@@ -914,6 +914,14 @@ describe("Isracard conservative bounded collection", () => {
       ["a valid identity", validation("1")],
       ["another answer", validation("2")],
       [
+        "a malformed answer",
+        async () =>
+          financial({
+            Header: { Status: "1" },
+            ValidateIdDataBean: { returnCode: ["4"] },
+          }),
+      ],
+      [
         "a failed check",
         async () => {
           throw new IsracardTransportError("network_error", false);

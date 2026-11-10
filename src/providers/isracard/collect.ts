@@ -443,7 +443,9 @@ export async function* collectIsracard(
           companyCode: "11",
         });
         const bean = validated.payload.ValidateIdDataBean;
-        return isIsracardObject(bean) && String(bean.returnCode) === "4"
+        // Only the documented scalar: a malformed answer keeps the refusal.
+        return isIsracardObject(bean) &&
+          (bean.returnCode === "4" || bean.returnCode === 4)
           ? new IsracardTransportError("credentials_expired")
           : undefined;
       } catch {

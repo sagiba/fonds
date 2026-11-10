@@ -5,6 +5,7 @@ import {
   finalAttention,
   type ProviderStopReason,
 } from "../../src/application/refreshes.js";
+import { providerStopReasonOf } from "../../src/domain/refreshes.js";
 
 const finished = "2040-06-01T08:00:00.000Z";
 const minute = 60_000;
@@ -81,6 +82,18 @@ describe("refresh admission", () => {
       ).toBe(reason);
     },
   );
+});
+
+describe("provider stop reasons", () => {
+  it("keeps their priority and stops an expired password as a refused login", () => {
+    expect(
+      providerStopReasonOf(["rate_limited", "authentication_failed"]),
+    ).toBe("authentication_failed");
+    expect(providerStopReasonOf(["network_error", "credentials_expired"])).toBe(
+      "authentication_failed",
+    );
+    expect(providerStopReasonOf(["network_error"])).toBeUndefined();
+  });
 });
 
 describe("final attention", () => {
