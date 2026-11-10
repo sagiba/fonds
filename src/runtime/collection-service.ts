@@ -58,12 +58,25 @@ export const stderrLog: OperationsLog = (entry) =>
   process.stderr.write(`${JSON.stringify(entry)}\n`);
 
 const transportDiagnosticSchema = z.object({
-  endpoint: z.enum(["login", "init", "recent", "monthly", "search", "unknown"]),
+  endpoint: z.enum([
+    "login",
+    "init",
+    "recent",
+    "monthly",
+    "search",
+    "unknown",
+    "validate",
+    "cards",
+    "transactions",
+    "legacy",
+    "details",
+  ]),
   httpStatus: z.number().int().min(100).max(599).nullable(),
   contentType: z.enum(["json", "html", "other"]),
   outcome: z.enum([
     "network_error",
     "authentication_failed",
+    "credentials_expired",
     "authentication_challenge",
     "rate_limited",
     "invalid_response",
@@ -85,6 +98,11 @@ const transportDiagnosticSchema = z.object({
     "timeout",
     "cancelled",
   ]),
+  /** A provider's short answer code, such as Isracard's login status. */
+  providerCode: z
+    .string()
+    .regex(/^[A-Za-z0-9]{1,4}$/)
+    .optional(),
 });
 
 export interface CollectionTargetSources {
