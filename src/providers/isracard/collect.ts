@@ -422,6 +422,37 @@ export async function* collectIsracard(
     let detailsFetched = 0;
     let consecutiveFailures = 0;
 
+    /**
+     * A refused login answers only "details don't match", even when the password
+     * expired. ValidateIdData, which takes the identity and card digits but no
+     * password, says which; any other answer leaves the refusal as it was.
+     */
+    async function expiredPassword(
+      error: unknown,
+    ): Promise<IsracardTransportError | undefined> {
+      if (safeError(error).code !== "authentication_failed") {
+        return undefined;
+      }
+      try {
+        const validated = await send(ISRACARD_ENDPOINTS.validate, {
+          id: options.credentials.username,
+          cardSuffix: options.credentials.cardSuffix,
+          countryCode: "212",
+          idType: "1",
+          checkLevel: "1",
+          companyCode: "11",
+        });
+        const bean = validated.payload.ValidateIdDataBean;
+        // Only the documented scalar: a malformed answer keeps the refusal.
+        return isIsracardObject(bean) &&
+          (bean.returnCode === "4" || bean.returnCode === 4)
+          ? new IsracardTransportError("credentials_expired")
+          : undefined;
+      } catch {
+        return undefined;
+      }
+    }
+
     async function logIn() {
       reusable = false;
       if (session) {
@@ -431,14 +462,18 @@ export async function* collectIsracard(
         session.logins = (session.logins ?? 0) + 1;
       }
       await options.beforeLogin?.();
-      await send(ISRACARD_ENDPOINTS.login, {
-        KodMishtamesh: "",
-        MisparZihuy: options.credentials.username,
-        Sisma: options.credentials.password,
-        cardSuffix: options.credentials.cardSuffix,
-        countryCode: "212",
-        idType: "1",
-      });
+      try {
+        await send(ISRACARD_ENDPOINTS.login, {
+          KodMishtamesh: "",
+          MisparZihuy: options.credentials.username,
+          Sisma: options.credentials.password,
+          cardSuffix: options.credentials.cardSuffix,
+          countryCode: "212",
+          idType: "1",
+        });
+      } catch (error) {
+        throw (await expiredPassword(error)) ?? error;
+      }
       if (session && transport) {
         session.transport = transport;
       }
@@ -516,7 +551,10 @@ export async function* collectIsracard(
       ) =>
         test(candidate.responseText) ||
         containsSensitiveFields(candidate.payload, test);
-      if (target !== ISRACARD_ENDPOINTS.login) {
+      if (
+        target !== ISRACARD_ENDPOINTS.login &&
+        target !== ISRACARD_ENDPOINTS.validate
+      ) {
         // Check other secrets before redaction, which could otherwise split one.
         if (reflects(response, otherSecretText)) {
           throw new IsracardTransportError("invalid_response");

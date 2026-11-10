@@ -117,6 +117,7 @@ export const syncDiagnosticSchema = z.object({
     .enum([
       "network_error",
       "authentication_failed",
+      "credentials_expired",
       "authentication_challenge",
       "rate_limited",
       "budget_exhausted",
