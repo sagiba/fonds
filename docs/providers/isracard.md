@@ -133,7 +133,9 @@ password failures and rate limits (`rate_limited`) stop the invocation without
 another login, as do three consecutive financial failures and an exhausted
 budget (`budget_exhausted`). Failed and unattempted months stay incomplete, a
 later success elsewhere does not clear them, and there is no automatic resume,
-completion acknowledgement or detail cache. Resolve a challenge or password
+completion acknowledgement or detail cache. A refused login is followed by
+one identity check without the password, which reports an expired password as
+`credentials_expired`. Resolve a challenge or password
 change on Isracard's own site, run `connect --connection ID` if the credentials changed,
 wait out a rate limit, then rerun the refresh or the reported history range.
 
