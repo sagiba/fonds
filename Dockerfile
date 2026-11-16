@@ -7,7 +7,7 @@
 # has a tested tarball supplies it instead, so the image installs those bytes:
 #   docker build --build-context package=<directory with fonds.tgz> -t fonds .
 
-FROM node:24.22.2-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9 AS pack
+FROM node:24.22.3-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54 AS pack
 WORKDIR /src
 COPY package.json package-lock.json LICENSE NOTICE ./
 RUN npm ci --ignore-scripts --no-audit --no-fund
@@ -23,7 +23,7 @@ RUN node scripts/npm-package.mjs && mkdir /package \
 FROM scratch AS package
 COPY --from=pack /package/fonds.tgz /fonds.tgz
 
-FROM node:24.22.2-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9
+FROM node:24.22.3-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
 # HOST applies only to the hosted service; local servers bind loopback.
 ENV NODE_ENV=production FONDS_HOME=/data FONDS_STATE_DIR=/data HOST=0.0.0.0 PORT=8787
 RUN --mount=type=bind,from=package,target=/package \
